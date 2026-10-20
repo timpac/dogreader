@@ -1,0 +1,13 @@
+Dogreader personal-use source update
+
+Changes:
+- Urbanist font via google_fonts for Material menus and UI (reader's custom text styling remains untouched).
+- Duration polling extended to 10 seconds, with transient decoder errors tolerated.
+- Ignore zero-duration events so valid duration does not get overwritten.
+- Display "Loading duration…" until Android reports a length.
+
+Notes:
+- google_fonts may fetch/cache the font on first run; internet is needed for that initial fetch.
+- No app package identifiers, local book paths, saved positions, or existing library code were changed.
+- This is a source update, not a compiled/tested APK.
+- Back up existing project files before applying.
