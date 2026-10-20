@@ -348,7 +348,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
         const Text('Your library',
             style: TextStyle(fontSize: 34, fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
-        Text('Great books. Your choice of voice.',
+        Text("I'm not surprised you're reading that, because you're stupid.",
             style: TextStyle(fontSize: 15, color: Colors.white.withValues(alpha: 0.65))),
         const SizedBox(height: 26),
         if (books.isEmpty) _emptyLibrary(),
