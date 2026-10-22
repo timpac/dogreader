@@ -79,6 +79,74 @@ class _LibraryScreenState extends State<LibraryScreen> {
   bool importing = false;
   final List<ImportedBook> books = [];
   final Map<String, Map<String, int>> progress = {};
+  final Map<String, int> lastOpened = {};
+  Future<void> _pendingStateWrite = Future<void>.value();
+
+  void sortBooks() {
+    books.sort((a, b) {
+      final recent = (lastOpened[b.id] ?? 0).compareTo(lastOpened[a.id] ?? 0);
+      if (recent != 0) return recent;
+      return b.id.compareTo(a.id);
+    });
+  }
+
+  Future<void> persistReadingState() {
+    final snapshot = jsonEncode({
+      'positions': progress,
+      'lastOpened': lastOpened,
+    });
+    _pendingStateWrite = _pendingStateWrite.catchError((Object _) {}).then((
+      _,
+    ) async {
+      final directory = await bookDirectory();
+      final stateFile = File('${directory.parent.path}/reading_state.json');
+      final temporary = File('${stateFile.path}.tmp');
+      await temporary.writeAsString(snapshot);
+      await temporary.rename(stateFile.path);
+    });
+    return _pendingStateWrite;
+  }
+
+  void openBook(ImportedBook book) {
+    setState(() {
+      lastOpened[book.id] = DateTime.now().microsecondsSinceEpoch;
+      sortBooks();
+    });
+    persistReadingState().catchError((Object _) {});
+
+    final saved = progress[book.id];
+    final chapter = (saved?['chapter'] ?? 0).clamp(0, book.chapters.length - 1);
+    final offset = (saved?['offset'] ?? 0).clamp(
+      0,
+      book.chapters[chapter].text.length,
+    );
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ReadingScreen(
+          book: book,
+          chapterIndex: chapter,
+          initialOffset: offset,
+          onSave: (chapter, offset) => saveProgress(book.id, chapter, offset),
+        ),
+      ),
+    );
+  }
+
+  void openChapters(ImportedBook book) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChapterListScreen(
+          book: book,
+          saved: progress[book.id],
+          onSave: (chapter, offset) => saveProgress(book.id, chapter, offset),
+        ),
+      ),
+    );
+  }
+
 
   @override
   void initState() {
@@ -99,6 +167,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
       final stateFile = File('${directory.parent.path}/reading_state.json');
       if (await stateFile.exists()) {
         final data = jsonDecode(await stateFile.readAsString()) as Map<String, dynamic>;
+        final recent =
+            data['lastOpened'] as Map<String, dynamic>? ?? {};
+        for (final entry in recent.entries) {
+          lastOpened[entry.key] =
+              (entry.value as num?)?.toInt() ?? 0;
+        }
         final positions = data['positions'] as Map<String, dynamic>? ?? {};
         for (final entry in positions.entries) {
           final position = entry.value as Map<String, dynamic>;
@@ -127,6 +201,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
       setState(() {
         books.clear();
         books.addAll(restored);
+        sortBooks();
       });
     } catch (_) { /* Library remains usable even if restoration fails. */ }
   }
@@ -134,9 +209,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   Future<void> saveProgress(String id, int chapter, int offset) async {
     progress[id] = {'chapter': chapter, 'offset': offset};
     try {
-      final directory = await bookDirectory();
-      final stateFile = File('${directory.parent.path}/reading_state.json');
-      await stateFile.writeAsString(jsonEncode({'positions': progress}));
+      await persistReadingState();
     } catch (_) { /* Don't interrupt reading for a save failure. */ }
   }
 
@@ -283,7 +356,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
         extractCover(epub),
       );
       if (!mounted) return;
-      setState(() => books.add(imported));
+      setState(() {
+        books.add(imported);
+        sortBooks();
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Imported ${imported.title}')),
       );
@@ -367,15 +443,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
               title: Text(book.title, style: const TextStyle(fontWeight: FontWeight.w700)),
               subtitle: Text('${book.author}\n${book.chapters.length} sections'),
               isThreeLine: true,
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => ChapterListScreen(
-                  book: book,
-                  saved: progress[book.id],
-                  onSave: (chapter, offset) => saveProgress(book.id, chapter, offset),
-                )),
+              trailing: IconButton(
+                tooltip: 'Chapters and narration',
+                icon: const Icon(Icons.list_rounded, color: accent),
+                onPressed: () => openChapters(book),
               ),
+              onTap: () => openBook(book),
             ),
           ),
         if (books.isNotEmpty) const SizedBox(height: 10),
