@@ -438,7 +438,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     if (books.isEmpty) return _placeholderPage(Icons.queue_music_rounded,
         'Narration', 'Import a book to generate or listen to narration.');
     return ListView(children: [
-      const Padding(padding: EdgeInsets.all(20), child: Text('Your audiobooks',
+      const Padding(padding: EdgeInsets.all(20), child: Text('Your books',
           style: TextStyle(fontSize: 23, fontWeight: FontWeight.bold))),
       for (final book in books)
         ListTile(
@@ -519,9 +519,36 @@ class ChapterListScreen extends StatelessWidget {
           }
           final index = row - (saved == null ? 0 : 1);
           final chapter = book.chapters[index];
+          final savedOffset = saved != null && saved!['chapter'] == index
+              ? (saved!['offset'] ?? 0)
+              : 0;
+          final fraction = (savedOffset /
+              math.max(1, chapter.text.length)).clamp(0.0, 1.0);
+
           return ListTile(
             leading: const Icon(Icons.auto_stories_outlined, color: accent),
             title: Text(chapter.title),
+            subtitle: Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: savedOffset > 0
+                  ? LinearProgressIndicator(
+                      value: fraction,
+                      minHeight: 3,
+                      backgroundColor: Colors.white12,
+                      color: accent,
+                    )
+                  : const Text(
+                      'whatsgonnahappenwhatsgonnahappenwhatsgonnahappenwhatsgonnahappen',
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.clip,
+                      style: TextStyle(
+                        fontSize: 5,
+                        letterSpacing: -0.3,
+                        color: accent,
+                      ),
+                    ),
+            ),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => openChapter(context, index),
           );
@@ -550,6 +577,13 @@ class NarrationQueueScreen extends StatefulWidget {
 }
 
 class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
+  static const narratorNames = <String, String>{
+    'en-US-Chirp3-HD-Achernar': 'Achernar',
+    'en-US-Chirp3-HD-Charon': 'Charon',
+    'en-US-Chirp3-HD-Kore': 'Kore',
+    'en-US-Chirp3-HD-Puck': 'Puck',
+  };
+  String narrator = 'en-US-Chirp3-HD-Achernar';
   final Set<int> selected = {};
   final Map<int, Map<String, dynamic>> jobs = {};
   String host = '';
@@ -570,6 +604,10 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         final data = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
         host = data['host'] as String? ?? '';
         token = data['token'] as String? ?? '';
+        final savedNarrator = data['narrator'];
+        if (savedNarrator is String && narratorNames.containsKey(savedNarrator)) {
+          narrator = savedNarrator;
+        }
         final bookJobs = (data['books'] as Map?)?[widget.book.id];
         if (bookJobs is Map) {
           for (final entry in bookJobs.entries) {
@@ -585,7 +623,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     for (var index = 0; index < widget.book.chapters.length; index++) {
       final file = File('${root.path}/narration/${widget.book.id}_$index.mp3');
       if (await file.exists() && await file.length() > 1000) {
-        jobs[index] = {'status': 'ready', 'id': jobs[index]?['id']};
+        jobs[index] = {...?jobs[index], 'status': 'ready', 'id': jobs[index]?['id']};
       }
     }
     if (mounted) setState(() {});
@@ -602,6 +640,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     } catch (_) {}
     data['host'] = host;
     data['token'] = token;
+    data['narrator'] = narrator;
     final books = Map<String, dynamic>.from((data['books'] as Map?) ?? {});
     books[widget.book.id] = jobs.map((k, v) => MapEntry('$k', v));
     data['books'] = books;
@@ -706,7 +745,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     }
     setState(() { busy = true; notice = null; });
     for (final index in selected.toList()..sort()) {
-      jobs[index] = {'status': 'waiting'};
+      jobs[index] = {'status': 'waiting', 'voice': narrator};
     }
     await save();
     if (mounted) setState(() { selected.clear(); busy = false; });
@@ -767,8 +806,9 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
             final response = await requestJson('POST', '/dogreader/jobs', {
               'title': chapter.title,
               'text': chapter.text,
+              'voice': jobs[index]?['voice'] ?? 'en-US-Chirp3-HD-Achernar',
             });
-            jobs[index] = {'status': response['status'], 'id': response['id']};
+            jobs[index] = {...?jobs[index], 'status': response['status'], 'id': response['id']};
           }
           final id = jobs[index]?['id'];
           if (id is! String) continue;
@@ -782,13 +822,14 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
             final submitted = await requestJson('POST', '/dogreader/jobs', {
               'title': chapter.title,
               'text': chapter.text,
+              'voice': jobs[index]?['voice'] ?? 'en-US-Chirp3-HD-Achernar',
             });
-            jobs[index] = {'status': submitted['status'], 'id': submitted['id']};
+            jobs[index] = {...?jobs[index], 'status': submitted['status'], 'id': submitted['id']};
             result = await requestJson('GET', '/dogreader/jobs/${submitted['id']}');
           }
           final nextStatus = result['status'] as String? ?? 'waiting';
           final currentId = jobs[index]?['id'] as String? ?? id;
-          jobs[index] = {'status': nextStatus, 'id': currentId, 'error': result['error']};
+          jobs[index] = {...?jobs[index], 'status': nextStatus, 'id': currentId, 'error': result['error']};
           if (nextStatus == 'ready') await downloadAudio(index, currentId);
           if (nextStatus == 'error') notice = 'Cloud narration failed for ${widget.book.chapters[index].title}. Check Cloud Run logs.';
         } catch (e) {
@@ -841,6 +882,28 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
           ]),
           if (notice != null) Text(notice!, textAlign: TextAlign.center),
         ])),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: DropdownButtonFormField<String>(
+            value: narrator,
+            decoration: const InputDecoration(
+              labelText: 'Narrator',
+              border: OutlineInputBorder(),
+              prefixIcon: Icon(Icons.record_voice_over),
+            ),
+            items: narratorNames.entries.map((entry) =>
+              DropdownMenuItem<String>(
+                value: entry.key,
+                child: Text(entry.value),
+              ),
+            ).toList(),
+            onChanged: (value) {
+              if (value == null) return;
+              setState(() => narrator = value);
+              save();
+            },
+          ),
+        ),
         Padding(padding: const EdgeInsets.symmetric(horizontal: 12),
           child: Row(children: [
             OutlinedButton.icon(onPressed: selectEntireBook,
@@ -858,6 +921,8 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
           itemBuilder: (context, index) {
             final chapter = widget.book.chapters[index];
             final status = jobs[index]?['status'] as String?;
+            final voice = jobs[index]?['voice'] as String?;
+            final voiceLabel = voice == null ? null : narratorNames[voice] ?? voice;
             return CheckboxListTile(
               secondary: status == 'ready' ? IconButton(
                 tooltip: 'Play downloaded chapter',
@@ -866,12 +931,15 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
               ) : null,
               value: selected.contains(index),
               title: Text(chapter.title),
-              subtitle: Text(status == null ? 'Not generated' :
+              subtitle: Text(
+                (status == null ? 'Not generated' :
                 status == 'ready' ? 'Ready to listen' :
                 status == 'waiting' ? 'Waiting to submit' :
                 status == 'generating' ? 'Generating…' :
                 status == 'queued' ? 'Queued in cloud' :
-                status == 'error' ? 'Cloud job failed — check server logs' : status),
+                status == 'error' ? 'Cloud job failed — check server logs' : status)
+                + (voiceLabel == null ? '' : ' • $voiceLabel'),
+              ),
               onChanged: status == 'ready' || status == 'queued' || status == 'generating' || status == 'waiting' ? null : (value) => setState(() {
                 if (value == true) { selected.add(index); } else { selected.remove(index); }
               }),
@@ -981,7 +1049,10 @@ class _ReadingScreenState extends State<ReadingScreen> {
     starts = nextStarts;
     currentPage = math.max(0, starts.lastIndexWhere((value) => value <= currentOffset));
     final oldController = controller;
-    controller = PageController(initialPage: currentPage);
+    controller = PageController(
+      initialPage: currentPage,
+      keepPage: false,
+    );
     if (oldController != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => oldController.dispose());
     }
@@ -1047,6 +1118,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
         calculatePages(width, height);
         return Column(children: [
           Expanded(child: PageView.builder(
+            key: ValueKey('reading-chapter-$chapterIndex'),
             controller: controller,
             itemCount: pages.length,
             onPageChanged: (index) {
