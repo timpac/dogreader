@@ -30,8 +30,12 @@ class AudiobookApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
-        textTheme: GoogleFonts.urbanistTextTheme(ThemeData(brightness: Brightness.dark).textTheme),
-        primaryTextTheme: GoogleFonts.urbanistTextTheme(ThemeData(brightness: Brightness.dark).primaryTextTheme),
+        textTheme: GoogleFonts.urbanistTextTheme(
+          ThemeData(brightness: Brightness.dark).textTheme,
+        ),
+        primaryTextTheme: GoogleFonts.urbanistTextTheme(
+          ThemeData(brightness: Brightness.dark).primaryTextTheme,
+        ),
         brightness: Brightness.dark,
         scaffoldBackgroundColor: background,
         colorScheme: ColorScheme.fromSeed(
@@ -48,7 +52,13 @@ class AudiobookApp extends StatelessWidget {
 class StyledRange {
   final int start, end;
   final bool italic, bold, heading;
-  const StyledRange(this.start, this.end, {this.italic = false, this.bold = false, this.heading = false});
+  const StyledRange(
+    this.start,
+    this.end, {
+    this.italic = false,
+    this.bold = false,
+    this.heading = false,
+  });
 }
 
 class ReaderChapter {
@@ -64,7 +74,13 @@ class ImportedBook {
   final List<ReaderChapter> chapters;
   final String id;
   final Uint8List? cover;
-  const ImportedBook(this.title, this.author, this.chapters, this.id, this.cover);
+  const ImportedBook(
+    this.title,
+    this.author,
+    this.chapters,
+    this.id,
+    this.cover,
+  );
 }
 
 class LibraryScreen extends StatefulWidget {
@@ -147,7 +163,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
     );
   }
 
-
   @override
   void initState() {
     super.initState();
@@ -166,12 +181,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
       final directory = await bookDirectory();
       final stateFile = File('${directory.parent.path}/reading_state.json');
       if (await stateFile.exists()) {
-        final data = jsonDecode(await stateFile.readAsString()) as Map<String, dynamic>;
-        final recent =
-            data['lastOpened'] as Map<String, dynamic>? ?? {};
+        final data =
+            jsonDecode(await stateFile.readAsString()) as Map<String, dynamic>;
+        final recent = data['lastOpened'] as Map<String, dynamic>? ?? {};
         for (final entry in recent.entries) {
-          lastOpened[entry.key] =
-              (entry.value as num?)?.toInt() ?? 0;
+          lastOpened[entry.key] = (entry.value as num?)?.toInt() ?? 0;
         }
         final positions = data['positions'] as Map<String, dynamic>? ?? {};
         for (final entry in positions.entries) {
@@ -188,14 +202,22 @@ class _LibraryScreenState extends State<LibraryScreen> {
         try {
           final epub = await EpubReader.readBook(await entity.readAsBytes());
           final chapters = <ReaderChapter>[];
-          collectChapters(epub.Chapters ?? [], chapters);
+          loadBookChapters(epub, chapters);
           if (chapters.isEmpty) continue;
           final title = (epub.Title ?? '').trim();
           final author = (epub.Author ?? '').trim();
-          restored.add(ImportedBook(title.isEmpty ? 'Untitled book' : title,
-              author.isEmpty ? 'Unknown author' : author, chapters,
-              entity.uri.pathSegments.last.replaceAll('.epub', ''), extractCover(epub)));
-        } catch (_) { /* Ignore unreadable files. */ }
+          restored.add(
+            ImportedBook(
+              title.isEmpty ? 'Untitled book' : title,
+              author.isEmpty ? 'Unknown author' : author,
+              chapters,
+              entity.uri.pathSegments.last.replaceAll('.epub', ''),
+              extractCover(epub),
+            ),
+          );
+        } catch (_) {
+          /* Ignore unreadable files. */
+        }
       }
       if (!mounted) return;
       setState(() {
@@ -203,16 +225,19 @@ class _LibraryScreenState extends State<LibraryScreen> {
         books.addAll(restored);
         sortBooks();
       });
-    } catch (_) { /* Library remains usable even if restoration fails. */ }
+    } catch (_) {
+      /* Library remains usable even if restoration fails. */
+    }
   }
 
   Future<void> saveProgress(String id, int chapter, int offset) async {
     progress[id] = {'chapter': chapter, 'offset': offset};
     try {
       await persistReadingState();
-    } catch (_) { /* Don't interrupt reading for a save failure. */ }
+    } catch (_) {
+      /* Don't interrupt reading for a save failure. */
+    }
   }
-
 
   void showUpcoming(String feature) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -238,10 +263,19 @@ class _LibraryScreenState extends State<LibraryScreen> {
       pending.clear();
       final leading = raw.length - raw.trimLeft().length;
       final clean = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
-      if (clean.isEmpty && !scene) { pendingRanges.clear(); return; }
+      if (clean.isEmpty && !scene) {
+        pendingRanges.clear();
+        return;
+      }
       final text = scene ? '⁂' : clean;
-      final indent = blocks.isNotEmpty && !heading && !scene &&
-          blocks.last.heading == false && blocks.last.scene == false ? '　' : '';
+      final indent =
+          blocks.isNotEmpty &&
+              !heading &&
+              !scene &&
+              blocks.last.heading == false &&
+              blocks.last.scene == false
+          ? '　'
+          : '';
       final prefix = blocks.isEmpty ? '' : (heading || scene ? '\n\n' : '\n');
       final base = output.length + prefix.length + indent.length;
       output.write(prefix);
@@ -250,38 +284,77 @@ class _LibraryScreenState extends State<LibraryScreen> {
       for (final range in pendingRanges) {
         final a = (range.start - leading).clamp(0, clean.length);
         final b = (range.end - leading).clamp(0, clean.length);
-        if (b > a) ranges.add(StyledRange(base + a, base + b,
-            italic: range.italic, bold: range.bold));
+        if (b > a)
+          ranges.add(
+            StyledRange(
+              base + a,
+              base + b,
+              italic: range.italic,
+              bold: range.bold,
+            ),
+          );
       }
       pendingRanges.clear();
-      if (heading) ranges.add(StyledRange(base, base + text.length, heading: true));
+      if (heading)
+        ranges.add(StyledRange(base, base + text.length, heading: true));
       blocks.add(_TextBlock(heading, scene));
     }
 
-    void walk(dom.Node node, {bool italic = false, bool bold = false, bool heading = false}) {
+    void walk(
+      dom.Node node, {
+      bool italic = false,
+      bool bold = false,
+      bool heading = false,
+    }) {
       if (node is dom.Text) {
         final start = pending.length;
         pending.write(node.text);
         if ((italic || bold) && pending.length > start) {
-          pendingRanges.add(StyledRange(start, pending.length, italic: italic, bold: bold));
+          pendingRanges.add(
+            StyledRange(start, pending.length, italic: italic, bold: bold),
+          );
         }
         return;
       }
       if (node is! dom.Element) return;
       final tag = node.localName ?? '';
-      if (tag == 'br') { flush(heading: heading); return; }
-      if (tag == 'hr') { flush(); flush(scene: true); return; }
-      final isHeading = heading || {'h1','h2','h3','h4','h5','h6'}.contains(tag);
-      final isBlock = {'p','div','h1','h2','h3','h4','h5','h6','li','blockquote','pre','tr'}.contains(tag);
+      if (tag == 'br') {
+        flush(heading: heading);
+        return;
+      }
+      if (tag == 'hr') {
+        flush();
+        flush(scene: true);
+        return;
+      }
+      final isHeading =
+          heading || {'h1', 'h2', 'h3', 'h4', 'h5', 'h6'}.contains(tag);
+      final isBlock = {
+        'p',
+        'div',
+        'h1',
+        'h2',
+        'h3',
+        'h4',
+        'h5',
+        'h6',
+        'li',
+        'blockquote',
+        'pre',
+        'tr',
+      }.contains(tag);
       if (isBlock && pending.isNotEmpty) flush();
       for (final child in node.nodes) {
-        walk(child,
+        walk(
+          child,
           italic: italic || tag == 'i' || tag == 'em',
           bold: bold || tag == 'b' || tag == 'strong',
-          heading: isHeading);
+          heading: isHeading,
+        );
       }
       if (isBlock) flush(heading: isHeading);
     }
+
     if (document.body != null) walk(document.body!);
     flush();
     return ReaderChapter(title, output.toString(), ranges);
@@ -303,7 +376,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
         final dynamic content = image.Content;
         if (content is List<int>) return Uint8List.fromList(content);
       }
-    } catch (_) { /* A missing or unusual cover is not fatal. */ }
+    } catch (_) {
+      /* A missing or unusual cover is not fatal. */
+    }
     return null;
   }
 
@@ -316,6 +391,51 @@ class _LibraryScreenState extends State<LibraryScreen> {
       );
       if (parsed.text.isNotEmpty) output.add(parsed);
       collectChapters(chapter.SubChapters ?? [], output);
+    }
+  }
+
+  void loadBookChapters(EpubBook epub, List<ReaderChapter> output) {
+    collectChapters(epub.Chapters ?? [], output);
+    if (output.isNotEmpty) return;
+
+    final schema = epub.Schema;
+    final package = schema?.Package;
+    final spine = package?.Spine?.Items ?? [];
+    final manifest = package?.Manifest?.Items ?? [];
+    final htmlFiles = epub.Content?.Html ?? {};
+
+    for (final itemRef in spine) {
+      if (itemRef.IsLinear == false) continue;
+
+      final id = itemRef.IdRef;
+      if (id == null) continue;
+
+      final matches = manifest.where((item) => item.Id == id);
+      if (matches.isEmpty) continue;
+
+      final href = matches.first.Href;
+      if (href == null) continue;
+
+      final normalized = Uri.decodeFull(href).split('#').first;
+      final content =
+          htmlFiles[normalized] ??
+          htmlFiles.entries
+              .where(
+                (entry) =>
+                    entry.key == normalized ||
+                    entry.key.endsWith('/$normalized'),
+              )
+              .map((entry) => entry.value)
+              .firstOrNull;
+
+      final rawHtml = content?.Content;
+      if (rawHtml == null || rawHtml.isEmpty) continue;
+
+      final parsed = parseChapter('Section ${output.length + 1}', rawHtml);
+
+      if (parsed.text.trim().isNotEmpty) {
+        output.add(parsed);
+      }
     }
   }
 
@@ -337,7 +457,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
       final epub = await EpubReader.readBook(bytes);
       final chapters = <ReaderChapter>[];
-      collectChapters(epub.Chapters ?? [], chapters);
+      loadBookChapters(epub, chapters);
 
       if (chapters.isEmpty) {
         throw Exception('No readable chapters were found in this EPUB.');
@@ -360,14 +480,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
         books.add(imported);
         sortBooks();
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Imported ${imported.title}')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Imported ${imported.title}')));
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not import EPUB: $error')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not import EPUB: $error')));
     } finally {
       if (mounted) setState(() => importing = false);
     }
@@ -378,8 +497,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
     final pages = <Widget>[
       _libraryPage(),
       _narrationLibraryPage(),
-      _placeholderPage(Icons.tune_rounded, 'Settings',
-          'Choose narration providers, voices, and API keys.'),
+      _placeholderPage(
+        Icons.tune_rounded,
+        'Settings',
+        'Choose narration providers, voices, and API keys.',
+      ),
     ];
 
     return Scaffold(
@@ -389,8 +511,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
           children: [
             Icon(Icons.auto_stories_rounded, color: accent),
             SizedBox(width: 12),
-            Text('Dogreader',
-                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 19)),
+            Text(
+              'Dogreader',
+              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 19),
+            ),
           ],
         ),
       ),
@@ -401,17 +525,20 @@ class _LibraryScreenState extends State<LibraryScreen> {
         backgroundColor: const Color(0xFF1A1F2A),
         destinations: const [
           NavigationDestination(
-              icon: Icon(Icons.library_books_outlined),
-              selectedIcon: Icon(Icons.library_books),
-              label: 'Library'),
+            icon: Icon(Icons.library_books_outlined),
+            selectedIcon: Icon(Icons.library_books),
+            label: 'Library',
+          ),
           NavigationDestination(
-              icon: Icon(Icons.queue_music_outlined),
-              selectedIcon: Icon(Icons.queue_music),
-              label: 'Queue'),
+            icon: Icon(Icons.queue_music_outlined),
+            selectedIcon: Icon(Icons.queue_music),
+            label: 'Queue',
+          ),
           NavigationDestination(
-              icon: Icon(Icons.settings_outlined),
-              selectedIcon: Icon(Icons.settings),
-              label: 'Settings'),
+            icon: Icon(Icons.settings_outlined),
+            selectedIcon: Icon(Icons.settings),
+            label: 'Settings',
+          ),
         ],
       ),
     );
@@ -421,11 +548,18 @@ class _LibraryScreenState extends State<LibraryScreen> {
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 22),
       children: [
-        const Text('Your library',
-            style: TextStyle(fontSize: 34, fontWeight: FontWeight.bold)),
+        const Text(
+          'Your library',
+          style: TextStyle(fontSize: 34, fontWeight: FontWeight.bold),
+        ),
         const SizedBox(height: 8),
-        Text("I'm not surprised you're reading that, because you're stupid.",
-            style: TextStyle(fontSize: 15, color: Colors.white.withValues(alpha: 0.65))),
+        Text(
+          "I'm not surprised you're reading that, because you're stupid.",
+          style: TextStyle(
+            fontSize: 15,
+            color: Colors.white.withValues(alpha: 0.65),
+          ),
+        ),
         const SizedBox(height: 26),
         if (books.isEmpty) _emptyLibrary(),
         for (final book in books)
@@ -434,14 +568,35 @@ class _LibraryScreenState extends State<LibraryScreen> {
             margin: const EdgeInsets.only(bottom: 14),
             child: ListTile(
               contentPadding: const EdgeInsets.all(15),
-              leading: SizedBox(width: 54, height: 76,
+              leading: SizedBox(
+                width: 54,
+                height: 76,
                 child: book.cover == null
-                    ? const Icon(Icons.menu_book_rounded, color: accent, size: 36)
-                    : ClipRRect(borderRadius: BorderRadius.circular(5),
-                        child: Image.memory(book.cover!, fit: BoxFit.cover,
-                          errorBuilder: (context, error, stackTrace) => const Icon(Icons.menu_book_rounded, color: accent))),),
-              title: Text(book.title, style: const TextStyle(fontWeight: FontWeight.w700)),
-              subtitle: Text('${book.author}\n${book.chapters.length} sections'),
+                    ? const Icon(
+                        Icons.menu_book_rounded,
+                        color: accent,
+                        size: 36,
+                      )
+                    : ClipRRect(
+                        borderRadius: BorderRadius.circular(5),
+                        child: Image.memory(
+                          book.cover!,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) =>
+                              const Icon(
+                                Icons.menu_book_rounded,
+                                color: accent,
+                              ),
+                        ),
+                      ),
+              ),
+              title: Text(
+                book.title,
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              subtitle: Text(
+                '${book.author}\n${book.chapters.length} sections',
+              ),
               isThreeLine: true,
               trailing: IconButton(
                 tooltip: 'Chapters and narration',
@@ -455,7 +610,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
         FilledButton.icon(
           onPressed: importing ? null : importBook,
           icon: importing
-              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
               : const Icon(Icons.add_rounded),
           label: Text(importing ? 'Importing…' : 'Import a book'),
           style: FilledButton.styleFrom(
@@ -465,17 +624,28 @@ class _LibraryScreenState extends State<LibraryScreen> {
           ),
         ),
         const SizedBox(height: 25),
-        const Text('Built for reading and listening your way',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+        const Text(
+          'Built for reading and listening your way',
+          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+        ),
         const SizedBox(height: 16),
-        const _FeatureRow(Icons.record_voice_over_rounded, 'Choose your narrator',
-            'Bring your preferred AI voice service.'),
+        const _FeatureRow(
+          Icons.record_voice_over_rounded,
+          'Choose your narrator',
+          'Bring your preferred AI voice service.',
+        ),
         const SizedBox(height: 12),
-        const _FeatureRow(Icons.offline_bolt_rounded, 'Listen offline',
-            'Keep generated audio on your device.'),
+        const _FeatureRow(
+          Icons.offline_bolt_rounded,
+          'Listen offline',
+          'Keep generated audio on your device.',
+        ),
         const SizedBox(height: 12),
-        const _FeatureRow(Icons.bookmark_added_outlined, 'Pick up where you left off',
-            'Your books and reading positions are saved.'),
+        const _FeatureRow(
+          Icons.bookmark_added_outlined,
+          'Pick up where you left off',
+          'Your books and reading positions are saved.',
+        ),
       ],
     );
   }
@@ -493,14 +663,19 @@ class _LibraryScreenState extends State<LibraryScreen> {
         children: [
           const Icon(Icons.menu_book_rounded, size: 62, color: accent),
           const SizedBox(height: 20),
-          const Text('A new chapter begins',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+          const Text(
+            'A new chapter begins',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
+          ),
           const SizedBox(height: 10),
           Text(
             'Import an EPUB, browse its chapters, and start reading.',
             textAlign: TextAlign.center,
-            style: TextStyle(height: 1.5, color: Colors.white.withValues(alpha: 0.72)),
+            style: TextStyle(
+              height: 1.5,
+              color: Colors.white.withValues(alpha: 0.72),
+            ),
           ),
         ],
       ),
@@ -508,21 +683,36 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   Widget _narrationLibraryPage() {
-    if (books.isEmpty) return _placeholderPage(Icons.queue_music_rounded,
-        'Narration', 'Import a book to generate or listen to narration.');
-    return ListView(children: [
-      const Padding(padding: EdgeInsets.all(20), child: Text('Your books',
-          style: TextStyle(fontSize: 23, fontWeight: FontWeight.bold))),
-      for (final book in books)
-        ListTile(
-          leading: const Icon(Icons.headphones, color: accent),
-          title: Text(book.title),
-          subtitle: Text(book.author),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () => Navigator.push(context, MaterialPageRoute(
-              builder: (_) => NarrationQueueScreen(book: book))),
+    if (books.isEmpty)
+      return _placeholderPage(
+        Icons.queue_music_rounded,
+        'Narration',
+        'Import a book to generate or listen to narration.',
+      );
+    return ListView(
+      children: [
+        const Padding(
+          padding: EdgeInsets.all(20),
+          child: Text(
+            'Your books',
+            style: TextStyle(fontSize: 23, fontWeight: FontWeight.bold),
+          ),
         ),
-    ]);
+        for (final book in books)
+          ListTile(
+            leading: const Icon(Icons.headphones, color: accent),
+            title: Text(book.title),
+            subtitle: Text(book.author),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => NarrationQueueScreen(book: book),
+              ),
+            ),
+          ),
+      ],
+    );
   }
 
   Widget _placeholderPage(IconData icon, String title, String subtitle) {
@@ -534,11 +724,16 @@ class _LibraryScreenState extends State<LibraryScreen> {
           children: [
             Icon(icon, size: 64, color: accent),
             const SizedBox(height: 20),
-            Text(title, style: const TextStyle(fontSize: 25, fontWeight: FontWeight.bold)),
+            Text(
+              title,
+              style: const TextStyle(fontSize: 25, fontWeight: FontWeight.bold),
+            ),
             const SizedBox(height: 10),
-            Text(subtitle,
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white.withValues(alpha: 0.65))),
+            Text(
+              subtitle,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.65)),
+            ),
           ],
         ),
       ),
@@ -552,95 +747,138 @@ class ChapterListScreen extends StatelessWidget {
   final ImportedBook book;
   final Map<String, int>? saved;
   final SavePosition onSave;
-  const ChapterListScreen({super.key, required this.book, required this.saved, required this.onSave});
+  const ChapterListScreen({
+    super.key,
+    required this.book,
+    required this.saved,
+    required this.onSave,
+  });
 
   @override
   Widget build(BuildContext context) {
     final lastChapter = saved?['chapter'] ?? 0;
     return Scaffold(
-      appBar: AppBar(title: Text(book.title), actions: [
-        IconButton(
-          tooltip: 'Generate narration',
-          icon: const Icon(Icons.record_voice_over),
-          onPressed: () => Navigator.push(context, MaterialPageRoute(
-            builder: (_) => NarrationQueueScreen(book: book))),
-        ),
-      ]),
-      body: Column(children: [
-        Padding(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-          child: FilledButton.icon(
-            onPressed: () => Navigator.push(context, MaterialPageRoute(
-                builder: (_) => NarrationQueueScreen(book: book))),
-            icon: const Icon(Icons.headphones),
-            label: const Text('Listen / Generate audiobook'),
-          )),
-        Expanded(child: ListView.builder(
-        padding: const EdgeInsets.all(14),
-        itemCount: book.chapters.length + (saved == null ? 0 : 1),
-        itemBuilder: (context, row) {
-          if (saved != null && row == 0) {
-            return Card(
-              color: panel,
-              child: ListTile(
-                leading: const Icon(Icons.bookmark, color: accent),
-                title: const Text('Continue reading'),
-                subtitle: Text(book.chapters[lastChapter.clamp(0, book.chapters.length - 1)].title),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => openChapter(context, lastChapter.clamp(0, book.chapters.length - 1), resume: true),
+      appBar: AppBar(
+        title: Text(book.title),
+        actions: [
+          IconButton(
+            tooltip: 'Generate narration',
+            icon: const Icon(Icons.record_voice_over),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => NarrationQueueScreen(book: book),
               ),
-            );
-          }
-          final index = row - (saved == null ? 0 : 1);
-          final chapter = book.chapters[index];
-          final savedOffset = saved != null && saved!['chapter'] == index
-              ? (saved!['offset'] ?? 0)
-              : 0;
-          final fraction = (savedOffset /
-              math.max(1, chapter.text.length)).clamp(0.0, 1.0);
-
-          return ListTile(
-            leading: const Icon(Icons.auto_stories_outlined, color: accent),
-            title: Text(chapter.title),
-            subtitle: Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: savedOffset > 0
-                  ? LinearProgressIndicator(
-                      value: fraction,
-                      minHeight: 3,
-                      backgroundColor: Colors.white12,
-                      color: accent,
-                    )
-                  : const Text(
-                      'whatsgonnahappenwhatsgonnahappenwhatsgonnahappenwhatsgonnahappen',
-                      maxLines: 1,
-                      softWrap: false,
-                      overflow: TextOverflow.clip,
-                      style: TextStyle(
-                        fontSize: 5,
-                        letterSpacing: -0.3,
-                        color: accent,
+            ),
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            child: FilledButton.icon(
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => NarrationQueueScreen(book: book),
+                ),
+              ),
+              icon: const Icon(Icons.headphones),
+              label: const Text('Listen / Generate audiobook'),
+            ),
+          ),
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.all(14),
+              itemCount: book.chapters.length + (saved == null ? 0 : 1),
+              itemBuilder: (context, row) {
+                if (saved != null && row == 0) {
+                  return Card(
+                    color: panel,
+                    child: ListTile(
+                      leading: const Icon(Icons.bookmark, color: accent),
+                      title: const Text('Continue reading'),
+                      subtitle: Text(
+                        book
+                            .chapters[lastChapter.clamp(
+                              0,
+                              book.chapters.length - 1,
+                            )]
+                            .title,
+                      ),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => openChapter(
+                        context,
+                        lastChapter.clamp(0, book.chapters.length - 1),
+                        resume: true,
                       ),
                     ),
+                  );
+                }
+                final index = row - (saved == null ? 0 : 1);
+                final chapter = book.chapters[index];
+                final savedOffset = saved != null && saved!['chapter'] == index
+                    ? (saved!['offset'] ?? 0)
+                    : 0;
+                final fraction =
+                    (savedOffset / math.max(1, chapter.text.length)).clamp(
+                      0.0,
+                      1.0,
+                    );
+
+                return ListTile(
+                  leading: const Icon(
+                    Icons.auto_stories_outlined,
+                    color: accent,
+                  ),
+                  title: Text(chapter.title),
+                  subtitle: Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: savedOffset > 0
+                        ? LinearProgressIndicator(
+                            value: fraction,
+                            minHeight: 3,
+                            backgroundColor: Colors.white12,
+                            color: accent,
+                          )
+                        : const Text(
+                            'whatsgonnahappenwhatsgonnahappenwhatsgonnahappenwhatsgonnahappen',
+                            maxLines: 1,
+                            softWrap: false,
+                            overflow: TextOverflow.clip,
+                            style: TextStyle(
+                              fontSize: 5,
+                              letterSpacing: -0.3,
+                              color: accent,
+                            ),
+                          ),
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => openChapter(context, index),
+                );
+              },
             ),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => openChapter(context, index),
-          );
-        },
-      )),
-      ]),
+          ),
+        ],
+      ),
     );
   }
 
   void openChapter(BuildContext context, int index, {bool resume = false}) {
-    Navigator.push(context, MaterialPageRoute(builder: (_) => ReadingScreen(
-      book: book,
-      chapterIndex: index,
-      initialOffset: resume ? (saved?['offset'] ?? 0) : 0,
-      onSave: onSave,
-    )));
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ReadingScreen(
+          book: book,
+          chapterIndex: index,
+          initialOffset: resume ? (saved?['offset'] ?? 0) : 0,
+          onSave: onSave,
+        ),
+      ),
+    );
   }
 }
-
 
 class NarrationQueueScreen extends StatefulWidget {
   final ImportedBook book;
@@ -674,11 +912,13 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     try {
       final file = await queueFile;
       if (await file.exists()) {
-        final data = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+        final data =
+            jsonDecode(await file.readAsString()) as Map<String, dynamic>;
         host = data['host'] as String? ?? '';
         token = data['token'] as String? ?? '';
         final savedNarrator = data['narrator'];
-        if (savedNarrator is String && narratorNames.containsKey(savedNarrator)) {
+        if (savedNarrator is String &&
+            narratorNames.containsKey(savedNarrator)) {
           narrator = savedNarrator;
         }
         final bookJobs = (data['books'] as Map?)?[widget.book.id];
@@ -696,7 +936,11 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     for (var index = 0; index < widget.book.chapters.length; index++) {
       final file = File('${root.path}/narration/${widget.book.id}_$index.mp3');
       if (await file.exists() && await file.length() > 1000) {
-        jobs[index] = {...?jobs[index], 'status': 'ready', 'id': jobs[index]?['id']};
+        jobs[index] = {
+          ...?jobs[index],
+          'status': 'ready',
+          'id': jobs[index]?['id'],
+        };
       }
     }
     if (mounted) setState(() {});
@@ -720,12 +964,19 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     await file.writeAsString(jsonEncode(data));
   }
 
-  Uri endpoint(String path) => Uri.parse('${host.replaceAll(RegExp(r'/$'), '')}$path');
+  Uri endpoint(String path) =>
+      Uri.parse('${host.replaceAll(RegExp(r'/$'), '')}$path');
 
-  Future<Map<String, dynamic>> requestJson(String method, String path, [Map<String, dynamic>? payload]) async {
+  Future<Map<String, dynamic>> requestJson(
+    String method,
+    String path, [
+    Map<String, dynamic>? payload,
+  ]) async {
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
     try {
-      final req = await client.openUrl(method, endpoint(path)).timeout(const Duration(seconds: 8));
+      final req = await client
+          .openUrl(method, endpoint(path))
+          .timeout(const Duration(seconds: 8));
       req.headers.set('X-Dogreader-Token', token);
       if (payload != null) {
         req.headers.contentType = ContentType.json;
@@ -734,7 +985,8 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       final response = await req.close().timeout(const Duration(seconds: 15));
       final body = await utf8.decoder.bind(response).join();
       final result = jsonDecode(body) as Map<String, dynamic>;
-      if (response.statusCode >= 400) throw Exception(result['error'] ?? 'HTTP ${response.statusCode}');
+      if (response.statusCode >= 400)
+        throw Exception(result['error'] ?? 'HTTP ${response.statusCode}');
       return result;
     } finally {
       client.close(force: true);
@@ -744,26 +996,55 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   Future<void> configure() async {
     final hostController = TextEditingController(text: host);
     final tokenController = TextEditingController(text: token);
-    final accepted = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
-      title: const Text('Connect Dogreader Cloud'),
-      content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const Text('Enter your Cloud Run HTTPS URL and the private access token printed by the deployment script. Keep the token secret.'),
-        const SizedBox(height: 12),
-        TextField(controller: hostController, decoration: const InputDecoration(
-          labelText: 'Cloud Run URL', hintText: 'https://dogreader-api-....run.app')),
-        const SizedBox(height: 12),
-        TextField(controller: tokenController, decoration: const InputDecoration(
-          labelText: 'Private access token',), autocorrect: false, obscureText: true),
-      ])),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-        FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Save')),
-      ],
-    ));
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Connect Dogreader Cloud'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Enter your Cloud Run HTTPS URL and the private access token printed by the deployment script. Keep the token secret.',
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: hostController,
+                decoration: const InputDecoration(
+                  labelText: 'Cloud Run URL',
+                  hintText: 'https://dogreader-api-....run.app',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: tokenController,
+                decoration: const InputDecoration(
+                  labelText: 'Private access token',
+                ),
+                autocorrect: false,
+                obscureText: true,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
     if (accepted == true) {
       final candidate = hostController.text.trim();
-      if (!candidate.startsWith('https://') || Uri.tryParse(candidate)?.host.isEmpty != false) {
-        if (mounted) setState(() => notice = 'Enter a valid HTTPS Cloud Run URL.');
+      if (!candidate.startsWith('https://') ||
+          Uri.tryParse(candidate)?.host.isEmpty != false) {
+        if (mounted)
+          setState(() => notice = 'Enter a valid HTTPS Cloud Run URL.');
         hostController.dispose();
         tokenController.dispose();
         return;
@@ -771,7 +1052,8 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       host = candidate;
       token = tokenController.text.trim();
       await save();
-      if (mounted) setState(() => notice = 'Settings saved. Tap Check connection.');
+      if (mounted)
+        setState(() => notice = 'Settings saved. Tap Check connection.');
     }
     hostController.dispose();
     tokenController.dispose();
@@ -780,7 +1062,8 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   Future<void> checkConnection() async {
     try {
       final data = await requestJson('GET', '/dogreader/ping');
-      if (mounted) setState(() => notice = 'Connected! Voice: ${data['voice']}');
+      if (mounted)
+        setState(() => notice = 'Connected! Voice: ${data['voice']}');
     } catch (e) {
       if (mounted) setState(() => notice = 'Cannot reach cloud server: $e');
     }
@@ -793,8 +1076,9 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         final status = jobs[i]?['status'];
         if (status == null || status == 'error') selected.add(i);
       }
-      notice = selected.isEmpty ? 'All chapters are already generated or queued.' :
-          '${selected.length} chapters selected. Review and tap Generate.';
+      notice = selected.isEmpty
+          ? 'All chapters are already generated or queued.'
+          : '${selected.length} chapters selected. Review and tap Generate.';
     });
   }
 
@@ -802,12 +1086,21 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     final root = await getApplicationDocumentsDirectory();
     final file = File('${root.path}/narration/${widget.book.id}_$index.mp3');
     if (!await file.exists()) {
-      if (mounted) setState(() => notice = 'Recording not found locally. Try refreshing the queue.');
+      if (mounted)
+        setState(
+          () =>
+              notice = 'Recording not found locally. Try refreshing the queue.',
+        );
       return;
     }
     if (!mounted) return;
-    await Navigator.push(context, MaterialPageRoute(
-      builder: (_) => ChapterNarrationScreen(book: widget.book, chapterIndex: index)));
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) =>
+            ChapterNarrationScreen(book: widget.book, chapterIndex: index),
+      ),
+    );
   }
 
   Future<void> generate() async {
@@ -816,12 +1109,19 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       setState(() => notice = 'Set your Cloud Run URL and access token first.');
       return;
     }
-    setState(() { busy = true; notice = null; });
+    setState(() {
+      busy = true;
+      notice = null;
+    });
     for (final index in selected.toList()..sort()) {
       jobs[index] = {'status': 'waiting', 'voice': narrator};
     }
     await save();
-    if (mounted) setState(() { selected.clear(); busy = false; });
+    if (mounted)
+      setState(() {
+        selected.clear();
+        busy = false;
+      });
     await checkJobs();
   }
 
@@ -831,7 +1131,8 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       final req = await client.getUrl(endpoint('/dogreader/audio/$id'));
       req.headers.set('X-Dogreader-Token', token);
       final response = await req.close();
-      if (response.statusCode != 200) throw Exception('Download failed: ${response.statusCode}');
+      if (response.statusCode != 200)
+        throw Exception('Download failed: ${response.statusCode}');
       final root = await getApplicationDocumentsDirectory();
       final folder = Directory('${root.path}/narration');
       await folder.create(recursive: true);
@@ -845,7 +1146,11 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       final stateFile = File('${root.path}/narration_state.json');
       Map<String, dynamic> data = {};
       if (await stateFile.exists()) {
-        try { data = jsonDecode(await stateFile.readAsString()) as Map<String, dynamic>; } catch (_) {}
+        try {
+          data = jsonDecode(
+            await stateFile.readAsString(),
+          ) as Map<String, dynamic>;
+        } catch (_) {}
       }
       data['${widget.book.id}:$index'] = {'path': target.path, 'positionMs': 0};
       await stateFile.writeAsString(jsonEncode(data));
@@ -863,11 +1168,15 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         final status = jobs[index]?['status'];
         if (status == 'ready') {
           final root = await getApplicationDocumentsDirectory();
-          final file = File('${root.path}/narration/${widget.book.id}_$index.mp3');
+          final file = File(
+            '${root.path}/narration/${widget.book.id}_$index.mp3',
+          );
           if (await file.exists()) continue;
           final id = jobs[index]?['id'];
           if (id is String) {
-            try { await downloadAudio(index, id); } catch (_) {
+            try {
+              await downloadAudio(index, id);
+            } catch (_) {
               notice = 'Recording needs downloading. Check your connection and refresh.';
             }
           }
@@ -881,7 +1190,11 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
               'text': chapter.text,
               'voice': jobs[index]?['voice'] ?? 'en-US-Chirp3-HD-Achernar',
             });
-            jobs[index] = {...?jobs[index], 'status': response['status'], 'id': response['id']};
+            jobs[index] = {
+              ...?jobs[index],
+              'status': response['status'],
+              'id': response['id'],
+            };
           }
           final id = jobs[index]?['id'];
           if (id is! String) continue;
@@ -897,22 +1210,38 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
               'text': chapter.text,
               'voice': jobs[index]?['voice'] ?? 'en-US-Chirp3-HD-Achernar',
             });
-            jobs[index] = {...?jobs[index], 'status': submitted['status'], 'id': submitted['id']};
-            result = await requestJson('GET', '/dogreader/jobs/${submitted['id']}');
+            jobs[index] = {
+              ...?jobs[index],
+              'status': submitted['status'],
+              'id': submitted['id'],
+            };
+            result = await requestJson(
+              'GET',
+              '/dogreader/jobs/${submitted['id']}',
+            );
           }
           final nextStatus = result['status'] as String? ?? 'waiting';
           final currentId = jobs[index]?['id'] as String? ?? id;
-          jobs[index] = {...?jobs[index], 'status': nextStatus, 'id': currentId, 'error': result['error']};
+          jobs[index] = {
+            ...?jobs[index],
+            'status': nextStatus,
+            'id': currentId,
+            'error': result['error'],
+          };
           if (nextStatus == 'ready') await downloadAudio(index, currentId);
-          if (nextStatus == 'error') notice = 'Cloud narration failed for ${widget.book.chapters[index].title}. Check Cloud Run logs.';
+          if (nextStatus == 'error')
+            notice =
+                'Cloud narration failed for ${widget.book.chapters[index].title}. Check Cloud Run logs.';
         } catch (e) {
           // Preserve pending work for a later retry.
           if (jobs[index]?['id'] == null) jobs[index] = {'status': 'waiting'};
           // A temporary socket failure should not masquerade as a failed job.
           // Keep the job queued and retry on the next refresh.
-          if (e is SocketException || e is TimeoutException ||
+          if (e is SocketException ||
+              e is TimeoutException ||
               e.toString().contains('SocketException')) {
-            notice = 'Connection temporarily unavailable. Will retry automatically.';
+            notice =
+                'Connection temporarily unavailable. Will retry automatically.';
           } else {
             notice = 'Cloud request failed: $e';
           }
@@ -941,90 +1270,166 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Generate narration'), actions: [
-        IconButton(tooltip: 'Cloud settings', onPressed: configure, icon: const Icon(Icons.settings)),
-        IconButton(tooltip: 'Check connection and jobs', onPressed: checkJobs, icon: const Icon(Icons.refresh)),
-      ]),
-      body: Column(children: [
-        Padding(padding: const EdgeInsets.all(12), child: Column(children: [
-          Text(host.isEmpty ? 'Cloud not configured' : 'Cloud: $host',
-            style: const TextStyle(fontSize: 12)),
-          Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            TextButton(onPressed: configure, child: const Text('Settings')),
-            TextButton(onPressed: checkConnection, child: const Text('Check connection')),
-          ]),
-          if (notice != null) Text(notice!, textAlign: TextAlign.center),
-        ])),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: DropdownButtonFormField<String>(
-            value: narrator,
-            decoration: const InputDecoration(
-              labelText: 'Narrator',
-              border: OutlineInputBorder(),
-              prefixIcon: Icon(Icons.record_voice_over),
-            ),
-            items: narratorNames.entries.map((entry) =>
-              DropdownMenuItem<String>(
-                value: entry.key,
-                child: Text(entry.value),
-              ),
-            ).toList(),
-            onChanged: (value) {
-              if (value == null) return;
-              setState(() => narrator = value);
-              save();
-            },
+      appBar: AppBar(
+        title: const Text('Generate narration'),
+        actions: [
+          IconButton(
+            tooltip: 'Cloud settings',
+            onPressed: configure,
+            icon: const Icon(Icons.settings),
           ),
-        ),
-        Padding(padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Row(children: [
-            OutlinedButton.icon(onPressed: selectEntireBook,
-              icon: const Icon(Icons.select_all), label: const Text('Entire book')),
-            const SizedBox(width: 8),
-            TextButton(onPressed: () => setState(() => selected.clear()),
-              child: const Text('Clear selection')),
-          ])),
-        if (selected.isNotEmpty)
-          Padding(padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text('${selected.length} chapters • ${selected.fold<int>(0, (sum, i) => sum + widget.book.chapters[i].text.length)} characters selected',
-              style: const TextStyle(fontSize: 12))),
-        Expanded(child: ListView.builder(
-          itemCount: widget.book.chapters.length,
-          itemBuilder: (context, index) {
-            final chapter = widget.book.chapters[index];
-            final status = jobs[index]?['status'] as String?;
-            final voice = jobs[index]?['voice'] as String?;
-            final voiceLabel = voice == null ? null : narratorNames[voice] ?? voice;
-            return CheckboxListTile(
-              secondary: status == 'ready' ? IconButton(
-                tooltip: 'Play downloaded chapter',
-                icon: const Icon(Icons.play_circle_fill, color: accent, size: 32),
-                onPressed: () => playChapter(index),
-              ) : null,
-              value: selected.contains(index),
-              title: Text(chapter.title),
-              subtitle: Text(
-                (status == null ? 'Not generated' :
-                status == 'ready' ? 'Ready to listen' :
-                status == 'waiting' ? 'Waiting to submit' :
-                status == 'generating' ? 'Generating…' :
-                status == 'queued' ? 'Queued in cloud' :
-                status == 'error' ? 'Cloud job failed — check server logs' : status)
-                + (voiceLabel == null ? '' : ' • $voiceLabel'),
+          IconButton(
+            tooltip: 'Check connection and jobs',
+            onPressed: checkJobs,
+            icon: const Icon(Icons.refresh),
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              children: [
+                Text(
+                  host.isEmpty ? 'Cloud not configured' : 'Cloud: $host',
+                  style: const TextStyle(fontSize: 12),
+                ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    TextButton(
+                      onPressed: configure,
+                      child: const Text('Settings'),
+                    ),
+                    TextButton(
+                      onPressed: checkConnection,
+                      child: const Text('Check connection'),
+                    ),
+                  ],
+                ),
+                if (notice != null) Text(notice!, textAlign: TextAlign.center),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: DropdownButtonFormField<String>(
+              value: narrator,
+              decoration: const InputDecoration(
+                labelText: 'Narrator',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.record_voice_over),
               ),
-              onChanged: status == 'ready' || status == 'queued' || status == 'generating' || status == 'waiting' ? null : (value) => setState(() {
-                if (value == true) { selected.add(index); } else { selected.remove(index); }
-              }),
-            );
-          },
-        )),
-        Padding(padding: const EdgeInsets.all(12), child: FilledButton.icon(
-          onPressed: selected.isEmpty || busy ? null : generate,
-          icon: const Icon(Icons.record_voice_over),
-          label: Text('Generate ${selected.length} chapter${selected.length == 1 ? '' : 's'}'),
-        )),
-      ]),
+              items: narratorNames.entries
+                  .map(
+                    (entry) => DropdownMenuItem<String>(
+                      value: entry.key,
+                      child: Text(entry.value),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) {
+                if (value == null) return;
+                setState(() => narrator = value);
+                save();
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              children: [
+                OutlinedButton.icon(
+                  onPressed: selectEntireBook,
+                  icon: const Icon(Icons.select_all),
+                  label: const Text('Entire book'),
+                ),
+                const SizedBox(width: 8),
+                TextButton(
+                  onPressed: () => setState(() => selected.clear()),
+                  child: const Text('Clear selection'),
+                ),
+              ],
+            ),
+          ),
+          if (selected.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text(
+                '${selected.length} chapters • ${selected.fold<int>(0, (sum, i) => sum + widget.book.chapters[i].text.length)} characters selected',
+                style: const TextStyle(fontSize: 12),
+              ),
+            ),
+          Expanded(
+            child: ListView.builder(
+              itemCount: widget.book.chapters.length,
+              itemBuilder: (context, index) {
+                final chapter = widget.book.chapters[index];
+                final status = jobs[index]?['status'] as String?;
+                final voice = jobs[index]?['voice'] as String?;
+                final voiceLabel = voice == null
+                    ? null
+                    : narratorNames[voice] ?? voice;
+                return CheckboxListTile(
+                  secondary: status == 'ready'
+                      ? IconButton(
+                          tooltip: 'Play downloaded chapter',
+                          icon: const Icon(
+                            Icons.play_circle_fill,
+                            color: accent,
+                            size: 32,
+                          ),
+                          onPressed: () => playChapter(index),
+                        )
+                      : null,
+                  value: selected.contains(index),
+                  title: Text(chapter.title),
+                  subtitle: Text(
+                    (status == null
+                            ? 'Not generated'
+                            : status == 'ready'
+                            ? 'Ready to listen'
+                            : status == 'waiting'
+                            ? 'Waiting to submit'
+                            : status == 'generating'
+                            ? 'Generating…'
+                            : status == 'queued'
+                            ? 'Queued in cloud'
+                            : status == 'error'
+                            ? 'Cloud job failed — check server logs'
+                            : status) +
+                        (voiceLabel == null ? '' : ' • $voiceLabel'),
+                  ),
+                  onChanged:
+                      status == 'ready' ||
+                          status == 'queued' ||
+                          status == 'generating' ||
+                          status == 'waiting'
+                      ? null
+                      : (value) => setState(() {
+                          if (value == true) {
+                            selected.add(index);
+                          } else {
+                            selected.remove(index);
+                          }
+                        }),
+                );
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: FilledButton.icon(
+              onPressed: selected.isEmpty || busy ? null : generate,
+              icon: const Icon(Icons.record_voice_over),
+              label: Text(
+                'Generate ${selected.length} chapter${selected.length == 1 ? '' : 's'}',
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1034,8 +1439,13 @@ class ReadingScreen extends StatefulWidget {
   final int chapterIndex;
   final int initialOffset;
   final SavePosition onSave;
-  const ReadingScreen({super.key, required this.book, required this.chapterIndex,
-      required this.initialOffset, required this.onSave});
+  const ReadingScreen({
+    super.key,
+    required this.book,
+    required this.chapterIndex,
+    required this.initialOffset,
+    required this.onSave,
+  });
 
   @override
   State<ReadingScreen> createState() => _ReadingScreenState();
@@ -1076,27 +1486,46 @@ class _ReadingScreenState extends State<ReadingScreen> {
       final a = cuts[i], b = cuts[i + 1];
       if (a == b) continue;
       final active = chapter.ranges.where((r) => r.start < b && r.end > a);
-      children.add(TextSpan(text: text.substring(a, b), style: TextStyle(
-        fontStyle: active.any((r) => r.italic) ? FontStyle.italic : FontStyle.normal,
-        fontWeight: active.any((r) => r.bold || r.heading) ? FontWeight.bold : FontWeight.normal,
-      )));
+      children.add(
+        TextSpan(
+          text: text.substring(a, b),
+          style: TextStyle(
+            fontStyle: active.any((r) => r.italic)
+                ? FontStyle.italic
+                : FontStyle.normal,
+            fontWeight: active.any((r) => r.bold || r.heading)
+                ? FontWeight.bold
+                : FontWeight.normal,
+          ),
+        ),
+      );
     }
-    return TextSpan(style: TextStyle(fontSize: fontSize, height: 1.55,
-        color: Colors.white), children: children);
+    return TextSpan(
+      style: TextStyle(fontSize: fontSize, height: 1.55, color: Colors.white),
+      children: children,
+    );
   }
 
   void calculatePages(double width, double height) {
-    if (width == previousWidth && height == previousHeight && fontSize == previousFont && pages.isNotEmpty) return;
+    if (width == previousWidth &&
+        height == previousHeight &&
+        fontSize == previousFont &&
+        pages.isNotEmpty)
+      return;
     previousWidth = width;
     previousHeight = height;
     previousFont = fontSize;
     final text = widget.book.chapters[chapterIndex].text;
-    final painter = TextPainter(textDirection: TextDirection.ltr, maxLines: null);
+    final painter = TextPainter(
+      textDirection: TextDirection.ltr,
+      maxLines: null,
+    );
     bool fits(int start, int end) {
       painter.text = styledPage(start, end);
       painter.layout(maxWidth: width);
       return painter.height <= height;
     }
+
     final nextPages = <String>[];
     final nextStarts = <int>[];
     int offset = 0;
@@ -1105,7 +1534,11 @@ class _ReadingScreenState extends State<ReadingScreen> {
       int high = text.length;
       while (low < high) {
         final mid = low + (high - low + 1) ~/ 2;
-        if (fits(offset, mid)) { low = mid; } else { high = mid - 1; }
+        if (fits(offset, mid)) {
+          low = mid;
+        } else {
+          high = mid - 1;
+        }
       }
       int end = low;
       if (end < text.length) {
@@ -1117,17 +1550,22 @@ class _ReadingScreenState extends State<ReadingScreen> {
       nextPages.add(text.substring(offset, end));
       offset = end;
     }
-    if (nextPages.isEmpty) { nextPages.add(''); nextStarts.add(0); }
+    if (nextPages.isEmpty) {
+      nextPages.add('');
+      nextStarts.add(0);
+    }
     pages = nextPages;
     starts = nextStarts;
-    currentPage = math.max(0, starts.lastIndexWhere((value) => value <= currentOffset));
-    final oldController = controller;
-    controller = PageController(
-      initialPage: currentPage,
-      keepPage: false,
+    currentPage = math.max(
+      0,
+      starts.lastIndexWhere((value) => value <= currentOffset),
     );
+    final oldController = controller;
+    controller = PageController(initialPage: currentPage, keepPage: false);
     if (oldController != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => oldController.dispose());
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => oldController.dispose(),
+      );
     }
   }
 
@@ -1149,7 +1587,11 @@ class _ReadingScreenState extends State<ReadingScreen> {
   void turnPage(int delta) {
     final target = currentPage + delta;
     if (target >= 0 && target < pages.length) {
-      controller?.animateToPage(target, duration: const Duration(milliseconds: 180), curve: Curves.easeOut);
+      controller?.animateToPage(
+        target,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+      );
     } else if (target >= pages.length) {
       changeChapter(chapterIndex + 1);
     } else if (target < 0 && chapterIndex > 0) {
@@ -1169,58 +1611,111 @@ class _ReadingScreenState extends State<ReadingScreen> {
     final chapter = widget.book.chapters[chapterIndex];
     return Scaffold(
       appBar: AppBar(
-        title: Text(chapter.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+        title: Text(
+          chapter.title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
         actions: [
-          IconButton(tooltip: 'Test narration',
-            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ChapterNarrationScreen(book: widget.book, chapterIndex: chapterIndex))),
-            icon: const Icon(Icons.headphones)),
-          IconButton(tooltip: 'Decrease text size',
-            onPressed: () => setState(() { fontSize = (fontSize - 2).clamp(14.0, 32.0); }),
-            icon: const Icon(Icons.text_decrease)),
-          IconButton(tooltip: 'Increase text size',
-            onPressed: () => setState(() { fontSize = (fontSize + 2).clamp(14.0, 32.0); }),
-            icon: const Icon(Icons.text_increase)),
-        ],
-      ),
-      body: LayoutBuilder(builder: (context, constraints) {
-        const horizontalPadding = 24.0;
-        const verticalPadding = 20.0;
-        const footerHeight = 38.0;
-        final width = math.max(100.0, constraints.maxWidth - horizontalPadding * 2);
-        final height = math.max(100.0, constraints.maxHeight - verticalPadding * 2 - footerHeight);
-        calculatePages(width, height);
-        return Column(children: [
-          Expanded(child: PageView.builder(
-            key: ValueKey('reading-chapter-$chapterIndex'),
-            controller: controller,
-            itemCount: pages.length,
-            onPageChanged: (index) {
-              currentPage = index;
-              currentOffset = starts[index];
-              saveCurrent();
-              setState(() {});
-            },
-            itemBuilder: (context, index) => Padding(
-              padding: const EdgeInsets.symmetric(horizontal: horizontalPadding, vertical: verticalPadding),
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onTapUp: (details) {
-                  final x = details.localPosition.dx;
-                  if (x < width * 0.28) turnPage(-1);
-                  if (x > width * 0.72) turnPage(1);
-                },
-                child: Align(alignment: Alignment.topLeft,
-                  child: RichText(text: styledPage(starts[index], starts[index] + pages[index].length))),
+          IconButton(
+            tooltip: 'Test narration',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => ChapterNarrationScreen(
+                  book: widget.book,
+                  chapterIndex: chapterIndex,
+                ),
               ),
             ),
-          )),
-          SizedBox(height: footerHeight, child: Center(child: Text(
-            '${currentPage + 1} / ${pages.length}  •  ${chapter.title}',
-            maxLines: 1, overflow: TextOverflow.ellipsis,
-            style: TextStyle(fontSize: 12, color: Colors.white.withValues(alpha: 0.55)),
-          ))),
-        ]);
-      }),
+            icon: const Icon(Icons.headphones),
+          ),
+          IconButton(
+            tooltip: 'Decrease text size',
+            onPressed: () => setState(() {
+              fontSize = (fontSize - 2).clamp(14.0, 32.0);
+            }),
+            icon: const Icon(Icons.text_decrease),
+          ),
+          IconButton(
+            tooltip: 'Increase text size',
+            onPressed: () => setState(() {
+              fontSize = (fontSize + 2).clamp(14.0, 32.0);
+            }),
+            icon: const Icon(Icons.text_increase),
+          ),
+        ],
+      ),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          const horizontalPadding = 24.0;
+          const verticalPadding = 20.0;
+          const footerHeight = 38.0;
+          final width = math.max(
+            100.0,
+            constraints.maxWidth - horizontalPadding * 2,
+          );
+          final height = math.max(
+            100.0,
+            constraints.maxHeight - verticalPadding * 2 - footerHeight,
+          );
+          calculatePages(width, height);
+          return Column(
+            children: [
+              Expanded(
+                child: PageView.builder(
+                  key: ValueKey('reading-chapter-$chapterIndex'),
+                  controller: controller,
+                  itemCount: pages.length,
+                  onPageChanged: (index) {
+                    currentPage = index;
+                    currentOffset = starts[index];
+                    saveCurrent();
+                    setState(() {});
+                  },
+                  itemBuilder: (context, index) => Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: horizontalPadding,
+                      vertical: verticalPadding,
+                    ),
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onTapUp: (details) {
+                        final x = details.localPosition.dx;
+                        if (x < width * 0.28) turnPage(-1);
+                        if (x > width * 0.72) turnPage(1);
+                      },
+                      child: Align(
+                        alignment: Alignment.topLeft,
+                        child: RichText(
+                          text: styledPage(
+                            starts[index],
+                            starts[index] + pages[index].length,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              SizedBox(
+                height: footerHeight,
+                child: Center(
+                  child: Text(
+                    '${currentPage + 1} / ${pages.length}  •  ${chapter.title}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.white.withValues(alpha: 0.55),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 }
@@ -1228,7 +1723,11 @@ class _ReadingScreenState extends State<ReadingScreen> {
 class ChapterNarrationScreen extends StatefulWidget {
   final ImportedBook book;
   final int chapterIndex;
-  const ChapterNarrationScreen({super.key, required this.book, required this.chapterIndex});
+  const ChapterNarrationScreen({
+    super.key,
+    required this.book,
+    required this.chapterIndex,
+  });
 
   @override
   State<ChapterNarrationScreen> createState() => _ChapterNarrationScreenState();
@@ -1283,27 +1782,37 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
   void initState() {
     super.initState();
     player.setReleaseMode(ReleaseMode.stop);
-    subscriptions.add(player.onPlayerStateChanged.listen((state) {
-      if (mounted) setState(() => playing = state == PlayerState.playing);
-    }));
-    subscriptions.add(player.onPositionChanged.listen((value) {
-      if (!mounted) return;
-      setState(() => position = value);
-      if (value.inSeconds != lastSavedSecond && value.inSeconds % 5 == 0) {
-        lastSavedSecond = value.inSeconds;
-        updateState({'positionMs': value.inMilliseconds});
-      }
-    }));
-    subscriptions.add(player.onDurationChanged.listen((value) {
-      if (mounted && value.inMilliseconds > 0) setState(() => duration = value);
-    }));
-    subscriptions.add(player.onPlayerComplete.listen((_) {
-      if (mounted) setState(() {
-        playing = false;
-        position = Duration.zero;
-      });
-      updateState({'positionMs': 0});
-    }));
+    subscriptions.add(
+      player.onPlayerStateChanged.listen((state) {
+        if (mounted) setState(() => playing = state == PlayerState.playing);
+      }),
+    );
+    subscriptions.add(
+      player.onPositionChanged.listen((value) {
+        if (!mounted) return;
+        setState(() => position = value);
+        if (value.inSeconds != lastSavedSecond && value.inSeconds % 5 == 0) {
+          lastSavedSecond = value.inSeconds;
+          updateState({'positionMs': value.inMilliseconds});
+        }
+      }),
+    );
+    subscriptions.add(
+      player.onDurationChanged.listen((value) {
+        if (mounted && value.inMilliseconds > 0)
+          setState(() => duration = value);
+      }),
+    );
+    subscriptions.add(
+      player.onPlayerComplete.listen((_) {
+        if (mounted)
+          setState(() {
+            playing = false;
+            position = Duration.zero;
+          });
+        updateState({'positionMs': 0});
+      }),
+    );
     restore();
   }
 
@@ -1368,7 +1877,10 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
 
   Future<void> importAudio() async {
     if (importing) return;
-    setState(() { importing = true; error = null; });
+    setState(() {
+      importing = true;
+      error = null;
+    });
     try {
       final picked = await FilePicker.pickFile(
         type: FileType.custom,
@@ -1381,7 +1893,9 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
       final root = await getApplicationDocumentsDirectory();
       final folder = Directory('${root.path}/narration');
       await folder.create(recursive: true);
-      final target = File('${folder.path}/${widget.book.id}_${widget.chapterIndex}.mp3');
+      final target = File(
+        '${folder.path}/${widget.book.id}_${widget.chapterIndex}.mp3',
+      );
       await player.stop();
       await File(picked.path!).copy(target.path);
       if (mounted) setState(() => duration = Duration.zero);
@@ -1389,10 +1903,11 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
       await refreshDuration();
       await player.seek(Duration.zero);
       await updateState({'path': target.path, 'positionMs': 0});
-      if (mounted) setState(() {
-        audioPath = target.path;
-        position = Duration.zero;
-      });
+      if (mounted)
+        setState(() {
+          audioPath = target.path;
+          position = Duration.zero;
+        });
     } catch (e) {
       if (mounted) setState(() => error = 'Could not import MP3: $e');
     } finally {
@@ -1416,7 +1931,10 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
   Future<void> seekTo(Duration value) async {
     if (audioPath == null) return;
     final maxMs = duration.inMilliseconds;
-    final ms = value.inMilliseconds.clamp(0, maxMs > 0 ? maxMs : value.inMilliseconds);
+    final ms = value.inMilliseconds.clamp(
+      0,
+      maxMs > 0 ? maxMs : value.inMilliseconds,
+    );
     final target = Duration(milliseconds: ms);
     await player.seek(target);
     if (mounted) setState(() => position = target);
@@ -1454,78 +1972,126 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
   @override
   Widget build(BuildContext context) {
     final hasAudio = audioPath != null;
-    final maxMs = duration.inMilliseconds > 0 ? duration.inMilliseconds.toDouble() : 1.0;
+    final maxMs = duration.inMilliseconds > 0
+        ? duration.inMilliseconds.toDouble()
+        : 1.0;
     final currentMs = position.inMilliseconds.toDouble().clamp(0.0, maxMs);
     return Scaffold(
       appBar: AppBar(title: const Text('Chapter narration')),
-      body: Center(child: SingleChildScrollView(child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.headphones, size: 62, color: accent),
-          const SizedBox(height: 14),
-          Text(widget.book.title, textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 8),
-          Text(widget.book.chapters[widget.chapterIndex].title,
-              textAlign: TextAlign.center),
-          const SizedBox(height: 20),
-          if (loading) const CircularProgressIndicator(),
-          if (!loading && !hasAudio)
-            const Text('No narration imported for this chapter yet.',
-                textAlign: TextAlign.center),
-          const SizedBox(height: 16),
-          OutlinedButton.icon(
-            onPressed: importing || loading ? null : importAudio,
-            icon: const Icon(Icons.audio_file),
-            label: Text(importing ? 'Importing…' : hasAudio ? 'Replace chapter MP3' : 'Import chapter MP3'),
-          ),
-          if (hasAudio) ...[
-            const SizedBox(height: 24),
-            Slider(
-              value: currentMs,
-              max: maxMs,
-              onChanged: duration.inMilliseconds <= 0 ? null :
-                  (v) => setState(() => position = Duration(milliseconds: v.round())),
-              onChangeEnd: (v) => seekTo(Duration(milliseconds: v.round())),
+      body: Center(
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.headphones, size: 62, color: accent),
+                const SizedBox(height: 14),
+                Text(
+                  widget.book.title,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  widget.book.chapters[widget.chapterIndex].title,
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 20),
+                if (loading) const CircularProgressIndicator(),
+                if (!loading && !hasAudio)
+                  const Text(
+                    'No narration imported for this chapter yet.',
+                    textAlign: TextAlign.center,
+                  ),
+                const SizedBox(height: 16),
+                OutlinedButton.icon(
+                  onPressed: importing || loading ? null : importAudio,
+                  icon: const Icon(Icons.audio_file),
+                  label: Text(
+                    importing
+                        ? 'Importing…'
+                        : hasAudio
+                        ? 'Replace chapter MP3'
+                        : 'Import chapter MP3',
+                  ),
+                ),
+                if (hasAudio) ...[
+                  const SizedBox(height: 24),
+                  Slider(
+                    value: currentMs,
+                    max: maxMs,
+                    onChanged: duration.inMilliseconds <= 0
+                        ? null
+                        : (v) => setState(
+                            () => position = Duration(milliseconds: v.round()),
+                          ),
+                    onChangeEnd: (v) =>
+                        seekTo(Duration(milliseconds: v.round())),
+                  ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(clock(position)),
+                      Text(
+                        duration.inMilliseconds > 0
+                            ? clock(duration)
+                            : "Loading duration…",
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 18),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      IconButton(
+                        tooltip: 'Back 15 seconds',
+                        onPressed: () =>
+                            seekTo(position - const Duration(seconds: 15)),
+                        icon: const Icon(Icons.replay_10),
+                      ),
+                      const SizedBox(width: 12),
+                      FilledButton.icon(
+                        onPressed: togglePlayback,
+                        icon: Icon(playing ? Icons.pause : Icons.play_arrow),
+                        label: Text(playing ? 'Pause' : 'Play'),
+                      ),
+                      const SizedBox(width: 12),
+                      IconButton(
+                        tooltip: 'Forward 15 seconds',
+                        onPressed: () =>
+                            seekTo(position + const Duration(seconds: 15)),
+                        icon: const Icon(Icons.forward_10),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  TextButton(
+                    onPressed: changeSpeed,
+                    child: Text('${speed}× speed'),
+                  ),
+                  TextButton.icon(
+                    onPressed: () => seekTo(Duration.zero),
+                    icon: const Icon(Icons.restart_alt),
+                    label: const Text('Restart chapter'),
+                  ),
+                ],
+                if (error != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 18),
+                    child: Text(
+                      error!,
+                      style: const TextStyle(color: Colors.orangeAccent),
+                    ),
+                  ),
+              ],
             ),
-            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-              Text(clock(position)),
-              Text(duration.inMilliseconds > 0 ? clock(duration) : "Loading duration…"),
-            ]),
-            const SizedBox(height: 18),
-            Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              IconButton(
-                tooltip: 'Back 15 seconds',
-                onPressed: () => seekTo(position - const Duration(seconds: 15)),
-                icon: const Icon(Icons.replay_10),
-              ),
-              const SizedBox(width: 12),
-              FilledButton.icon(
-                onPressed: togglePlayback,
-                icon: Icon(playing ? Icons.pause : Icons.play_arrow),
-                label: Text(playing ? 'Pause' : 'Play'),
-              ),
-              const SizedBox(width: 12),
-              IconButton(
-                tooltip: 'Forward 15 seconds',
-                onPressed: () => seekTo(position + const Duration(seconds: 15)),
-                icon: const Icon(Icons.forward_10),
-              ),
-            ]),
-            const SizedBox(height: 14),
-            TextButton(onPressed: changeSpeed, child: Text('${speed}× speed')),
-            TextButton.icon(
-              onPressed: () => seekTo(Duration.zero),
-              icon: const Icon(Icons.restart_alt),
-              label: const Text('Restart chapter'),
-            ),
-          ],
-          if (error != null) Padding(
-            padding: const EdgeInsets.only(top: 18),
-            child: Text(error!, style: const TextStyle(color: Colors.orangeAccent)),
           ),
-        ]),
-      ))),
+        ),
+      ),
     );
   }
 }
@@ -1560,10 +2126,21 @@ class _FeatureRow extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(title, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+              Text(
+                title,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 15,
+                ),
+              ),
               const SizedBox(height: 4),
-              Text(subtitle,
-                  style: TextStyle(fontSize: 13, color: Colors.white.withValues(alpha: 0.6))),
+              Text(
+                subtitle,
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.white.withValues(alpha: 0.6),
+                ),
+              ),
             ],
           ),
         ),

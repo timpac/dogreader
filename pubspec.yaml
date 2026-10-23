@@ -40,6 +40,8 @@ dependencies:
   path_provider: ^2.1.6
   audioplayers: ^6.8.1
   google_fonts: ^6.3.2
+  audio_service: ^0.18.19
+  just_audio: ^0.10.6
 
 dev_dependencies:
   flutter_test:
