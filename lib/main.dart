@@ -11,10 +11,29 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:audio_service/audio_service.dart';
+
+import 'dogreader_audio_handler.dart';
+
 import 'package:html/parser.dart' as html_parser;
 import 'package:html/dom.dart' as dom;
 
-void main() => runApp(const AudiobookApp());
+late final DogreaderAudioHandler audioHandler;
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  audioHandler = await AudioService.init(
+    builder: () => DogreaderAudioHandler(),
+    config: const AudioServiceConfig(
+      androidNotificationChannelId: 'com.example.audiobook_app.audio',
+      androidNotificationChannelName: 'Dogreader narration',
+      androidNotificationOngoing: true,
+    ),
+  );
+
+  runApp(const AudiobookApp());
+}
 
 const background = Color(0xFF10131A);
 const panel = Color(0xFF202638);
