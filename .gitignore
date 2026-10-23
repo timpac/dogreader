@@ -64,3 +64,7 @@ key.properties
 dogreader_backups/
 dogreader_audio_update/
 *.zip
+
+# Local development backups
+*.before-*
+*.oct22-formatted-snapshot

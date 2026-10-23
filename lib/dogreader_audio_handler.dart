@@ -40,6 +40,12 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     required int chapterIndex,
     Duration startPosition = Duration.zero,
   }) async {
+    if (mediaItem.value?.id == '$bookId:$chapterIndex' &&
+        player.audioSource != null) {
+      return;
+    }
+
+    await player.pause();
     await player.setFilePath(path, initialPosition: startPosition);
     mediaItem.add(
       MediaItem(

@@ -1,3 +1,4 @@
+import 'package:just_audio/just_audio.dart' as ja;
 import 'dart:io';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -1753,7 +1754,7 @@ class ChapterNarrationScreen extends StatefulWidget {
 }
 
 class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
-  final AudioPlayer player = AudioPlayer();
+  final player = audioHandler.player;
   final List<StreamSubscription<dynamic>> subscriptions = [];
   bool playing = false;
   bool loading = true;
@@ -1800,14 +1801,17 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
   @override
   void initState() {
     super.initState();
-    player.setReleaseMode(ReleaseMode.stop);
+
     subscriptions.add(
-      player.onPlayerStateChanged.listen((state) {
-        if (mounted) setState(() => playing = state == PlayerState.playing);
+      player.playerStateStream.listen((state) {
+        if (mounted) {
+          setState(() => playing = state.playing);
+        }
       }),
     );
+
     subscriptions.add(
-      player.onPositionChanged.listen((value) {
+      player.positionStream.listen((value) {
         if (!mounted) return;
         setState(() => position = value);
         if (value.inSeconds != lastSavedSecond && value.inSeconds % 5 == 0) {
@@ -1816,22 +1820,29 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
         }
       }),
     );
+
     subscriptions.add(
-      player.onDurationChanged.listen((value) {
-        if (mounted && value.inMilliseconds > 0)
+      player.durationStream.listen((value) {
+        if (mounted && value != null) {
           setState(() => duration = value);
+        }
       }),
     );
+
     subscriptions.add(
-      player.onPlayerComplete.listen((_) {
-        if (mounted)
-          setState(() {
-            playing = false;
-            position = Duration.zero;
-          });
-        updateState({'positionMs': 0});
+      player.processingStateStream.listen((state) {
+        if (state == ja.ProcessingState.completed) {
+          if (mounted) {
+            setState(() {
+              playing = false;
+              position = Duration.zero;
+            });
+          }
+          updateState({'positionMs': 0});
+        }
       }),
     );
+
     restore();
   }
 
@@ -1862,11 +1873,16 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
 
       if (path != null) {
         audioPath = path;
-        await player.setSource(DeviceFileSource(path));
+        await audioHandler.loadChapter(
+          path: path,
+          title: widget.book.chapters[widget.chapterIndex].title,
+          author: widget.book.author,
+          bookId: widget.book.id,
+          chapterIndex: widget.chapterIndex,
+          startPosition: Duration(milliseconds: savedPosition),
+        );
         await refreshDuration();
-        if (savedPosition > 0) {
-          await player.seek(Duration(milliseconds: savedPosition));
-        }
+        // loadChapter preserves the position of an already-loaded chapter.
         position = Duration(milliseconds: savedPosition);
       }
     } catch (e) {
@@ -1882,12 +1898,12 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
       if (!mounted) return;
       Duration? found;
       try {
-        found = await player.getDuration();
+        found = player.duration;
       } catch (_) {
         // Android may not have prepared the decoder yet.
       }
       if (found != null && found.inMilliseconds > 0) {
-        if (mounted && found != null) setState(() => duration = found!);
+        if (mounted) setState(() => duration = found!);
         return;
       }
       await Future<void>.delayed(const Duration(milliseconds: 250));
@@ -1918,7 +1934,13 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
       await player.stop();
       await File(picked.path!).copy(target.path);
       if (mounted) setState(() => duration = Duration.zero);
-      await player.setSource(DeviceFileSource(target.path));
+      await audioHandler.loadChapter(
+        path: target.path,
+        title: widget.book.chapters[widget.chapterIndex].title,
+        author: widget.book.author,
+        bookId: widget.book.id,
+        chapterIndex: widget.chapterIndex,
+      );
       await refreshDuration();
       await player.seek(Duration.zero);
       await updateState({'path': target.path, 'positionMs': 0});
@@ -1940,7 +1962,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
         await player.pause();
         await updateState({'positionMs': position.inMilliseconds});
       } else if (audioPath != null) {
-        await player.resume();
+        await audioHandler.play();
       }
     } catch (e) {
       if (mounted) setState(() => error = 'Playback error: $e');
@@ -1964,7 +1986,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
     const speeds = [1.0, 1.25, 1.5, 1.75, 2.0, 0.75];
     final next = speeds[(speeds.indexOf(speed) + 1) % speeds.length];
     try {
-      await player.setPlaybackRate(next);
+      await audioHandler.setSpeed(next);
       if (mounted) setState(() => speed = next);
     } catch (e) {
       if (mounted) setState(() => error = 'Speed change failed: $e');
@@ -1984,7 +2006,6 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
     for (final sub in subscriptions) {
       sub.cancel();
     }
-    player.dispose();
     super.dispose();
   }
 
