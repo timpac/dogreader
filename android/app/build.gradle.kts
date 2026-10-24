@@ -37,7 +37,23 @@ android {
         versionName = flutter.versionName
     }
 
+    // CI uses the recovered Chromebook key to preserve Android update compatibility.
+    // Local builds retain their normal Android debug signing behavior.
+    signingConfigs {
+        create("originalDogreader") {
+            storeFile = file(System.getProperty("user.home") + "/.android/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
+        getByName("debug") {
+            if (project.findProperty("dogreaderOriginalUpdate") == "true") {
+                signingConfig = signingConfigs.getByName("originalDogreader")
+            }
+        }
         release {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
