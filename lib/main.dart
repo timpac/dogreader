@@ -347,6 +347,21 @@ class _LibraryScreenState extends State<LibraryScreen> {
         flush(scene: true);
         return;
       }
+      // Publishers often encode scene breaks as styled empty paragraphs or
+      // divs rather than <hr>. Preserve explicit semantic markers.
+      final marker = [
+        node.attributes['class'] ?? '',
+        node.attributes['epub:type'] ?? '',
+        node.attributes['role'] ?? '',
+      ].join(' ').toLowerCase();
+      final isSceneBreak = RegExp(
+        r'(scene[-_ ]?break|section[-_ ]?break|thought[-_ ]?break|asterism|separator|ornament|dinkus)',
+      ).hasMatch(marker);
+      if (isSceneBreak) {
+        flush();
+        flush(scene: true);
+        return;
+      }
       final isHeading =
           heading || {'h1', 'h2', 'h3', 'h4', 'h5', 'h6'}.contains(tag);
       final isBlock = {
@@ -1495,8 +1510,10 @@ class _ReadingScreenState extends State<ReadingScreen> {
     final chapter = widget.book.chapters[chapterIndex];
     final text = chapter.text;
     final boundaries = <int>{start, end};
-    for (final r in chapter.ranges) {
-      if (r.end <= start || r.start >= end) continue;
+    final relevantRanges = chapter.ranges
+        .where((r) => r.end > start && r.start < end)
+        .toList();
+    for (final r in relevantRanges) {
       boundaries.add(math.max(start, math.min(end, r.start)));
       boundaries.add(math.max(start, math.min(end, r.end)));
     }
@@ -1505,7 +1522,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
     for (int i = 0; i + 1 < cuts.length; i++) {
       final a = cuts[i], b = cuts[i + 1];
       if (a == b) continue;
-      final active = chapter.ranges.where((r) => r.start < b && r.end > a);
+      final active = relevantRanges.where((r) => r.start < b && r.end > a);
       children.add(
         TextSpan(
           text: text.substring(a, b),
