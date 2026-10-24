@@ -56,3 +56,67 @@ jobs:
           path: build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
           retention-days: 14
+
+  dogreader-update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DOGREADER_KEYSTORE_B64: ${{ secrets.DOGREADER_KEYSTORE_B64 }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Check signing secret
+        id: signing
+        run: |
+          if [ -n "$DOGREADER_KEYSTORE_B64" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Signing key not configured; skipping original-app update."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Java 17
+        if: steps.signing.outputs.available == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Flutter
+        if: steps.signing.outputs.available == 'true'
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Restore original Chromebook debug signing key
+        if: steps.signing.outputs.available == 'true'
+        run: |
+          mkdir -p "$HOME/.android"
+          printf '%s' "$DOGREADER_KEYSTORE_B64" | base64 --decode > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey >/dev/null
+
+      - name: Resolve Flutter dependencies
+        if: steps.signing.outputs.available == 'true'
+        run: flutter pub get
+
+      - name: Build original-app update APK
+        if: steps.signing.outputs.available == 'true'
+        run: flutter build apk --debug --build-number 100
+
+      - name: Verify update signing certificate
+        if: steps.signing.outputs.available == 'true'
+        run: |
+          APKSIGNER="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner"
+          "$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-debug.apk | grep -F 'c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177'
+
+      - name: Upload original Dogreader update APK
+        if: steps.signing.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dogreader-original-update-apk
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
