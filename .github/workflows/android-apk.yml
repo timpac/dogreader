@@ -47,12 +47,12 @@ jobs:
       - name: Build installable Dogreader Test APK
         env:
           ORG_GRADLE_PROJECT_dogreaderTestBuild: 'true'
-        run: flutter build apk --debug
+        run: flutter build apk --debug --build-number $((100 + GITHUB_RUN_NUMBER)) --dart-define=DOGREADER_BUILD=$((100 + GITHUB_RUN_NUMBER))
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: dogreader-test-debug-apk
+          name: dogreader-test-build-${{ github.run_number }}-apk
           path: build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
           retention-days: 14
@@ -106,7 +106,7 @@ jobs:
         if: steps.signing.outputs.available == 'true'
         env:
           ORG_GRADLE_PROJECT_dogreaderOriginalUpdate: 'true'
-        run: flutter build apk --debug --build-number 100
+        run: flutter build apk --debug --build-number $((100 + GITHUB_RUN_NUMBER)) --dart-define=DOGREADER_BUILD=$((100 + GITHUB_RUN_NUMBER))
 
       - name: Verify update signing certificate
         if: steps.signing.outputs.available == 'true'
@@ -122,7 +122,7 @@ jobs:
         if: steps.signing.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: dogreader-original-update-apk
+          name: dogreader-update-build-${{ github.run_number }}-apk
           path: build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
           retention-days: 14
