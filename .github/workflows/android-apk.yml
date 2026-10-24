@@ -110,7 +110,11 @@ jobs:
         if: steps.signing.outputs.available == 'true'
         run: |
           APKSIGNER="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner"
-          "$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-debug.apk | grep -F 'c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177'
+          "$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-debug.apk | tee /tmp/dogreader-apk-certificates.txt
+          if ! grep -Fqi 'c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177' /tmp/dogreader-apk-certificates.txt; then
+            echo "::error::Original Dogreader signing fingerprint mismatch; update APK will not be published."
+            exit 1
+          fi
 
       - name: Upload original Dogreader update APK
         if: steps.signing.outputs.available == 'true'
