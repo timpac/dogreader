@@ -39,6 +39,8 @@ Future<void> main() async {
 const background = Color(0xFF10131A);
 const panel = Color(0xFF202638);
 const accent = Color(0xFFB7A6F6);
+// Set by GitHub Actions at build time; visible on the library home screen.
+const dogreaderBuild = String.fromEnvironment('DOGREADER_BUILD', defaultValue: 'DEV');
 
 class AudiobookApp extends StatelessWidget {
   const AudiobookApp({super.key});
@@ -537,6 +539,22 @@ class _LibraryScreenState extends State<LibraryScreen> {
             ),
           ],
         ),
+        actions: [
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.only(right: 16),
+              child: Text(
+                'BUILD $dogreaderBuild',
+                style: const TextStyle(
+                  color: accent,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
       body: SafeArea(child: pages[selectedTab]),
       bottomNavigationBar: NavigationBar(
