@@ -661,29 +661,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
             foregroundColor: const Color(0xFF171321),
           ),
         ),
-        const SizedBox(height: 25),
-        const Text(
-          'Built for reading and listening your way',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-        ),
-        const SizedBox(height: 16),
-        const _FeatureRow(
-          Icons.record_voice_over_rounded,
-          'Choose your narrator',
-          'Bring your preferred AI voice service.',
-        ),
-        const SizedBox(height: 12),
-        const _FeatureRow(
-          Icons.offline_bolt_rounded,
-          'Listen offline',
-          'Keep generated audio on your device.',
-        ),
-        const SizedBox(height: 12),
-        const _FeatureRow(
-          Icons.bookmark_added_outlined,
-          'Pick up where you left off',
-          'Your books and reading positions are saved.',
-        ),
+
       ],
     );
   }
@@ -873,24 +851,12 @@ class ChapterListScreen extends StatelessWidget {
                   title: Text(chapter.title),
                   subtitle: Padding(
                     padding: const EdgeInsets.only(top: 8),
-                    child: savedOffset > 0
-                        ? LinearProgressIndicator(
-                            value: fraction,
-                            minHeight: 3,
-                            backgroundColor: Colors.white12,
-                            color: accent,
-                          )
-                        : const Text(
-                            'whatsgonnahappenwhatsgonnahappenwhatsgonnahappenwhatsgonnahappen',
-                            maxLines: 1,
-                            softWrap: false,
-                            overflow: TextOverflow.clip,
-                            style: TextStyle(
-                              fontSize: 5,
-                              letterSpacing: -0.3,
-                              color: accent,
-                            ),
-                          ),
+                    child: LinearProgressIndicator(
+                      value: fraction,
+                      minHeight: 3,
+                      backgroundColor: Colors.white12,
+                      color: accent,
+                    ),
                   ),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => openChapter(context, index),
