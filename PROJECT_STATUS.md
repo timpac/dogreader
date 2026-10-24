@@ -45,5 +45,12 @@ Updated: 2026-10-24. This is a verified starting point, not a substitute for che
 - Be candid about unverified assumptions and build results. Do not claim CI ran or an APK installs unless verified.
 - At end of session record current branch, commits, successful/failed tests, last build, and the **next exact action**.
 
+## Current work (2026-10-24)
+- Created `fix/reader-stability-from-113` from `feature/read-to-audio-seek` (the successful Build 113 workflow branch).
+- Commits `7aec2ee`, `a9dfe22`: optimized `styledPage` to scan only intersecting style ranges, and preserved empty semantic scene separators. These are **preliminary** improvements, not a confirmed freeze fix.
+- **Not tested** with Flutter analyzer, APK build, or on-device navigation. No new APK has been issued.
+- **Known major issue remains:** `calculatePages` still synchronously paginates entire chapters in a `LayoutBuilder`, which may block UI during navigation. Requires safe redesign and tests.
+- Build workflow and original signing configuration are unchanged.
+
 ## Next exact action
-Inspect successful Actions run #13 for its source SHA and inspect `feature/read-to-audio-seek` code. Compare it to experimental reader changes before proposing a new branch and fixes. Preserve the working workflow and signing identity.
+Implement and validate nonblocking / incremental reader pagination on this branch, review parser scene markers, and test with Flutter analyzer. Only then dispatch the official numbered workflow on the new branch (manual workflow_dispatch), inspect the signing check, and have user test on device. Confirm source commit of run #13 if accessible.
