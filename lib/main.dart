@@ -358,7 +358,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
         node.attributes['role'] ?? '',
       ].join(' ').toLowerCase();
       final sceneMarker = RegExp(
-        r'(?:^|[\\s_-])(?:scene[\\s_-]*break|section[\\s_-]*break|thought[\\s_-]*break|asterism|separator|ornament|dinkus)(?:$|[\\s_-])',
+        r'(?:^|[\s_-])(?:scene[\s_-]*break|section[\s_-]*break|thought[\s_-]*break|asterism|separator|ornament|dinkus)(?:$|[\s_-])',
       ).hasMatch(marker);
       if (sceneMarker && node.text.trim().isEmpty) {
         flush();
