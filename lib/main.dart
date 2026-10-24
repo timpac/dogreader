@@ -1638,16 +1638,24 @@ class _ReadingScreenState extends State<ReadingScreen> {
         ),
         actions: [
           IconButton(
-            tooltip: 'Test narration',
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => ChapterNarrationScreen(
-                  book: widget.book,
-                  chapterIndex: chapterIndex,
+            tooltip: 'Listen from this page',
+            onPressed: () {
+              saveCurrent();
+              final textLength = widget.book.chapters[chapterIndex].text.length;
+              final fraction = textLength == 0
+                  ? 0.0
+                  : (currentOffset / textLength).clamp(0.0, 1.0);
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => ChapterNarrationScreen(
+                    book: widget.book,
+                    chapterIndex: chapterIndex,
+                    initialTextFraction: fraction,
+                  ),
                 ),
-              ),
-            ),
+              );
+            },
             icon: const Icon(Icons.headphones),
           ),
           IconButton(
@@ -1743,10 +1751,14 @@ class _ReadingScreenState extends State<ReadingScreen> {
 class ChapterNarrationScreen extends StatefulWidget {
   final ImportedBook book;
   final int chapterIndex;
+  // Present only when arriving from the reader; normal player navigation
+  // continues to restore the last saved audio position.
+  final double? initialTextFraction;
   const ChapterNarrationScreen({
     super.key,
     required this.book,
     required this.chapterIndex,
+    this.initialTextFraction,
   });
 
   @override
@@ -1876,7 +1888,18 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
           startPosition: Duration(milliseconds: savedPosition),
         );
         await refreshDuration();
-        // The handler may already be playing this chapter in the background.
+        if (widget.initialTextFraction != null) {
+          // A reading-to-listening jump is deliberately paused for adjustment.
+          await audioHandler.pause();
+          final total = player.duration ?? duration;
+          if (total.inMilliseconds > 0) {
+            final fraction = widget.initialTextFraction!.clamp(0.0, 1.0);
+            final target = Duration(
+              milliseconds: (total.inMilliseconds * fraction).round(),
+            );
+            await audioHandler.seek(target);
+          }
+        }
         position = player.position;
       }
     } catch (e) {
