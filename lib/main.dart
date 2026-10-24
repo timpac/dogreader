@@ -1887,10 +1887,15 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
           chapterIndex: widget.chapterIndex,
           startPosition: Duration(milliseconds: savedPosition),
         );
+        if (widget.initialTextFraction != null) {
+          // Pause before waiting for metadata so the player never starts
+          // unexpectedly while switching from reading to listening.
+          await audioHandler.pause();
+        }
         await refreshDuration();
         if (widget.initialTextFraction != null) {
-          // A reading-to-listening jump is deliberately paused for adjustment.
-          await audioHandler.pause();
+          // Seek even when this same chapter was already loaded in the
+          // background: loadChapter intentionally returns early in that case.
           final total = player.duration ?? duration;
           if (total.inMilliseconds > 0) {
             final fraction = widget.initialTextFraction!.clamp(0.0, 1.0);
@@ -1898,6 +1903,8 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
               milliseconds: (total.inMilliseconds * fraction).round(),
             );
             await audioHandler.seek(target);
+          } else {
+            error = 'Audio duration is unavailable; could not jump to your reading position.';
           }
         }
         position = player.position;
