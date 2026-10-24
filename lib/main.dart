@@ -1764,7 +1764,6 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
   Duration position = Duration.zero;
   Duration duration = Duration.zero;
   double speed = 1.0;
-  int lastSavedSecond = -1;
 
   String get chapterKey => '${widget.book.id}:${widget.chapterIndex}';
 
@@ -1814,10 +1813,6 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
       player.positionStream.listen((value) {
         if (!mounted) return;
         setState(() => position = value);
-        if (value.inSeconds != lastSavedSecond && value.inSeconds % 5 == 0) {
-          lastSavedSecond = value.inSeconds;
-          updateState({'positionMs': value.inMilliseconds});
-        }
       }),
     );
 
@@ -1838,7 +1833,6 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
               position = Duration.zero;
             });
           }
-          updateState({'positionMs': 0});
         }
       }),
     );
@@ -1882,8 +1876,8 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
           startPosition: Duration(milliseconds: savedPosition),
         );
         await refreshDuration();
-        // loadChapter preserves the position of an already-loaded chapter.
-        position = Duration(milliseconds: savedPosition);
+        // The handler may already be playing this chapter in the background.
+        position = player.position;
       }
     } catch (e) {
       error = 'Could not load recording: $e';
@@ -1959,8 +1953,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
   Future<void> togglePlayback() async {
     try {
       if (playing) {
-        await player.pause();
-        await updateState({'positionMs': position.inMilliseconds});
+        await audioHandler.pause();
       } else if (audioPath != null) {
         await audioHandler.play();
       }
@@ -1977,9 +1970,8 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
       maxMs > 0 ? maxMs : value.inMilliseconds,
     );
     final target = Duration(milliseconds: ms);
-    await player.seek(target);
+    await audioHandler.seek(target);
     if (mounted) setState(() => position = target);
-    await updateState({'positionMs': target.inMilliseconds});
   }
 
   Future<void> changeSpeed() async {
@@ -2002,7 +1994,6 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
 
   @override
   void dispose() {
-    updateState({'positionMs': position.inMilliseconds});
     for (final sub in subscriptions) {
       sub.cancel();
     }
