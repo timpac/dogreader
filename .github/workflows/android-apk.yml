@@ -44,13 +44,15 @@ jobs:
       - name: Analyze Dart code
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
-      - name: Build installable debug APK
+      - name: Build installable Dogreader Test APK
+        env:
+          ORG_GRADLE_PROJECT_dogreaderTestBuild: 'true'
         run: flutter build apk --debug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: dogreader-debug-apk
+          name: dogreader-test-debug-apk
           path: build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
           retention-days: 14
