@@ -7,6 +7,7 @@ on:
       - feature/github-apk-build
       - feature/audio-media-controls
       - dogreader-oct22-update
+      - fix/reader-stability-from-113
     paths:
       - 'lib/**'
       - 'android/**'
@@ -63,6 +64,10 @@ jobs:
       - name: Resolve Flutter dependencies
         if: steps.signing.outputs.available == 'true'
         run: flutter pub get
+
+      - name: Analyze Dart code (errors block release)
+        if: steps.signing.outputs.available == 'true'
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: Build original-app update APK
         if: steps.signing.outputs.available == 'true'
