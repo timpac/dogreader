@@ -349,6 +349,22 @@ class _LibraryScreenState extends State<LibraryScreen> {
         flush(scene: true);
         return;
       }
+      // EPUBs often encode scene changes as empty, styled separators.
+      // Recognize semantic markers without inserting ornaments for
+      // ordinary paragraphs that merely have decorative CSS classes.
+      final marker = [
+        node.attributes['class'] ?? '',
+        node.attributes['epub:type'] ?? '',
+        node.attributes['role'] ?? '',
+      ].join(' ').toLowerCase();
+      final sceneMarker = RegExp(
+        r'(?:^|[\\s_-])(?:scene[\\s_-]*break|section[\\s_-]*break|thought[\\s_-]*break|asterism|separator|ornament|dinkus)(?:$|[\\s_-])',
+      ).hasMatch(marker);
+      if (sceneMarker && node.text.trim().isEmpty) {
+        flush();
+        flush(scene: true);
+        return;
+      }
       final isHeading =
           heading || {'h1', 'h2', 'h3', 'h4', 'h5', 'h6'}.contains(tag);
       final isBlock = {
@@ -1478,9 +1494,14 @@ class _ReadingScreenState extends State<ReadingScreen> {
   TextSpan styledPage(int start, int end) {
     final chapter = widget.book.chapters[chapterIndex];
     final text = chapter.text;
+    // Restrict style checks to ranges intersecting this page. Pagination
+    // invokes this method many times; scanning the whole chapter for every
+    // text segment makes long chapters disproportionately expensive.
+    final relevant = chapter.ranges
+        .where((r) => r.end > start && r.start < end)
+        .toList();
     final boundaries = <int>{start, end};
-    for (final r in chapter.ranges) {
-      if (r.end <= start || r.start >= end) continue;
+    for (final r in relevant) {
       boundaries.add(math.max(start, math.min(end, r.start)));
       boundaries.add(math.max(start, math.min(end, r.end)));
     }
@@ -1489,7 +1510,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
     for (int i = 0; i + 1 < cuts.length; i++) {
       final a = cuts[i], b = cuts[i + 1];
       if (a == b) continue;
-      final active = chapter.ranges.where((r) => r.start < b && r.end > a);
+      final active = relevant.where((r) => r.start < b && r.end > a);
       children.add(
         TextSpan(
           text: text.substring(a, b),
