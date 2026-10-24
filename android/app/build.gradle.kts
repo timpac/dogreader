@@ -17,6 +17,14 @@ android {
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.example.audiobook_app"
+        // CI debug builds install alongside the existing Dogreader app.
+        // Production/local builds keep their original application ID.
+        if (project.findProperty("dogreaderTestBuild") == "true") {
+            applicationIdSuffix = ".test"
+            manifestPlaceholders["dogreaderAppLabel"] = "Dogreader Test"
+        } else {
+            manifestPlaceholders["dogreaderAppLabel"] = "Dogreader"
+        }
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
