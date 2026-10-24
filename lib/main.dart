@@ -1482,6 +1482,8 @@ class _ReadingScreenState extends State<ReadingScreen> {
   double previousHeight = -1;
   double previousFont = -1;
   int currentPage = 0;
+  int _paginationGeneration = 0;
+  bool _paginating = false;
 
   @override
   void initState() {
@@ -1531,20 +1533,42 @@ class _ReadingScreenState extends State<ReadingScreen> {
     );
   }
 
+  // Pagination is expensive for long EPUB chapters. Measure a small batch
+  // of pages per event-loop turn instead of blocking the UI isolate until
+  // the entire chapter has been laid out.
   void calculatePages(double width, double height) {
     if (width == previousWidth &&
         height == previousHeight &&
         fontSize == previousFont &&
-        pages.isNotEmpty)
+        (pages.isNotEmpty || _paginating)) {
       return;
+    }
     previousWidth = width;
     previousHeight = height;
     previousFont = fontSize;
-    final text = widget.book.chapters[chapterIndex].text;
-    final painter = TextPainter(
-      textDirection: TextDirection.ltr,
-      maxLines: null,
-    );
+    final generation = ++_paginationGeneration;
+    final targetChapter = chapterIndex;
+    final targetFont = fontSize;
+    _paginating = true;
+    pages = [];
+    starts = [];
+    // Do not call setState from LayoutBuilder; the scheduled job will
+    // publish its result after yielding to the event loop.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || generation != _paginationGeneration) return;
+      _paginateChapter(width, height, targetChapter, targetFont, generation);
+    });
+  }
+
+  Future<void> _paginateChapter(
+    double width,
+    double height,
+    int targetChapter,
+    double targetFont,
+    int generation,
+  ) async {
+    final text = widget.book.chapters[targetChapter].text;
+    final painter = TextPainter(textDirection: TextDirection.ltr);
     bool fits(int start, int end) {
       painter.text = styledPage(start, end);
       painter.layout(maxWidth: width);
@@ -1554,43 +1578,70 @@ class _ReadingScreenState extends State<ReadingScreen> {
     final nextPages = <String>[];
     final nextStarts = <int>[];
     int offset = 0;
-    while (offset < text.length) {
-      int low = offset + 1;
-      int high = text.length;
-      while (low < high) {
-        final mid = low + (high - low + 1) ~/ 2;
-        if (fits(offset, mid)) {
-          low = mid;
-        } else {
-          high = mid - 1;
+    try {
+      while (offset < text.length) {
+        if (!mounted ||
+            generation != _paginationGeneration ||
+            chapterIndex != targetChapter ||
+            fontSize != targetFont) return;
+        // Cap the binary-search range near a plausible page length.
+        // Expand only when necessary, avoiding repeated full-chapter
+        // layout on every page.
+        int low = offset + 1;
+        int high = math.min(text.length, offset + 1200);
+        while (high < text.length && fits(offset, high)) {
+          low = high;
+          high = math.min(text.length, offset + (high - offset) * 2);
+        }
+        while (low < high) {
+          final mid = low + (high - low + 1) ~/ 2;
+          if (fits(offset, mid)) {
+            low = mid;
+          } else {
+            high = mid - 1;
+          }
+        }
+        int pageEnd = low;
+        if (pageEnd < text.length) {
+          final whitespace = text.lastIndexOf(RegExp(r'\s'), pageEnd - 1);
+          if (whitespace > offset + (pageEnd - offset) ~/ 2) {
+            pageEnd = whitespace + 1;
+          }
+        }
+        if (pageEnd <= offset) pageEnd = math.min(offset + 1, text.length);
+        nextStarts.add(offset);
+        nextPages.add(text.substring(offset, pageEnd));
+        offset = pageEnd;
+        // Let navigation, media controls, and frames run between batches.
+        if (nextPages.length % 2 == 0) {
+          await Future<void>.delayed(const Duration(milliseconds: 1));
         }
       }
-      int end = low;
-      if (end < text.length) {
-        final whitespace = text.lastIndexOf(RegExp(r'\s'), end - 1);
-        if (whitespace > offset + (end - offset) ~/ 2) end = whitespace + 1;
+      if (nextPages.isEmpty) {
+        nextPages.add('');
+        nextStarts.add(0);
       }
-      if (end <= offset) end = math.min(offset + 1, text.length);
-      nextStarts.add(offset);
-      nextPages.add(text.substring(offset, end));
-      offset = end;
-    }
-    if (nextPages.isEmpty) {
-      nextPages.add('');
-      nextStarts.add(0);
-    }
-    pages = nextPages;
-    starts = nextStarts;
-    currentPage = math.max(
-      0,
-      starts.lastIndexWhere((value) => value <= currentOffset),
-    );
-    final oldController = controller;
-    controller = PageController(initialPage: currentPage, keepPage: false);
-    if (oldController != null) {
-      WidgetsBinding.instance.addPostFrameCallback(
-        (_) => oldController.dispose(),
+      if (!mounted || generation != _paginationGeneration ||
+          chapterIndex != targetChapter || fontSize != targetFont) return;
+      final nextPage = math.max(
+        0,
+        nextStarts.lastIndexWhere((value) => value <= currentOffset),
       );
+      final oldController = controller;
+      setState(() {
+        pages = nextPages;
+        starts = nextStarts;
+        currentPage = nextPage;
+        controller = PageController(initialPage: currentPage, keepPage: false);
+        _paginating = false;
+      });
+      if (oldController != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          oldController.dispose();
+        });
+      }
+    } finally {
+      painter.dispose();
     }
   }
 
@@ -1603,6 +1654,8 @@ class _ReadingScreenState extends State<ReadingScreen> {
     setState(() {
       chapterIndex = next;
       currentOffset = 0;
+      ++_paginationGeneration;
+      _paginating = false;
       pages = [];
       previousWidth = -1;
     });
@@ -1626,6 +1679,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
 
   @override
   void dispose() {
+    ++_paginationGeneration;
     saveCurrent();
     controller?.dispose();
     super.dispose();
@@ -1693,6 +1747,11 @@ class _ReadingScreenState extends State<ReadingScreen> {
             constraints.maxHeight - verticalPadding * 2 - footerHeight,
           );
           calculatePages(width, height);
+          if (_paginating || pages.isEmpty || controller == null) {
+            return const Center(
+              child: CircularProgressIndicator(),
+            );
+          }
           return Column(
             children: [
               Expanded(
