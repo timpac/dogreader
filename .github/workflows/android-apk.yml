@@ -104,6 +104,8 @@ jobs:
 
       - name: Build original-app update APK
         if: steps.signing.outputs.available == 'true'
+        env:
+          ORG_GRADLE_PROJECT_dogreaderOriginalUpdate: 'true'
         run: flutter build apk --debug --build-number 100
 
       - name: Verify update signing certificate
