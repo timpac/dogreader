@@ -50,7 +50,7 @@ Updated: 2026-10-24. This is a verified starting point, not a substitute for che
 - Commits `7aec2ee`, `a9dfe22`: optimized `styledPage` to scan only intersecting style ranges, and preserved empty semantic scene separators. These are **preliminary** improvements, not a confirmed freeze fix.
 - **Not tested** with Flutter analyzer, APK build, or on-device navigation. No new APK has been issued.
 - Commit `e523acc`: replaced synchronous whole-chapter pagination with cancellable, batched asynchronous pagination and a loading indicator. Uses bounded candidate spans to avoid repeatedly laying out entire remaining chapters. **Untested**; check compilation, navigation, font-size changes, and rapid chapter switching on device.
-- Build workflow and original signing configuration are unchanged.
+- The original signing configuration is unchanged. Workflow on this feature branch now includes the feature branch in push triggers and runs `flutter analyze --no-fatal-infos --no-fatal-warnings` before building; commit `af127ab`. The commit should trigger CI, but run status must be verified.
 
 ## Next exact action
-Validate the reader changes with Flutter analyzer and an APK build. Check scene markers and test page navigation, font-size changes, and rapid chapter switching. The existing workflow can be manually dispatched on this branch from GitHub Actions, but no workflow run has been started. Verify its signing check and build number before installing. Confirm source commit of run #13 if accessible.
+Validate the reader changes with Flutter analyzer and an APK build. Check scene markers and test page navigation, font-size changes, and rapid chapter switching. Check the GitHub Actions run triggered by commit `af127ab` (if no run appears, manually dispatch the workflow on `fix/reader-stability-from-113`). Resolve analyzer/build failures, verify signing check and numbered artifact before installing. Confirm source commit of run #13 if accessible.
