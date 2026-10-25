@@ -8,6 +8,7 @@ on:
       - feature/audio-media-controls
       - dogreader-oct22-update
       - fix/reader-stability-from-113
+      - release/114-plus-improvements
     paths:
       - 'lib/**'
       - 'android/**'
@@ -39,6 +40,14 @@ jobs:
             echo "available=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Free runner disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          sudo rm -rf /usr/local/share/powershell
+          sudo docker system prune -af || true
+          df -h /
+
       - name: Install Java 17
         if: steps.signing.outputs.available == 'true'
         uses: actions/setup-java@v4
@@ -51,7 +60,8 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          cache: true
+          flutter-version: '3.47.7'
+          cache: false
 
       - name: Restore original Chromebook debug signing key
         if: steps.signing.outputs.available == 'true'
@@ -59,7 +69,11 @@ jobs:
           mkdir -p "$HOME/.android"
           printf '%s' "$DOGREADER_KEYSTORE_B64" | base64 --decode > "$HOME/.android/debug.keystore"
           chmod 600 "$HOME/.android/debug.keystore"
-          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey >/dev/null
+          keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | tee /tmp/dogreader-keystore.txt
+          if ! grep -Fqi 'C5:CC:08:D9:75:7C:0E:92:89:3A:71:62:04:A2:6F:EB:61:57:F5:35:0A:00:DB:B0:B7:96:20:49:D6:D9:D1:77' /tmp/dogreader-keystore.txt; then
+            echo "::error::Wrong signing key restored."
+            exit 1
+          fi
 
       - name: Resolve Flutter dependencies
         if: steps.signing.outputs.available == 'true'
@@ -73,7 +87,7 @@ jobs:
         if: steps.signing.outputs.available == 'true'
         env:
           ORG_GRADLE_PROJECT_dogreaderOriginalUpdate: 'true'
-        run: flutter build apk --debug --build-number $((100 + GITHUB_RUN_NUMBER)) --dart-define=DOGREADER_BUILD=$((100 + GITHUB_RUN_NUMBER))
+        run: flutter build apk --debug --build-number 117 --dart-define=DOGREADER_BUILD=117
 
       - name: Verify update signing certificate
         if: steps.signing.outputs.available == 'true'
@@ -89,7 +103,7 @@ jobs:
         if: steps.signing.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: dogreader-update-build-${{ github.run_number }}-apk
+          name: Dogreader-117-original-key
           path: build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
           retention-days: 14
