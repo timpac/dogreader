@@ -1669,6 +1669,9 @@ class _ReadingScreenState extends State<ReadingScreen> {
 
   void changeChapter(int next) {
     if (next < 0 || next >= widget.book.chapters.length) return;
+    if (next > chapterIndex) {
+      widget.onSave(chapterIndex, widget.book.chapters[chapterIndex].text.length);
+    }
     setState(() {
       chapterIndex = next;
       currentOffset = 0;
@@ -2047,6 +2050,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
         author: widget.book.author,
         bookId: widget.book.id,
         chapterIndex: widget.chapterIndex,
+        chapterCount: widget.book.chapters.length,
       );
       await refreshDuration();
       await player.seek(Duration.zero);
