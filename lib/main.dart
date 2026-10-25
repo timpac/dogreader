@@ -169,7 +169,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
           chapterIndex: chapter,
           initialOffset: offset,
           onSave: (chapter, offset) => saveProgress(book.id, chapter, offset),
-          chapterOffsets: chapterProgress[book.id] ?? {},
         ),
       ),
     );
@@ -183,6 +182,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
           book: book,
           saved: progress[book.id],
           onSave: (chapter, offset) => saveProgress(book.id, chapter, offset),
+          chapterOffsets: chapterProgress[book.id] ?? {},
         ),
       ),
     );
