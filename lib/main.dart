@@ -913,6 +913,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     'en-US-Chirp3-HD-Charon': 'Charon',
     'en-US-Chirp3-HD-Kore': 'Kore',
     'en-US-Chirp3-HD-Puck': 'Puck',
+    'en-GB-Wavenet-B': 'Oliver (Cheap)',
   };
   String narrator = 'en-US-Chirp3-HD-Achernar';
   final Set<int> selected = {};
