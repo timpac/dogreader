@@ -870,24 +870,12 @@ class ChapterListScreen extends StatelessWidget {
                   title: Text(chapter.title),
                   subtitle: Padding(
                     padding: const EdgeInsets.only(top: 8),
-                    child: savedOffset > 0
-                        ? LinearProgressIndicator(
-                            value: fraction,
-                            minHeight: 3,
-                            backgroundColor: Colors.white12,
-                            color: accent,
-                          )
-                        : const Text(
-                            'whatsgonnahappenwhatsgonnahappenwhatsgonnahappenwhatsgonnahappen',
-                            maxLines: 1,
-                            softWrap: false,
-                            overflow: TextOverflow.clip,
-                            style: TextStyle(
-                              fontSize: 5,
-                              letterSpacing: -0.3,
-                              color: accent,
-                            ),
-                          ),
+                    child: LinearProgressIndicator(
+                      value: fraction,
+                      minHeight: 3,
+                      backgroundColor: Colors.white12,
+                      color: accent,
+                    ),
                   ),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => openChapter(context, index),
