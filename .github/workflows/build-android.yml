@@ -56,7 +56,22 @@ jobs:
       - name: Fetch dependencies
         run: flutter pub get
       - name: Build debug APK
-        run: flutter build apk --debug
+        env:
+          DOGREADER_SIGNING_KEYSTORE: ${{ github.workspace }}/.dogreader-original-debug.keystore
+        run: |
+          cp "$HOME/.android/debug.keystore" "$DOGREADER_SIGNING_KEYSTORE"
+          flutter build apk --debug
+      - name: Verify built APK signing certificate
+        run: |
+          set -euo pipefail
+          APK=build/app/outputs/flutter-apk/app-debug.apk
+          ACTUAL=$(keytool -printcert -jarfile "$APK" 2>/dev/null | sed -n 's/^[[:space:]]*SHA256: //p' | head -1 | tr -d ':' | tr '[:upper:]' '[:lower:]')
+          EXPECTED=c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::Built APK signature mismatch: $ACTUAL"
+            exit 1
+          fi
+          echo "APK signature verified against installed Dogreader"
       - name: Name APK from pubspec version
         run: |
           BUILD_NUMBER=$(sed -n 's/^version: .*+//p' pubspec.yaml)
