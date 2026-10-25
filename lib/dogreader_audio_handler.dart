@@ -8,6 +8,11 @@ import 'package:just_audio/just_audio.dart';
 class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
   final AudioPlayer player = AudioPlayer();
   String? _chapterKey;
+  String? _bookId;
+  int? _chapterIndex;
+  int? _chapterCount;
+  String? _author;
+  bool _advancing = false;
   int _lastSavedSecond = -1;
   Future<void> _pendingSave = Future<void>.value();
 
@@ -50,7 +55,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     });
     player.processingStateStream.listen((state) {
       if (state == ProcessingState.completed) {
-        _savePosition(Duration.zero);
+        _advanceToNextChapter();
       }
     });
     player.playbackEventStream.listen((event) {
@@ -80,12 +85,50 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     });
   }
 
+  Future<void> _advanceToNextChapter() async {
+    if (_advancing || _bookId == null || _chapterIndex == null ||
+        _chapterCount == null || _author == null) return;
+    final nextIndex = _chapterIndex! + 1;
+    if (nextIndex >= _chapterCount!) return;
+    _advancing = true;
+    try {
+      final root = await getApplicationDocumentsDirectory();
+      final next = File('${root.path}/narration/${_bookId!}_$nextIndex.mp3');
+      if (!await next.exists() || await next.length() == 0) return;
+      final oldKey = _chapterKey;
+      await _savePosition(Duration.zero);
+      await _pendingSave;
+      if (_chapterKey != oldKey) return;
+      final bookId = _bookId!;
+      final author = _author!;
+      final count = _chapterCount!;
+      await player.setFilePath(next.path, initialPosition: Duration.zero);
+      _chapterKey = '$bookId:$nextIndex';
+      _chapterIndex = nextIndex;
+      _lastSavedSecond = -1;
+      mediaItem.add(MediaItem(
+        id: _chapterKey!,
+        title: 'Chapter ${nextIndex + 1}',
+        album: 'Dogreader',
+        artist: author,
+        duration: player.duration,
+      ));
+      _chapterCount = count;
+      await player.play();
+    } catch (_) {
+      // Missing or unreadable next chapters should stop gracefully.
+    } finally {
+      _advancing = false;
+    }
+  }
+
   Future<void> loadChapter({
     required String path,
     required String title,
     required String author,
     required String bookId,
     required int chapterIndex,
+    required int chapterCount,
     Duration startPosition = Duration.zero,
   }) async {
     final key = '$bookId:$chapterIndex';
@@ -97,6 +140,10 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     await player.pause();
     await player.setFilePath(path, initialPosition: startPosition);
     _chapterKey = key;
+    _bookId = bookId;
+    _chapterIndex = chapterIndex;
+    _chapterCount = chapterCount;
+    _author = author;
     _lastSavedSecond = -1;
     mediaItem.add(
       MediaItem(
