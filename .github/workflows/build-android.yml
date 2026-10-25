@@ -65,10 +65,17 @@ jobs:
         run: |
           set -euo pipefail
           APK=build/app/outputs/flutter-apk/app-debug.apk
-          ACTUAL=$(keytool -printcert -jarfile "$APK" 2>/dev/null | sed -n 's/^[[:space:]]*SHA256: //p' | head -1 | tr -d ':' | tr '[:upper:]' '[:lower:]')
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -maxdepth 2 -type f -name apksigner | sort -V | tail -1)
+          if [ -z "$APKSIGNER" ]; then
+            echo "::error::Android apksigner not found"
+            exit 1
+          fi
+          "$APKSIGNER" verify "$APK"
+          ACTUAL=$("$APKSIGNER" verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1 | tr '[:upper:]' '[:lower:]')
           EXPECTED=c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177
+          echo "Built APK certificate SHA-256: $ACTUAL"
           if [ "$ACTUAL" != "$EXPECTED" ]; then
-            echo "::error::Built APK signature mismatch: $ACTUAL"
+            echo "::error::Built APK signature does not match installed Dogreader"
             exit 1
           fi
           echo "APK signature verified against installed Dogreader"
