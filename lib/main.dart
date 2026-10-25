@@ -117,6 +117,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   bool importing = false;
   final List<ImportedBook> books = [];
   final Map<String, Map<String, int>> progress = {};
+  final Map<String, Map<String, int>> chapterProgress = {};
   final Map<String, int> lastOpened = {};
   Future<void> _pendingStateWrite = Future<void>.value();
 
@@ -131,6 +132,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   Future<void> persistReadingState() {
     final snapshot = jsonEncode({
       'positions': progress,
+      'chapterProgress': chapterProgress,
       'lastOpened': lastOpened,
     });
     _pendingStateWrite = _pendingStateWrite.catchError((Object _) {}).then((
@@ -167,6 +169,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
           chapterIndex: chapter,
           initialOffset: offset,
           onSave: (chapter, offset) => saveProgress(book.id, chapter, offset),
+          chapterOffsets: chapterProgress[book.id] ?? {},
         ),
       ),
     );
@@ -208,6 +211,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
         final recent = data['lastOpened'] as Map<String, dynamic>? ?? {};
         for (final entry in recent.entries) {
           lastOpened[entry.key] = (entry.value as num?)?.toInt() ?? 0;
+        }
+        final history = data['chapterProgress'] as Map<String, dynamic>? ?? {};
+        for (final entry in history.entries) {
+          if (entry.value is Map) {
+            chapterProgress[entry.key] = (entry.value as Map).map((key, value) =>
+              MapEntry(key.toString(), (value as num?)?.toInt() ?? 0));
+          }
         }
         final positions = data['positions'] as Map<String, dynamic>? ?? {};
         for (final entry in positions.entries) {
@@ -254,6 +264,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   Future<void> saveProgress(String id, int chapter, int offset) async {
     progress[id] = {'chapter': chapter, 'offset': offset};
+    final offsets = chapterProgress.putIfAbsent(id, () => {});
+    final key = '$chapter';
+    if (offset > (offsets[key] ?? 0)) offsets[key] = offset;
     try {
       await persistReadingState();
     } catch (_) {
@@ -779,11 +792,13 @@ class ChapterListScreen extends StatelessWidget {
   final ImportedBook book;
   final Map<String, int>? saved;
   final SavePosition onSave;
+  final Map<String, int> chapterOffsets;
   const ChapterListScreen({
     super.key,
     required this.book,
     required this.saved,
     required this.onSave,
+    required this.chapterOffsets,
   });
 
   @override
@@ -850,9 +865,11 @@ class ChapterListScreen extends StatelessWidget {
                 }
                 final index = row - (saved == null ? 0 : 1);
                 final chapter = book.chapters[index];
-                final savedOffset = saved != null && saved!['chapter'] == index
-                    ? (saved!['offset'] ?? 0)
-                    : 0;
+                final savedOffset = math.max(
+                  chapterOffsets['$index'] ?? 0,
+                  saved != null && saved!['chapter'] == index
+                      ? (saved!['offset'] ?? 0) : 0,
+                );
                 final fraction =
                     (savedOffset / math.max(1, chapter.text.length)).clamp(
                       0.0,
@@ -1950,6 +1967,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
           author: widget.book.author,
           bookId: widget.book.id,
           chapterIndex: widget.chapterIndex,
+          chapterCount: widget.book.chapters.length,
           startPosition: Duration(milliseconds: savedPosition),
         );
         if (widget.initialTextFraction != null) {
