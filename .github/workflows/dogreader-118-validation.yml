@@ -1,0 +1,29 @@
+name: Dogreader 118 validation
+
+on:
+  pull_request:
+    branches: [release/114-plus-improvements]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.47.7'
+          cache: true
+      - name: Install dependencies
+        run: flutter pub get
+      - name: Flutter static analysis
+        run: flutter analyze --no-fatal-infos
+      - name: Build debug APK
+        run: flutter build apk --debug
+      - name: Save debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: dogreader-118-debug-apk
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
