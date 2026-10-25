@@ -46,7 +46,13 @@ jobs:
           printf '%s' "$DOGREADER_KEYSTORE_B64" | base64 --decode > "$HOME/.android/debug.keystore"
           test -s "$HOME/.android/debug.keystore"
           keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey -keypass android >/dev/null
-          echo "Original debug signing key restored and validated"
+          FINGERPRINT=$(keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | sed -n 's/^[[:space:]]*SHA256: //p' | head -1 | tr -d ':' | tr '[:upper:]' '[:lower:]')
+          EXPECTED="c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177"
+          if [ "$FINGERPRINT" != "$EXPECTED" ]; then
+            echo "::error::Signing certificate does not match installed Dogreader"
+            exit 1
+          fi
+          echo "Verified signing key matches Dogreader build 114"
       - name: Fetch dependencies
         run: flutter pub get
       - name: Build debug APK
