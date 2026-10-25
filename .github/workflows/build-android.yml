@@ -33,6 +33,20 @@ jobs:
           channel: stable
           flutter-version: '3.47.7'
           cache: true
+      - name: Restore original Android debug signing key
+        env:
+          DOGREADER_KEYSTORE_B64: ${{ secrets.DOGREADER_KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DOGREADER_KEYSTORE_B64" ]; then
+            echo "::error::DOGREADER_KEYSTORE_B64 secret is missing or empty"
+            exit 1
+          fi
+          mkdir -p "$HOME/.android"
+          printf '%s' "$DOGREADER_KEYSTORE_B64" | base64 --decode > "$HOME/.android/debug.keystore"
+          test -s "$HOME/.android/debug.keystore"
+          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey -keypass android >/dev/null
+          echo "Original debug signing key restored and validated"
       - name: Fetch dependencies
         run: flutter pub get
       - name: Build debug APK
