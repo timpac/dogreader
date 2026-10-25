@@ -1205,6 +1205,17 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         try {
           if (status == 'waiting') {
             final chapter = widget.book.chapters[index];
+            final count = chapter.text.length;
+            if (count < 100 || count > 150000) {
+              jobs[index] = {
+                ...?jobs[index],
+                'status': 'error',
+                'error': 'Section has $count characters; cloud accepts 100–150,000.',
+              };
+              notice = 'Cannot narrate ${chapter.title}: $count characters '
+                  '(allowed: 100–150,000). This section was not submitted.';
+              continue;
+            }
             final length = chapter.text.length;
             if (length < 100 || length > 150000) {
               jobs[index] = {
@@ -1265,7 +1276,22 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
                 'Cloud narration failed for ${widget.book.chapters[index].title}. Check Cloud Run logs.';
         } catch (e) {
           // Preserve pending work for a later retry.
-          if (jobs[index]?['id'] == null) jobs[index] = {'status': 'waiting'};
+          if (jobs[index]?['id'] == null) {
+            final message = e.toString();
+            if (message.contains('Chapter must contain 100') ||
+                message.contains('150,000 characters')) {
+              jobs[index] = {
+                ...?jobs[index],
+                'status': 'error',
+                'error': message,
+              };
+            } else {
+              jobs[index] = {
+                ...?jobs[index],
+                'status': 'waiting',
+              };
+            }
+          }
           // A temporary socket failure should not masquerade as a failed job.
           // Keep the job queued and retry on the next refresh.
           if (e is SocketException ||
