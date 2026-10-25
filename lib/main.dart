@@ -1205,6 +1205,17 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         try {
           if (status == 'waiting') {
             final chapter = widget.book.chapters[index];
+            final length = chapter.text.length;
+            if (length < 100 || length > 150000) {
+              jobs[index] = {
+                ...?jobs[index],
+                'status': 'invalid',
+                'error': 'Section contains $length characters; cloud accepts 100–150,000.',
+              };
+              notice = '${chapter.title}: $length characters (allowed: 100–150,000). '
+                  'This EPUB section needs splitting or merging before narration.';
+              continue;
+            }
             final response = await requestJson('POST', '/dogreader/jobs', {
               'title': chapter.title,
               'text': chapter.text,
@@ -1263,7 +1274,15 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
             notice =
                 'Connection temporarily unavailable. Will retry automatically.';
           } else {
-            notice = 'Cloud request failed: $e';
+            final message = e.toString();
+            if (message.contains('Chapter must contain 100')) {
+              jobs[index] = {
+                ...?jobs[index],
+                'status': 'invalid',
+                'error': message,
+              };
+            }
+            notice = '${widget.book.chapters[index].title}: $message';
           }
         }
       }
@@ -1406,6 +1425,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
                   value: selected.contains(index),
                   title: Text(chapter.title),
                   subtitle: Text(
+                    '${chapter.text.length} characters • ' +
                     (status == null
                             ? 'Not generated'
                             : status == 'ready'
@@ -1416,6 +1436,8 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
                             ? 'Generating…'
                             : status == 'queued'
                             ? 'Queued in cloud'
+                            : status == 'invalid'
+                            ? 'Invalid section length — cannot submit'
                             : status == 'error'
                             ? 'Cloud job failed — check server logs'
                             : status) +
