@@ -71,7 +71,8 @@ jobs:
             exit 1
           fi
           "$APKSIGNER" verify "$APK"
-          ACTUAL=$("$APKSIGNER" verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1 | tr '[:upper:]' '[:lower:]')
+          "$APKSIGNER" verify --print-certs "$APK"
+          ACTUAL=$("$APKSIGNER" verify --print-certs "$APK" | sed -n 's/.*certificate SHA-256 digest:[[:space:]]*//p' | head -1 | tr -d '\r[:space:]' | tr '[:upper:]' '[:lower:]')
           EXPECTED=c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177
           echo "Built APK certificate SHA-256: $ACTUAL"
           if [ "$ACTUAL" != "$EXPECTED" ]; then
