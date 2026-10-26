@@ -6,6 +6,16 @@ Dogreader is a personal software project built with Flutter. It combines paginat
 
 > **Project status:** Active development. The latest verified Android build is **118**. This is not yet a polished public release; some features, including Android notification/lock-screen media controls, are still being debugged.
 
+## Screenshots
+
+Actual screenshots from the Android app (work in progress).
+
+| Library | Reading and chapters |
+|:--:|:--:|
+| <img src="file_00000000de0c8209855359ce37a5fc0f.jpg" alt="Dogreader screenshot 1" width="260"> | <img src="file_00000000948c81f791e5096f28beff44.jpg" alt="Dogreader screenshot 2" width="260"> |
+| Narration | Chapter queue |
+| <img src="file_000000000fac81f7a76c66392ae73216.jpg" alt="Dogreader screenshot 3" width="260"> | <img src="file_000000004fc081f58a8c2bbe6f5dace8.jpg" alt="Dogreader screenshot 4" width="260"> |
+
 ## What it does
 
 - **Read EPUBs:** Import local EPUB files, browse a book library, and read with paginated text and saved position.
