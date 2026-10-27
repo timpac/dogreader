@@ -58,7 +58,13 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
         _advanceToNextChapter();
       }
     });
-    player.playbackEventStream.listen((event) {
+    player.playbackEventStream.listen((_) => _broadcastPlaybackState());
+    // Playing can change without a playback event. Keep Android's media
+    // session in sync so it advertises the correct play/pause action.
+    player.playerStateStream.listen((_) => _broadcastPlaybackState());
+  }
+
+  void _broadcastPlaybackState() {
       playbackState.add(
         playbackState.value.copyWith(
           controls: [
@@ -82,7 +88,6 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
           speed: player.speed,
         ),
       );
-    });
   }
 
   Future<void> _advanceToNextChapter() async {
