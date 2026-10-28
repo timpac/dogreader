@@ -9,6 +9,7 @@ on:
       - dogreader-oct22-update
       - fix/reader-stability-from-113
       - release/114-plus-improvements
+      - feature/120-reader-page-jump
     paths:
       - 'lib/**'
       - 'android/**'
@@ -87,7 +88,7 @@ jobs:
         if: steps.signing.outputs.available == 'true'
         env:
           ORG_GRADLE_PROJECT_dogreaderOriginalUpdate: 'true'
-        run: flutter build apk --debug --build-number 117 --dart-define=DOGREADER_BUILD=117
+        run: flutter build apk --debug --build-number 120 --dart-define=DOGREADER_BUILD=120
 
       - name: Verify update signing certificate
         if: steps.signing.outputs.available == 'true'
@@ -103,7 +104,7 @@ jobs:
         if: steps.signing.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: Dogreader-117-original-key
+          name: Dogreader-120-original-key
           path: build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
           retention-days: 14
