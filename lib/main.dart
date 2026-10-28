@@ -1663,6 +1663,66 @@ class _ReadingScreenState extends State<ReadingScreen> {
     }
   }
 
+  // Keep navigation tied to the existing paginated text and saved offset.
+  void jumpToPage(int page) {
+    if (pages.isEmpty || controller == null) return;
+    final target = page.clamp(0, pages.length - 1);
+    currentPage = target;
+    currentOffset = starts[target];
+    saveCurrent();
+    controller!.jumpToPage(target);
+    if (mounted) setState(() {});
+  }
+
+  Future<void> showPageJump() async {
+    if (_paginating || pages.isEmpty) return;
+    final originalPage = currentPage;
+    var previewPage = currentPage.toDouble();
+    final selected = await showModalBottomSheet<int>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (sheetContext, updatePreview) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 20, 24, 28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('Jump to page',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 12),
+                Text('Page ${previewPage.round() + 1} of ${pages.length}'),
+                Slider(
+                  value: previewPage.clamp(0.0, (pages.length - 1).toDouble()),
+                  min: 0,
+                  max: math.max(1, pages.length - 1).toDouble(),
+                  onChanged: (value) => updatePreview(() {
+                    previewPage = value.clamp(0.0, (pages.length - 1).toDouble());
+                  }),
+                ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(sheetContext),
+                      child: const Text('Cancel'),
+                    ),
+                    FilledButton(
+                      onPressed: () => Navigator.pop(sheetContext, previewPage.round()),
+                      child: const Text('Go to page'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (!mounted || selected == null || currentPage != originalPage) return;
+    jumpToPage(selected);
+  }
+
   void saveCurrent() {
     widget.onSave(chapterIndex, currentOffset);
   }
@@ -1813,14 +1873,26 @@ class _ReadingScreenState extends State<ReadingScreen> {
               ),
               SizedBox(
                 height: footerHeight,
-                child: Center(
-                  child: Text(
-                    '${currentPage + 1} / ${pages.length}  •  ${chapter.title}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.white.withValues(alpha: 0.55),
+                child: InkWell(
+                  onTap: showPageJump,
+                  child: Center(
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.tune, size: 15, color: accent),
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(
+                            '${currentPage + 1} / ${pages.length}  •  Tap to jump',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.white.withValues(alpha: 0.75),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
