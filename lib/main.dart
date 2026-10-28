@@ -280,10 +280,31 @@ class _LibraryScreenState extends State<LibraryScreen> {
     );
   }
 
-  // Use the EPUB's structure, not its CSS. Character offsets refer to
-  // exactly the same text used by pagination and the reading-position store.
+  // Preserve semantic and publisher-styled scene spacing without adding
+  // artificial ornaments. Offsets still match the paginated text.
   ReaderChapter parseChapter(String title, String rawHtml) {
     final document = html_parser.parse(rawHtml);
+    // Resolve common embedded CSS scene-break selectors before stripping styles.
+    final sceneClasses = <String>{};
+    final cssRule = RegExp(r'([^{}]+)\{([^{}]+)\}', multiLine: true);
+    final cssClass = RegExp(r'\.([a-zA-Z_][\w-]*)');
+    final sceneSpace = RegExp(
+      r'(?:break|separator|spacer|space|scene|section|thought|asterism|dinkus)',
+      caseSensitive: false,
+    );
+    for (final style in document.querySelectorAll('style')) {
+      for (final rule in cssRule.allMatches(style.text)) {
+        final declarations = rule.group(2)!.toLowerCase();
+        final isSpaced = RegExp(
+          r'(?:margin-(?:top|bottom)|padding-(?:top|bottom)|height)\s*:\s*(?!0(?:px|em|rem|pt)?\s*(?:;|$))[1-9]',
+        ).hasMatch(declarations);
+        if (isSpaced || sceneSpace.hasMatch(rule.group(1)!)) {
+          for (final match in cssClass.allMatches(rule.group(1)!)) {
+            sceneClasses.add(match.group(1)!.toLowerCase());
+          }
+        }
+      }
+    }
     for (final element in document.querySelectorAll('script, style, nav')) {
       element.remove();
     }
@@ -302,7 +323,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
         pendingRanges.clear();
         return;
       }
-      final text = scene ? '⁂' : clean;
+      // A blank line represents a break without inventing a printed symbol.
+      final text = scene ? '' : clean;
       final indent =
           blocks.isNotEmpty &&
               !heading &&
@@ -311,7 +333,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
               blocks.last.scene == false
           ? '　'
           : '';
-      final prefix = blocks.isEmpty ? '' : (heading || scene ? '\n\n' : '\n');
+      final prefix = blocks.isEmpty ? '' : (scene ? '\n\n\n' : heading ? '\n\n' : '\n');
       final base = output.length + prefix.length + indent.length;
       output.write(prefix);
       output.write(indent);
@@ -373,7 +395,14 @@ class _LibraryScreenState extends State<LibraryScreen> {
       final sceneMarker = RegExp(
         r'(?:^|[\s_-])(?:scene[\s_-]*break|section[\s_-]*break|thought[\s_-]*break|asterism|separator|ornament|dinkus)(?:$|[\s_-])',
       ).hasMatch(marker);
-      if (sceneMarker && node.text.trim().isEmpty) {
+      final classes = (node.attributes['class'] ?? '')
+          .toLowerCase()
+          .split(RegExp(r'\s+'));
+      final inlineStyle = (node.attributes['style'] ?? '').toLowerCase();
+      final styledBreak = classes.any(sceneClasses.contains) ||
+          (sceneSpace.hasMatch(marker) && marker.isNotEmpty) ||
+          RegExp(r'(?:margin-(?:top|bottom)|padding-(?:top|bottom)|height)\s*:\s*[1-9]').hasMatch(inlineStyle);
+      if ((sceneMarker || styledBreak) && node.text.trim().isEmpty) {
         flush();
         flush(scene: true);
         return;
