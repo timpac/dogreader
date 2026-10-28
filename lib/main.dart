@@ -1120,6 +1120,57 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     });
   }
 
+  Future<void> deleteChapterAudio(int index) async {
+    if (busy) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete chapter audio?'),
+        content: Text(
+          'Remove the downloaded narration for "${widget.book.chapters[index].title}"? '
+          'The chapter text and reading progress will remain. '
+          'You can generate it again with another voice.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete audio'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted || busy) return;
+    setState(() => busy = true);
+    try {
+      final root = await getApplicationDocumentsDirectory();
+      final file = File('${root.path}/narration/${widget.book.id}_$index.mp3');
+      // Release any open audio handle before removing the recording.
+      await audioHandler.pause();
+      if (await file.exists()) await file.delete();
+      final stateFile = File('${root.path}/narration_state.json');
+      if (await stateFile.exists()) {
+        final data = jsonDecode(await stateFile.readAsString());
+        if (data is Map<String, dynamic>) {
+          data.remove('${widget.book.id}:$index');
+          await stateFile.writeAsString(jsonEncode(data));
+        }
+      }
+      jobs.remove(index); // Also forget the cloud job ID: never auto-redownload Oliver.
+      selected.remove(index);
+      await save();
+      notice = 'Audio deleted. Choose a narrator and generate this chapter again.';
+    } catch (e) {
+      notice = 'Could not delete audio: $e';
+    } finally {
+      busy = false;
+      if (mounted) setState(() {});
+    }
+  }
+
   Future<void> playChapter(int index) async {
     final root = await getApplicationDocumentsDirectory();
     final file = File('${root.path}/narration/${widget.book.id}_$index.mp3');
@@ -1411,14 +1462,20 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
                     : narratorNames[voice] ?? voice;
                 return CheckboxListTile(
                   secondary: status == 'ready'
-                      ? IconButton(
-                          tooltip: 'Play downloaded chapter',
-                          icon: const Icon(
-                            Icons.play_circle_fill,
-                            color: accent,
-                            size: 32,
-                          ),
-                          onPressed: () => playChapter(index),
+                      ? Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              tooltip: 'Play downloaded chapter',
+                              icon: const Icon(Icons.play_circle_fill, color: accent, size: 32),
+                              onPressed: () => playChapter(index),
+                            ),
+                            IconButton(
+                              tooltip: 'Delete chapter audio',
+                              icon: const Icon(Icons.delete_outline),
+                              onPressed: busy ? null : () => deleteChapterAudio(index),
+                            ),
+                          ],
                         )
                       : null,
                   value: selected.contains(index),
