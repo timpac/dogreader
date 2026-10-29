@@ -284,8 +284,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
   ReaderChapter parseChapter(String title, String rawHtml) {
     final document = html_parser.parse(rawHtml);
     final sceneClasses = <String>{};
-    final cssRule = RegExp(r'([^{}]+)\\{([^{}]+)\\}', multiLine: true);
-    final cssClass = RegExp(r'\\.([a-zA-Z_][\\w-]*)');
+    final cssRule = RegExp(r'([^{}]+)\{([^{}]+)\}', multiLine: true);
+    final cssClass = RegExp(r'\.([a-zA-Z_][\w-]*)');
     final sceneSpace = RegExp(
       r'(?:break|separator|spacer|space|scene|section|thought|asterism|dinkus)',
       caseSensitive: false,
@@ -294,7 +294,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
       for (final rule in cssRule.allMatches(style.text)) {
         final declarations = rule.group(2)!.toLowerCase();
         final isSpaced = RegExp(
-          r'(?:margin-(?:top|bottom)|padding-(?:top|bottom)|height)\\s*:\\s*(?!0(?:px|em|rem|pt)?\\s*(?:;|$))[1-9]',
+          r'(?:margin-(?:top|bottom)|padding-(?:top|bottom)|height)\s*:\s*(?!0(?:px|em|rem|pt)?\s*(?:;|$))[1-9]',
         ).hasMatch(declarations);
         if (isSpaced || sceneSpace.hasMatch(rule.group(1)!)) {
           for (final match in cssClass.allMatches(rule.group(1)!)) {
@@ -394,11 +394,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
       ).hasMatch(marker);
       final classes = (node.attributes['class'] ?? '')
           .toLowerCase()
-          .split(RegExp(r'\\s+'));
+          .split(RegExp(r'\s+'));
       final inlineStyle = (node.attributes['style'] ?? '').toLowerCase();
       final styledBreak = classes.any(sceneClasses.contains) ||
           (sceneSpace.hasMatch(marker) && marker.isNotEmpty) ||
-          RegExp(r'(?:margin-(?:top|bottom)|padding-(?:top|bottom)|height)\\s*:\\s*[1-9]').hasMatch(inlineStyle);
+          RegExp(r'(?:margin-(?:top|bottom)|padding-(?:top|bottom)|height)\s*:\s*[1-9]').hasMatch(inlineStyle);
       if ((sceneMarker || styledBreak) && node.text.trim().isEmpty) {
         flush();
         flush(scene: true);
@@ -1914,7 +1914,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
               // Capture the visible page's start offset, not a stale saved
               // offset from before a page turn or a pagination change.
               if (pages.isNotEmpty && currentPage >= 0 && currentPage < pages.length) {
-                currentOffset = pages[currentPage].start;
+                currentOffset = starts[currentPage];
               }
               saveCurrent();
               final textLength = widget.book.chapters[chapterIndex].text.length;
