@@ -280,10 +280,29 @@ class _LibraryScreenState extends State<LibraryScreen> {
     );
   }
 
-  // Use the EPUB's structure, not its CSS. Character offsets refer to
-  // exactly the same text used by pagination and the reading-position store.
+  // Preserve publisher-styled scene spacing without adding invented ornaments.
   ReaderChapter parseChapter(String title, String rawHtml) {
     final document = html_parser.parse(rawHtml);
+    final sceneClasses = <String>{};
+    final cssRule = RegExp(r'([^{}]+)\\{([^{}]+)\\}', multiLine: true);
+    final cssClass = RegExp(r'\\.([a-zA-Z_][\\w-]*)');
+    final sceneSpace = RegExp(
+      r'(?:break|separator|spacer|space|scene|section|thought|asterism|dinkus)',
+      caseSensitive: false,
+    );
+    for (final style in document.querySelectorAll('style')) {
+      for (final rule in cssRule.allMatches(style.text)) {
+        final declarations = rule.group(2)!.toLowerCase();
+        final isSpaced = RegExp(
+          r'(?:margin-(?:top|bottom)|padding-(?:top|bottom)|height)\\s*:\\s*(?!0(?:px|em|rem|pt)?\\s*(?:;|$))[1-9]',
+        ).hasMatch(declarations);
+        if (isSpaced || sceneSpace.hasMatch(rule.group(1)!)) {
+          for (final match in cssClass.allMatches(rule.group(1)!)) {
+            sceneClasses.add(match.group(1)!.toLowerCase());
+          }
+        }
+      }
+    }
     for (final element in document.querySelectorAll('script, style, nav')) {
       element.remove();
     }
@@ -302,7 +321,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
         pendingRanges.clear();
         return;
       }
-      final text = scene ? '⁂' : clean;
+      final text = scene ? '' : clean;
       final indent =
           blocks.isNotEmpty &&
               !heading &&
@@ -311,7 +330,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
               blocks.last.scene == false
           ? '　'
           : '';
-      final prefix = blocks.isEmpty ? '' : (heading || scene ? '\n\n' : '\n');
+      final prefix = blocks.isEmpty ? '' : (scene ? '\n\n\n' : heading ? '\n\n' : '\n');
       final base = output.length + prefix.length + indent.length;
       output.write(prefix);
       output.write(indent);
@@ -373,7 +392,14 @@ class _LibraryScreenState extends State<LibraryScreen> {
       final sceneMarker = RegExp(
         r'(?:^|[\s_-])(?:scene[\s_-]*break|section[\s_-]*break|thought[\s_-]*break|asterism|separator|ornament|dinkus)(?:$|[\s_-])',
       ).hasMatch(marker);
-      if (sceneMarker && node.text.trim().isEmpty) {
+      final classes = (node.attributes['class'] ?? '')
+          .toLowerCase()
+          .split(RegExp(r'\\s+'));
+      final inlineStyle = (node.attributes['style'] ?? '').toLowerCase();
+      final styledBreak = classes.any(sceneClasses.contains) ||
+          (sceneSpace.hasMatch(marker) && marker.isNotEmpty) ||
+          RegExp(r'(?:margin-(?:top|bottom)|padding-(?:top|bottom)|height)\\s*:\\s*[1-9]').hasMatch(inlineStyle);
+      if ((sceneMarker || styledBreak) && node.text.trim().isEmpty) {
         flush();
         flush(scene: true);
         return;
@@ -1885,6 +1911,11 @@ class _ReadingScreenState extends State<ReadingScreen> {
           IconButton(
             tooltip: 'Listen from this page',
             onPressed: () {
+              // Capture the visible page's start offset, not a stale saved
+              // offset from before a page turn or a pagination change.
+              if (pages.isNotEmpty && currentPage >= 0 && currentPage < pages.length) {
+                currentOffset = pages[currentPage].start;
+              }
               saveCurrent();
               final textLength = widget.book.chapters[chapterIndex].text.length;
               final fraction = textLength == 0
@@ -2151,8 +2182,6 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
           startPosition: Duration(milliseconds: savedPosition),
         );
         if (widget.initialTextFraction != null) {
-          // Pause before waiting for metadata so the player never starts
-          // unexpectedly while switching from reading to listening.
           await audioHandler.pause();
         }
         await refreshDuration();
@@ -2166,6 +2195,15 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
               milliseconds: (total.inMilliseconds * fraction).round(),
             );
             await audioHandler.seek(target);
+            // Seek is asynchronous on Android. Verify the player actually
+            // moved rather than silently displaying the old position.
+            if (target.inMilliseconds > 2000 &&
+                (player.position.inMilliseconds - target.inMilliseconds).abs() > 2000) {
+              await Future<void>.delayed(const Duration(milliseconds: 250));
+              if ((player.position.inMilliseconds - target.inMilliseconds).abs() > 2000) {
+                await audioHandler.seek(target);
+              }
+            }
           } else {
             error = 'Audio duration is unavailable; could not jump to your reading position.';
           }
