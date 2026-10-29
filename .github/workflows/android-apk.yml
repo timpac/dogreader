@@ -12,6 +12,7 @@ on:
       - feature/120-reader-page-jump
       - feature/122-delete-chapter-audio
       - feature/123-audio-recovery-controls
+      - feature/124-css-audio-seek
     paths:
       - 'lib/**'
       - 'android/**'
@@ -90,7 +91,7 @@ jobs:
         if: steps.signing.outputs.available == 'true'
         env:
           ORG_GRADLE_PROJECT_dogreaderOriginalUpdate: 'true'
-        run: flutter build apk --debug --build-number 123 --dart-define=DOGREADER_BUILD=123
+        run: flutter build apk --debug --build-number 124 --dart-define=DOGREADER_BUILD=124
 
       - name: Verify update signing certificate
         if: steps.signing.outputs.available == 'true'
@@ -106,7 +107,7 @@ jobs:
         if: steps.signing.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: Dogreader-123-original-key
+          name: Dogreader-124-original-key
           path: build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
           retention-days: 14
