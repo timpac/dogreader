@@ -1214,6 +1214,28 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     await checkJobs();
   }
 
+  Future<void> repairChapterAudio(int index) async {
+    if (busy) return;
+    final id = jobs[index]?['id'];
+    if (id is! String || id.isEmpty) {
+      setState(() => notice = 'No cloud recording is linked to this chapter.');
+      return;
+    }
+    setState(() {
+      busy = true;
+      notice = 'Recovering existing cloud recording…';
+    });
+    try {
+      await downloadAudio(index, id);
+      await save();
+      if (mounted) setState(() => notice = 'Recording recovered from cloud.');
+    } catch (e) {
+      if (mounted) setState(() => notice = 'Recovery failed: $e');
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
   Future<void> downloadAudio(int index, String id) async {
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
     try {
@@ -1227,11 +1249,31 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       await folder.create(recursive: true);
       final target = File('${folder.path}/${widget.book.id}_$index.mp3');
       final temp = File('${target.path}.part');
-      final sink = temp.openWrite();
-      await response.pipe(sink);
-      if (await temp.length() < 1000) throw Exception('Audio file was empty');
-      if (await target.exists()) await target.delete();
-      await temp.rename(target.path);
+      try {
+        final sink = temp.openWrite();
+        await response.pipe(sink);
+        final bytes = await temp.length();
+        if (bytes < 1000) throw Exception('Audio file was empty or incomplete');
+        if (response.contentLength >= 0 && bytes != response.contentLength) {
+          throw Exception('Incomplete audio: received $bytes of ${response.contentLength} bytes');
+        }
+        if (await target.exists()) {
+          final backup = File('${target.path}.bak');
+          if (await backup.exists()) await backup.delete();
+          await target.rename(backup.path);
+          try {
+            await temp.rename(target.path);
+            await backup.delete();
+          } catch (_) {
+            if (await backup.exists()) await backup.rename(target.path);
+            rethrow;
+          }
+        } else {
+          await temp.rename(target.path);
+        }
+      } finally {
+        if (await temp.exists()) await temp.delete();
+      }
       final stateFile = File('${root.path}/narration_state.json');
       Map<String, dynamic> data = {};
       if (await stateFile.exists()) {
@@ -1243,7 +1285,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       }
       data['${widget.book.id}:$index'] = {'path': target.path, 'positionMs': 0};
       await stateFile.writeAsString(jsonEncode(data));
-      jobs[index] = {'status': 'ready', 'id': id};
+      jobs[index] = {...?jobs[index], 'status': 'ready', 'id': id};
     } finally {
       client.close(force: true);
     }
@@ -1470,6 +1512,12 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
                               icon: const Icon(Icons.play_circle_fill, color: accent, size: 32),
                               onPressed: () => playChapter(index),
                             ),
+                            if (jobs[index]?['id'] is String)
+                              IconButton(
+                                tooltip: 'Repair audio from cloud',
+                                icon: const Icon(Icons.cloud_download_outlined),
+                                onPressed: busy ? null : () => repairChapterAudio(index),
+                              ),
                             IconButton(
                               tooltip: 'Delete chapter audio',
                               icon: const Icon(Icons.delete_outline),
