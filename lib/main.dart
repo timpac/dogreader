@@ -412,9 +412,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
           children: [
             Icon(Icons.auto_stories_rounded, color: accent),
             SizedBox(width: 12),
-            Text(
-              'Dogreader',
-              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 19),
+            Flexible(
+              child: Text(
+                'Dogreader',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 19),
+              ),
             ),
           ],
         ),

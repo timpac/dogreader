@@ -41,8 +41,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Dogreader'), findsOneWidget);
     expect(find.text('A new chapter begins'), findsOneWidget);
-    final button = tester.widget<FilledButton>(find.byType(FilledButton));
-    final context = tester.element(find.byType(FilledButton));
+    final buttonFinder = find.byWidgetPredicate((widget) => widget is FilledButton);
+    final button = tester.widget<FilledButton>(buttonFinder);
+    final context = tester.element(buttonFinder);
     final style = FilledButtonTheme.of(context).style!;
     expect(button.onPressed, isNotNull);
     expect(contrast(style.foregroundColor!.resolve({})!,
