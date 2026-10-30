@@ -1730,6 +1730,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
           IconButton(
             tooltip: 'Listen from this page',
             onPressed: _paginating || pages.isEmpty ? null : () {
+              if (_paginating || pages.isEmpty) return;
               // Capture the visible page's start offset, not a stale saved
               // offset from before a page turn or a pagination change.
               if (pages.isNotEmpty && currentPage >= 0 && currentPage < pages.length) {
