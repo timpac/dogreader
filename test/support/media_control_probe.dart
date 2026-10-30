@@ -7,13 +7,17 @@ import 'dart:typed_data';
 
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:audiobook_app/dogreader_audio_handler.dart';
 
 class ProbeHandler extends DogreaderAudioHandler {
   final commands = <String, int>{};
-  void received(String name) => commands.update(name, (value) => value + 1,
-      ifAbsent: () => 1);
+  final commandPositionsMs = <String, int>{};
+  void received(String name) {
+    commands.update(name, (value) => value + 1, ifAbsent: () => 1);
+    commandPositionsMs[name] = player.position.inMilliseconds;
+  }
 
   @override
   Future<void> play() { received('play'); return super.play(); }
@@ -74,6 +78,13 @@ Future<void> main() async {
   );
   var writing = false;
   String? fatal;
+  final bridgeErrors = <String>[];
+  AudioService.asyncError.listen((error) {
+    final code = error is PlatformException ? error.code : error.runtimeType.toString();
+    if (bridgeErrors.length == 8) bridgeErrors.removeAt(0);
+    bridgeErrors.add(code);
+    debugPrint(jsonEncode({'event': 'probe_media_bridge_error', 'code': code}));
+  });
   Future<void> snapshot() async {
     if (writing) return;
     writing = true;
@@ -83,6 +94,8 @@ Future<void> main() async {
       final file = File('${root.path}/media-control-probe.json.tmp');
       await file.writeAsString(jsonEncode({
         'commands': Map<String, int>.from(handler.commands),
+        'commandPositionsMs': Map<String, int>.from(handler.commandPositionsMs),
+        'bridgeErrors': List<String>.from(bridgeErrors),
         'playing': player.playing,
         'sessionPlaying': state.playing,
         'processing': player.processingState.name,

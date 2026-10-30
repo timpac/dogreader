@@ -75,7 +75,8 @@ def command(label, method, playing=None, direction=0):
                      (playing is None or state['playing'] == playing) and
                      (playing is None or state['sessionPlaying'] == playing))
     if direction:
-        delta = after['positionMs'] - before['positionMs']
+        # Compare with position at callback entry, excluding UI dump/tap delay.
+        delta = after['positionMs'] - after['commandPositionsMs'][method]
         if direction * delta < 10000:
             raise AssertionError(f'{label} delivered but position did not move: {delta}')
     print(json.dumps({'control': label, 'received': method,
