@@ -35,7 +35,8 @@ void main() {
     expect(state.currentOffset, state.starts[state.currentPage]);
     expect(saves.last, state.currentOffset);
     // An app-bar callback from the preceding build cannot seek during reflow.
-    final listen = tester.widget<IconButton>(find.byTooltip('Listen from this page'));
+    final listen = tester.widget<IconButton>(find.byWidgetPredicate(
+      (widget) => widget is IconButton && widget.tooltip == 'Listen from this page'));
     state.calculatePages(200.0, 200.0);
     listen.onPressed!();
     await tester.pumpAndSettle();
