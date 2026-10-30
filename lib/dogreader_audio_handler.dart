@@ -6,7 +6,9 @@ import 'package:path_provider/path_provider.dart';
 import 'package:just_audio/just_audio.dart';
 
 class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
-  final AudioPlayer player = AudioPlayer();
+  final AudioPlayer player;
+  final Future<Directory> Function() _documentsDirectory;
+  int _loadGeneration = 0;
   String? _chapterKey;
   String? _bookId;
   int? _chapterIndex;
@@ -23,7 +25,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     final milliseconds = position.inMilliseconds.clamp(0, 2147483647);
     _pendingSave = _pendingSave.catchError((Object _) {}).then((_) async {
       try {
-        final root = await getApplicationDocumentsDirectory();
+        final root = await _documentsDirectory();
         final file = File('${root.path}/narration_state.json');
         Map<String, dynamic> data = {};
         if (await file.exists()) {
@@ -44,7 +46,11 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     return _pendingSave;
   }
 
-  DogreaderAudioHandler() {
+  DogreaderAudioHandler({AudioPlayer? player,
+      Future<Directory> Function()? documentsDirectory})
+      : player = player ?? AudioPlayer(),
+        _documentsDirectory = documentsDirectory ?? getApplicationDocumentsDirectory {
+    final player = this.player;
     player.positionStream.listen((position) {
       if (_chapterKey == null) return;
       final second = position.inSeconds;
@@ -92,22 +98,26 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
 
   Future<void> _advanceToNextChapter() async {
     if (_advancing || _bookId == null || _chapterIndex == null ||
-        _chapterCount == null || _author == null) return;
+        _chapterCount == null || _author == null) {
+      return;
+    }
     final nextIndex = _chapterIndex! + 1;
     if (nextIndex >= _chapterCount!) return;
     _advancing = true;
+    final generation = _loadGeneration;
     try {
-      final root = await getApplicationDocumentsDirectory();
+      final root = await _documentsDirectory();
       final next = File('${root.path}/narration/${_bookId!}_$nextIndex.mp3');
       if (!await next.exists() || await next.length() == 0) return;
       final oldKey = _chapterKey;
       await _savePosition(Duration.zero);
       await _pendingSave;
-      if (_chapterKey != oldKey) return;
+      if (_chapterKey != oldKey || generation != _loadGeneration) return;
       final bookId = _bookId!;
       final author = _author!;
       final count = _chapterCount!;
       await player.setFilePath(next.path, initialPosition: Duration.zero);
+      if (generation != _loadGeneration) return;
       _chapterKey = '$bookId:$nextIndex';
       _chapterIndex = nextIndex;
       _lastSavedSecond = -1;
@@ -135,15 +145,25 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     required int chapterIndex,
     required int chapterCount,
     Duration startPosition = Duration.zero,
+    bool forceReload = false,
+    bool Function()? isCurrent,
   }) async {
+    final generation = ++_loadGeneration;
+    bool active() => generation == _loadGeneration && (isCurrent?.call() ?? true);
+    if (!active()) return;
     final key = '$bookId:$chapterIndex';
-    if (mediaItem.value?.id == key && player.audioSource != null) {
+    if (!forceReload && mediaItem.value?.id == key && player.audioSource != null) {
       return;
     }
 
     await _savePosition(player.position);
+    if (!active()) return;
     await player.pause();
+    if (!active()) return;
+    _chapterKey = null;
+    mediaItem.add(null);
     await player.setFilePath(path, initialPosition: startPosition);
+    if (!active()) return;
     _chapterKey = key;
     _bookId = bookId;
     _chapterIndex = chapterIndex;
@@ -159,6 +179,16 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
         duration: player.duration,
       ),
     );
+  }
+
+  Future<void> unloadChapter(String bookId, int index) async {
+    if (_chapterKey != '$bookId:$index') return;
+    ++_loadGeneration;
+    await stop();
+    _chapterKey = null;
+    _bookId = null;
+    _chapterIndex = null;
+    mediaItem.add(null);
   }
 
   @override
@@ -182,8 +212,12 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     final end = player.duration;
     var target = position < Duration.zero ? Duration.zero : position;
     if (end != null && target > end) target = end;
+    final key = _chapterKey;
+    final generation = _loadGeneration;
     await player.seek(target);
-    await _savePosition(target);
+    if (key == _chapterKey && generation == _loadGeneration) {
+      await _savePosition(player.position);
+    }
   }
 
   @override
@@ -196,3 +230,4 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
   @override
   Future<void> setSpeed(double speed) => player.setSpeed(speed);
 }
+

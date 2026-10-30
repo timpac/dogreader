@@ -11,13 +11,14 @@ import 'package:epubx/epubx.dart' hide Image;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:audioplayers/audioplayers.dart';
 import 'package:audio_service/audio_service.dart';
 
 import 'dogreader_audio_handler.dart';
 
-import 'package:html/parser.dart' as html_parser;
-import 'package:html/dom.dart' as dom;
+import 'reader_content.dart';
+export 'reader_content.dart' show ReaderChapter, StyledRange;
+import 'narration_seek.dart';
+import 'narration_files.dart';
 
 late final DogreaderAudioHandler audioHandler;
 
@@ -69,25 +70,6 @@ class AudiobookApp extends StatelessWidget {
       home: const LibraryScreen(),
     );
   }
-}
-
-class StyledRange {
-  final int start, end;
-  final bool italic, bold, heading;
-  const StyledRange(
-    this.start,
-    this.end, {
-    this.italic = false,
-    this.bold = false,
-    this.heading = false,
-  });
-}
-
-class ReaderChapter {
-  final String title;
-  final String text;
-  final List<StyledRange> ranges;
-  const ReaderChapter(this.title, this.text, this.ranges);
 }
 
 class ImportedBook {
@@ -280,162 +262,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
     );
   }
 
-  // Preserve publisher-styled scene spacing without adding invented ornaments.
-  ReaderChapter parseChapter(String title, String rawHtml) {
-    final document = html_parser.parse(rawHtml);
-    final sceneClasses = <String>{};
-    final cssRule = RegExp(r'([^{}]+)\{([^{}]+)\}', multiLine: true);
-    final cssClass = RegExp(r'\.([a-zA-Z_][\w-]*)');
-    final sceneSpace = RegExp(
-      r'(?:break|separator|spacer|space|scene|section|thought|asterism|dinkus)',
-      caseSensitive: false,
-    );
-    for (final style in document.querySelectorAll('style')) {
-      for (final rule in cssRule.allMatches(style.text)) {
-        final declarations = rule.group(2)!.toLowerCase();
-        final isSpaced = RegExp(
-          r'(?:margin-(?:top|bottom)|padding-(?:top|bottom)|height)\s*:\s*(?!0(?:px|em|rem|pt)?\s*(?:;|$))[1-9]',
-        ).hasMatch(declarations);
-        if (isSpaced || sceneSpace.hasMatch(rule.group(1)!)) {
-          for (final match in cssClass.allMatches(rule.group(1)!)) {
-            sceneClasses.add(match.group(1)!.toLowerCase());
-          }
-        }
-      }
-    }
-    for (final element in document.querySelectorAll('script, style, nav')) {
-      element.remove();
-    }
-    final output = StringBuffer();
-    final ranges = <StyledRange>[];
-    final blocks = <_TextBlock>[];
-    final pending = StringBuffer();
-    final pendingRanges = <StyledRange>[];
-
-    void flush({bool heading = false, bool scene = false}) {
-      final raw = pending.toString();
-      pending.clear();
-      final leading = raw.length - raw.trimLeft().length;
-      final clean = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
-      if (clean.isEmpty && !scene) {
-        pendingRanges.clear();
-        return;
-      }
-      final text = scene ? '' : clean;
-      final indent =
-          blocks.isNotEmpty &&
-              !heading &&
-              !scene &&
-              blocks.last.heading == false &&
-              blocks.last.scene == false
-          ? '　'
-          : '';
-      final prefix = blocks.isEmpty ? '' : (scene ? '\n\n\n' : heading ? '\n\n' : '\n');
-      final base = output.length + prefix.length + indent.length;
-      output.write(prefix);
-      output.write(indent);
-      output.write(text);
-      for (final range in pendingRanges) {
-        final a = (range.start - leading).clamp(0, clean.length);
-        final b = (range.end - leading).clamp(0, clean.length);
-        if (b > a)
-          ranges.add(
-            StyledRange(
-              base + a,
-              base + b,
-              italic: range.italic,
-              bold: range.bold,
-            ),
-          );
-      }
-      pendingRanges.clear();
-      if (heading)
-        ranges.add(StyledRange(base, base + text.length, heading: true));
-      blocks.add(_TextBlock(heading, scene));
-    }
-
-    void walk(
-      dom.Node node, {
-      bool italic = false,
-      bool bold = false,
-      bool heading = false,
-    }) {
-      if (node is dom.Text) {
-        final start = pending.length;
-        pending.write(node.text);
-        if ((italic || bold) && pending.length > start) {
-          pendingRanges.add(
-            StyledRange(start, pending.length, italic: italic, bold: bold),
-          );
-        }
-        return;
-      }
-      if (node is! dom.Element) return;
-      final tag = node.localName ?? '';
-      if (tag == 'br') {
-        flush(heading: heading);
-        return;
-      }
-      if (tag == 'hr') {
-        flush();
-        flush(scene: true);
-        return;
-      }
-      // EPUBs often encode scene changes as empty, styled separators.
-      // Recognize semantic markers without inserting ornaments for
-      // ordinary paragraphs that merely have decorative CSS classes.
-      final marker = [
-        node.attributes['class'] ?? '',
-        node.attributes['epub:type'] ?? '',
-        node.attributes['role'] ?? '',
-      ].join(' ').toLowerCase();
-      final sceneMarker = RegExp(
-        r'(?:^|[\s_-])(?:scene[\s_-]*break|section[\s_-]*break|thought[\s_-]*break|asterism|separator|ornament|dinkus)(?:$|[\s_-])',
-      ).hasMatch(marker);
-      final classes = (node.attributes['class'] ?? '')
-          .toLowerCase()
-          .split(RegExp(r'\s+'));
-      final inlineStyle = (node.attributes['style'] ?? '').toLowerCase();
-      final styledBreak = classes.any(sceneClasses.contains) ||
-          (sceneSpace.hasMatch(marker) && marker.isNotEmpty) ||
-          RegExp(r'(?:margin-(?:top|bottom)|padding-(?:top|bottom)|height)\s*:\s*[1-9]').hasMatch(inlineStyle);
-      if ((sceneMarker || styledBreak) && node.text.trim().isEmpty) {
-        flush();
-        flush(scene: true);
-        return;
-      }
-      final isHeading =
-          heading || {'h1', 'h2', 'h3', 'h4', 'h5', 'h6'}.contains(tag);
-      final isBlock = {
-        'p',
-        'div',
-        'h1',
-        'h2',
-        'h3',
-        'h4',
-        'h5',
-        'h6',
-        'li',
-        'blockquote',
-        'pre',
-        'tr',
-      }.contains(tag);
-      if (isBlock && pending.isNotEmpty) flush();
-      for (final child in node.nodes) {
-        walk(
-          child,
-          italic: italic || tag == 'i' || tag == 'em',
-          bold: bold || tag == 'b' || tag == 'strong',
-          heading: isHeading,
-        );
-      }
-      if (isBlock) flush(heading: isHeading);
-    }
-
-    if (document.body != null) walk(document.body!);
-    flush();
-    return ReaderChapter(title, output.toString(), ranges);
-  }
+  ReaderChapter parseChapter(String title, String rawHtml) =>
+      parseReaderChapter(title, rawHtml);
 
   Uint8List? extractCover(EpubBook epub) {
     try {
@@ -459,20 +287,27 @@ class _LibraryScreenState extends State<LibraryScreen> {
     return null;
   }
 
-  void collectChapters(List<EpubChapter> source, List<ReaderChapter> output) {
+  void collectChapters(List<EpubChapter> source, List<ReaderChapter> output,
+      Map<String, String> styleSheets) {
     for (final chapter in source) {
       final title = (chapter.Title ?? '').trim();
-      final parsed = parseChapter(
+      final parsed = parseReaderChapter(
         title.isEmpty ? 'Section ${output.length + 1}' : title,
         chapter.HtmlContent ?? '',
+        documentPath: chapter.ContentFileName ?? '',
+        styleSheets: styleSheets,
       );
       if (parsed.text.isNotEmpty) output.add(parsed);
-      collectChapters(chapter.SubChapters ?? [], output);
+      collectChapters(chapter.SubChapters ?? [], output, styleSheets);
     }
   }
 
   void loadBookChapters(EpubBook epub, List<ReaderChapter> output) {
-    collectChapters(epub.Chapters ?? [], output);
+    final styleSheets = <String, String>{
+      for (final entry in (epub.Content?.Css ?? {}).entries)
+        entry.key: entry.value.Content ?? '',
+    };
+    collectChapters(epub.Chapters ?? [], output, styleSheets);
     if (output.isNotEmpty) return;
 
     final schema = epub.Schema;
@@ -508,7 +343,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
       final rawHtml = content?.Content;
       if (rawHtml == null || rawHtml.isEmpty) continue;
 
-      final parsed = parseChapter('Section ${output.length + 1}', rawHtml);
+      final parsed = parseReaderChapter('Section ${output.length + 1}', rawHtml,
+          documentPath: normalized, styleSheets: styleSheets);
 
       if (parsed.text.trim().isNotEmpty) {
         output.add(parsed);
@@ -754,12 +590,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   Widget _narrationLibraryPage() {
-    if (books.isEmpty)
+    if (books.isEmpty) {
       return _placeholderPage(
         Icons.queue_music_rounded,
         'Narration',
         'Import a book to generate or listen to narration.',
       );
+    }
     return ListView(
       children: [
         const Padding(
@@ -1049,8 +886,9 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       final response = await req.close().timeout(const Duration(seconds: 15));
       final body = await utf8.decoder.bind(response).join();
       final result = jsonDecode(body) as Map<String, dynamic>;
-      if (response.statusCode >= 400)
+      if (response.statusCode >= 400) {
         throw Exception(result['error'] ?? 'HTTP ${response.statusCode}');
+      }
       return result;
     } finally {
       client.close(force: true);
@@ -1107,8 +945,9 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       final candidate = hostController.text.trim();
       if (!candidate.startsWith('https://') ||
           Uri.tryParse(candidate)?.host.isEmpty != false) {
-        if (mounted)
+        if (mounted) {
           setState(() => notice = 'Enter a valid HTTPS Cloud Run URL.');
+        }
         hostController.dispose();
         tokenController.dispose();
         return;
@@ -1116,8 +955,9 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       host = candidate;
       token = tokenController.text.trim();
       await save();
-      if (mounted)
+      if (mounted) {
         setState(() => notice = 'Settings saved. Tap Check connection.');
+      }
     }
     hostController.dispose();
     tokenController.dispose();
@@ -1126,8 +966,9 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   Future<void> checkConnection() async {
     try {
       final data = await requestJson('GET', '/dogreader/ping');
-      if (mounted)
+      if (mounted) {
         setState(() => notice = 'Connected! Voice: ${data['voice']}');
+      }
     } catch (e) {
       if (mounted) setState(() => notice = 'Cannot reach cloud server: $e');
     }
@@ -1173,20 +1014,11 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     setState(() => busy = true);
     try {
       final root = await getApplicationDocumentsDirectory();
-      final file = File('${root.path}/narration/${widget.book.id}_$index.mp3');
-      // Release any open audio handle before removing the recording.
-      await audioHandler.pause();
-      if (await file.exists()) await file.delete();
-      final stateFile = File('${root.path}/narration_state.json');
-      if (await stateFile.exists()) {
-        final data = jsonDecode(await stateFile.readAsString());
-        if (data is Map<String, dynamic>) {
-          data.remove('${widget.book.id}:$index');
-          await stateFile.writeAsString(jsonEncode(data));
-        }
-      }
-      jobs.remove(index); // Also forget the cloud job ID: never auto-redownload Oliver.
-      selected.remove(index);
+      await deleteNarrationFile(
+        root: root, bookId: widget.book.id, index: index,
+        pause: () => audioHandler.unloadChapter(widget.book.id, index),
+        jobs: jobs, selected: selected,
+      );
       await save();
       notice = 'Audio deleted. Choose a narrator and generate this chapter again.';
     } catch (e) {
@@ -1201,11 +1033,12 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     final root = await getApplicationDocumentsDirectory();
     final file = File('${root.path}/narration/${widget.book.id}_$index.mp3');
     if (!await file.exists()) {
-      if (mounted)
+      if (mounted) {
         setState(
           () =>
               notice = 'Recording not found locally. Try refreshing the queue.',
         );
+      }
       return;
     }
     if (!mounted) return;
@@ -1232,11 +1065,12 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       jobs[index] = {'status': 'waiting', 'voice': narrator};
     }
     await save();
-    if (mounted)
+    if (mounted) {
       setState(() {
         selected.clear();
         busy = false;
       });
+    }
     await checkJobs();
   }
 
@@ -1268,38 +1102,16 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       final req = await client.getUrl(endpoint('/dogreader/audio/$id'));
       req.headers.set('X-Dogreader-Token', token);
       final response = await req.close();
-      if (response.statusCode != 200)
+      if (response.statusCode != 200) {
         throw Exception('Download failed: ${response.statusCode}');
+      }
       final root = await getApplicationDocumentsDirectory();
       final folder = Directory('${root.path}/narration');
       await folder.create(recursive: true);
       final target = File('${folder.path}/${widget.book.id}_$index.mp3');
-      final temp = File('${target.path}.part');
-      try {
-        final sink = temp.openWrite();
-        await response.pipe(sink);
-        final bytes = await temp.length();
-        if (bytes < 1000) throw Exception('Audio file was empty or incomplete');
-        if (response.contentLength >= 0 && bytes != response.contentLength) {
-          throw Exception('Incomplete audio: received $bytes of ${response.contentLength} bytes');
-        }
-        if (await target.exists()) {
-          final backup = File('${target.path}.bak');
-          if (await backup.exists()) await backup.delete();
-          await target.rename(backup.path);
-          try {
-            await temp.rename(target.path);
-            await backup.delete();
-          } catch (_) {
-            if (await backup.exists()) await backup.rename(target.path);
-            rethrow;
-          }
-        } else {
-          await temp.rename(target.path);
-        }
-      } finally {
-        if (await temp.exists()) await temp.delete();
-      }
+      await replaceNarrationFile(target, response,
+          contentLength: response.contentLength,
+          beforeReplace: () => audioHandler.unloadChapter(widget.book.id, index));
       final stateFile = File('${root.path}/narration_state.json');
       Map<String, dynamic> data = {};
       if (await stateFile.exists()) {
@@ -1386,9 +1198,10 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
             'error': result['error'],
           };
           if (nextStatus == 'ready') await downloadAudio(index, currentId);
-          if (nextStatus == 'error')
+          if (nextStatus == 'error') {
             notice =
                 'Cloud narration failed for ${widget.book.chapters[index].title}. Check Cloud Run logs.';
+          }
         } catch (e) {
           // Preserve pending work for a later retry.
           if (jobs[index]?['id'] == null) jobs[index] = {'status': 'waiting'};
@@ -1472,7 +1285,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: DropdownButtonFormField<String>(
-              value: narrator,
+              initialValue: narrator,
               decoration: const InputDecoration(
                 labelText: 'Narrator',
                 border: OutlineInputBorder(),
@@ -1732,7 +1545,9 @@ class _ReadingScreenState extends State<ReadingScreen> {
         if (!mounted ||
             generation != _paginationGeneration ||
             chapterIndex != targetChapter ||
-            fontSize != targetFont) return;
+            fontSize != targetFont) {
+          return;
+        }
         // Cap the binary-search range near a plausible page length.
         // Expand only when necessary, avoiding repeated full-chapter
         // layout on every page.
@@ -1771,7 +1586,9 @@ class _ReadingScreenState extends State<ReadingScreen> {
         nextStarts.add(0);
       }
       if (!mounted || generation != _paginationGeneration ||
-          chapterIndex != targetChapter || fontSize != targetFont) return;
+          chapterIndex != targetChapter || fontSize != targetFont) {
+          return;
+        }
       final nextPage = math.max(
         0,
         nextStarts.lastIndexWhere((value) => value <= currentOffset),
@@ -1781,9 +1598,11 @@ class _ReadingScreenState extends State<ReadingScreen> {
         pages = nextPages;
         starts = nextStarts;
         currentPage = nextPage;
+        currentOffset = starts[currentPage];
         controller = PageController(initialPage: currentPage, keepPage: false);
         _paginating = false;
       });
+      saveCurrent();
       if (oldController != null) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           oldController.dispose();
@@ -1910,7 +1729,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
         actions: [
           IconButton(
             tooltip: 'Listen from this page',
-            onPressed: () {
+            onPressed: _paginating || pages.isEmpty ? null : () {
               // Capture the visible page's start offset, not a stale saved
               // offset from before a page turn or a pagination change.
               if (pages.isNotEmpty && currentPage >= 0 && currentPage < pages.length) {
@@ -1921,12 +1740,13 @@ class _ReadingScreenState extends State<ReadingScreen> {
               final fraction = textLength == 0
                   ? 0.0
                   : (currentOffset / textLength).clamp(0.0, 1.0);
+              final audioChapter = chapterIndex;
               Navigator.push(
                 context,
                 MaterialPageRoute(
                   builder: (_) => ChapterNarrationScreen(
                     book: widget.book,
-                    chapterIndex: chapterIndex,
+                    chapterIndex: audioChapter,
                     initialTextFraction: fraction,
                   ),
                 ),
@@ -2070,6 +1890,8 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
   Duration duration = Duration.zero;
   double speed = 1.0;
 
+  int _restoreGeneration = 0;
+
   String get chapterKey => '${widget.book.id}:${widget.chapterIndex}';
 
   Future<File> get stateFile async {
@@ -2146,6 +1968,8 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
   }
 
   Future<void> restore() async {
+    final generation = ++_restoreGeneration;
+    bool active() => mounted && generation == _restoreGeneration;
     try {
       final data = await readState();
       final entry = data[chapterKey];
@@ -2167,53 +1991,52 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
 
       if (path == null && await localFile.exists()) {
         path = localFile.path;
+        if (!active()) return;
         await updateState({'path': path, 'positionMs': 0});
       }
 
+      if (!active()) return;
       if (path != null) {
         audioPath = path;
-        await audioHandler.loadChapter(
-          path: path,
+        Future<void> load() => audioHandler.loadChapter(
+          path: path!,
           title: widget.book.chapters[widget.chapterIndex].title,
           author: widget.book.author,
           bookId: widget.book.id,
           chapterIndex: widget.chapterIndex,
           chapterCount: widget.book.chapters.length,
           startPosition: Duration(milliseconds: savedPosition),
+          isCurrent: active,
         );
-        if (widget.initialTextFraction != null) {
-          await audioHandler.pause();
+        var prepared = false;
+        Future<void> prepare() async {
+          await load();
+          prepared = true;
         }
-        await refreshDuration();
         if (widget.initialTextFraction != null) {
-          // Seek even when this same chapter was already loaded in the
-          // background: loadChapter intentionally returns early in that case.
-          final total = player.duration ?? duration;
-          if (total.inMilliseconds > 0) {
-            final fraction = widget.initialTextFraction!.clamp(0.0, 1.0);
-            final target = Duration(
-              milliseconds: (total.inMilliseconds * fraction).round(),
-            );
-            await audioHandler.seek(target);
-            // Seek is asynchronous on Android. Verify the player actually
-            // moved rather than silently displaying the old position.
-            if (target.inMilliseconds > 2000 &&
-                (player.position.inMilliseconds - target.inMilliseconds).abs() > 2000) {
-              await Future<void>.delayed(const Duration(milliseconds: 250));
-              if ((player.position.inMilliseconds - target.inMilliseconds).abs() > 2000) {
-                await audioHandler.seek(target);
-              }
-            }
-          } else {
-            error = 'Audio duration is unavailable; could not jump to your reading position.';
-          }
+          // loadChapter deliberately preserves an already loaded chapter.
+          // Seeking is a separate step and always runs for reader navigation.
+          final completed = await seekNarrationFromText(
+            fraction: widget.initialTextFraction!, load: prepare,
+            pause: audioHandler.pause, seek: audioHandler.seek,
+            duration: () => player.duration, position: () => player.position,
+            isCurrent: () => active() &&
+                (!prepared || audioHandler.mediaItem.value?.id == chapterKey),
+          );
+          if (!completed) return;
+        } else {
+          await load();
+          if (!active() || audioHandler.mediaItem.value?.id != chapterKey) return;
+          await refreshDuration();
         }
+        if (!active() || audioHandler.mediaItem.value?.id != chapterKey) return;
+        duration = player.duration ?? Duration.zero;
         position = player.position;
       }
     } catch (e) {
-      error = 'Could not load recording: $e';
+      if (active()) error = 'Could not load recording: $e';
     } finally {
-      if (mounted) setState(() => loading = false);
+      if (active()) setState(() => loading = false);
     }
   }
 
@@ -2256,7 +2079,9 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
       final target = File(
         '${folder.path}/${widget.book.id}_${widget.chapterIndex}.mp3',
       );
-      await player.stop();
+      if (!mounted) return;
+      await audioHandler.unloadChapter(widget.book.id, widget.chapterIndex);
+      if (!mounted) return;
       await File(picked.path!).copy(target.path);
       if (mounted) setState(() => duration = Duration.zero);
       await audioHandler.loadChapter(
@@ -2266,15 +2091,20 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
         bookId: widget.book.id,
         chapterIndex: widget.chapterIndex,
         chapterCount: widget.book.chapters.length,
+        forceReload: true,
+        isCurrent: () => mounted,
       );
+      if (!mounted) return;
       await refreshDuration();
-      await player.seek(Duration.zero);
+      if (!mounted || audioHandler.mediaItem.value?.id != chapterKey) return;
+      await audioHandler.seek(Duration.zero);
       await updateState({'path': target.path, 'positionMs': 0});
-      if (mounted)
+      if (mounted) {
         setState(() {
           audioPath = target.path;
           position = Duration.zero;
         });
+      }
     } catch (e) {
       if (mounted) setState(() => error = 'Could not import MP3: $e');
     } finally {
@@ -2295,7 +2125,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
   }
 
   Future<void> seekTo(Duration value) async {
-    if (audioPath == null) return;
+    if (audioPath == null || loading) return;
     final maxMs = duration.inMilliseconds;
     final ms = value.inMilliseconds.clamp(
       0,
@@ -2326,6 +2156,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
 
   @override
   void dispose() {
+    ++_restoreGeneration;
     for (final sub in subscriptions) {
       sub.cancel();
     }
@@ -2387,7 +2218,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
                   Slider(
                     value: currentMs,
                     max: maxMs,
-                    onChanged: duration.inMilliseconds <= 0
+                    onChanged: loading || duration.inMilliseconds <= 0
                         ? null
                         : (v) => setState(
                             () => position = Duration(milliseconds: v.round()),
@@ -2418,7 +2249,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
                       ),
                       const SizedBox(width: 12),
                       FilledButton.icon(
-                        onPressed: togglePlayback,
+                        onPressed: loading ? null : togglePlayback,
                         icon: Icon(playing ? Icons.pause : Icons.play_arrow),
                         label: Text(playing ? 'Pause' : 'Play'),
                       ),
@@ -2433,8 +2264,8 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
                   ),
                   const SizedBox(height: 14),
                   TextButton(
-                    onPressed: changeSpeed,
-                    child: Text('${speed}× speed'),
+                    onPressed: loading ? null : changeSpeed,
+                    child: Text('$speed× speed'),
                   ),
                   TextButton.icon(
                     onPressed: () => seekTo(Duration.zero),
@@ -2459,55 +2290,3 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
   }
 }
 
-class _TextBlock {
-  final bool heading, scene;
-  const _TextBlock(this.heading, this.scene);
-}
-
-class _FeatureRow extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String subtitle;
-
-  const _FeatureRow(this.icon, this.title, this.subtitle);
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          padding: const EdgeInsets.all(11),
-          decoration: BoxDecoration(
-            color: panel,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Icon(icon, color: accent),
-        ),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 15,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                subtitle,
-                style: TextStyle(
-                  fontSize: 13,
-                  color: Colors.white.withValues(alpha: 0.6),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}

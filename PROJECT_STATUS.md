@@ -1,5 +1,17 @@
 # Dogreader — Project status and handoff
 
+## Build 124 review (2026-10-30)
+
+- Active branch: `feature/124-css-audio-seek`; PR #12 remains draft and unmerged.
+- Reviewed against build 123 base `1ab1257bda89c6aece84c7f57e507b76c646f750` and previous build 124 head `64decec7eca8030289af8f75835ed9e13950b021`.
+- Confirmed defects: linked publisher CSS was ignored; collapsed whitespace shifted style offsets; font/viewport pagination could leave saved offsets inside the visible page; near-zero seek targets skipped verification; retry failure was silent; asynchronous restore could continue after navigation; replacing a loaded recording reused the old audio source.
+- Parser/model extraction retains the exported `ReaderChapter` and `StyledRange` interfaces from `main.dart`. Empty scene breaks use blank space, repeated separators coalesce, and textual publisher ornaments remain. EPUB stylesheet links and CSS imports resolve inside the archive. Reading and narration JSON formats and Android identity/signing configuration are retained.
+- Added regression tests for parsing/offsets, actual widget pagination reflow, seek preparation/metadata/retries/cancellation, safe recording recovery/deletion, saved audio progress and background chapter advance.
+- Validation uses the existing Actions workflow with Flutter 3.47.7: dependency resolution, strict Flutter analysis, regression tests, APK compilation with build number/define 124, original certificate verification, and APK identity/version verification. Tests now block APK compilation. Consult the final commit's Actions run for results; the prior artifact is superseded by these source changes.
+- Local Flutter execution is unavailable: no Flutter SDK is installed and the environment HTTP proxy rejects shell connections. GitHub connector access is available; validation runs on GitHub Actions.
+- Physical Android checks remain outstanding: scene rendering, font-size/viewport changes, saved reading locations after reflow, read-to-audio seeking on newly/already loaded chapters, navigation during metadata/seek work, background playback and recording recovery/deletion. Automated tests do not establish device behavior.
+- Next exact action: inspect the final feature-branch Actions run and artifact, then install the verified original-key build 124 as an update and perform the outstanding Android checks. Do not merge PR #12 until device validation is complete.
+
 Updated: 2026-10-24. This is a verified starting point, not a substitute for checking GitHub before changes.
 
 ## Mandatory new-chat startup
@@ -54,3 +66,4 @@ Updated: 2026-10-24. This is a verified starting point, not a substitute for che
 
 ## Next exact action
 Validate the reader changes with Flutter analyzer and an APK build. Check scene markers and test page navigation, font-size changes, and rapid chapter switching. The existing workflow can be manually dispatched on this branch from GitHub Actions, but no workflow run has been started. Verify its signing check and build number before installing. Confirm source commit of run #13 if accessible.
+

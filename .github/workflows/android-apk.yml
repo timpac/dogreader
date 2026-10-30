@@ -15,6 +15,7 @@ on:
       - feature/124-css-audio-seek
     paths:
       - 'lib/**'
+      - 'test/**'
       - 'android/**'
       - 'assets/**'
       - 'pubspec.yaml'
@@ -83,9 +84,13 @@ jobs:
         if: steps.signing.outputs.available == 'true'
         run: flutter pub get
 
-      - name: Analyze Dart code (errors block release)
+      - name: Analyze Dart code
         if: steps.signing.outputs.available == 'true'
-        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+        run: flutter analyze
+
+      - name: Run regression tests
+        if: steps.signing.outputs.available == 'true'
+        run: flutter test --reporter expanded
 
       - name: Build original-app update APK
         if: steps.signing.outputs.available == 'true'
@@ -97,11 +102,21 @@ jobs:
         if: steps.signing.outputs.available == 'true'
         run: |
           APKSIGNER="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner"
-          "$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-debug.apk | tee /tmp/dogreader-apk-certificates.txt
+          set -o pipefail
+          "$APKSIGNER" verify --verbose --print-certs build/app/outputs/flutter-apk/app-debug.apk | tee /tmp/dogreader-apk-certificates.txt
           if ! grep -Fqi 'c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177' /tmp/dogreader-apk-certificates.txt; then
             echo "::error::Original Dogreader signing fingerprint mismatch; update APK will not be published."
             exit 1
           fi
+
+      - name: Verify APK identity and version
+        if: steps.signing.outputs.available == 'true'
+        run: |
+          AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
+          "$AAPT" dump badging build/app/outputs/flutter-apk/app-debug.apk > /tmp/dogreader-apk-badging.txt
+          head -1 /tmp/dogreader-apk-badging.txt
+          grep -Fq "package: name='com.example.audiobook_app' versionCode='124'" /tmp/dogreader-apk-badging.txt
+          sha256sum build/app/outputs/flutter-apk/app-debug.apk
 
       - name: Upload original Dogreader update APK
         if: steps.signing.outputs.available == 'true'
@@ -111,3 +126,4 @@ jobs:
           path: build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
           retention-days: 14
+
