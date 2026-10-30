@@ -1969,7 +1969,8 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
 
   Future<void> restore() async {
     final generation = ++_restoreGeneration;
-    bool active() => mounted && generation == _restoreGeneration;
+    bool active() => mounted && generation == _restoreGeneration &&
+        (ModalRoute.of(context)?.isCurrent ?? true);
     try {
       final data = await readState();
       final entry = data[chapterKey];

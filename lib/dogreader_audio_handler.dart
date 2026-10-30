@@ -50,8 +50,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
       Future<Directory> Function()? documentsDirectory})
       : player = player ?? AudioPlayer(),
         _documentsDirectory = documentsDirectory ?? getApplicationDocumentsDirectory {
-    final player = this.player;
-    player.positionStream.listen((position) {
+    this.player.positionStream.listen((position) {
       if (_chapterKey == null) return;
       final second = position.inSeconds;
       if (second != _lastSavedSecond && second % 5 == 0) {
@@ -59,15 +58,15 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
         _savePosition(position);
       }
     });
-    player.processingStateStream.listen((state) {
+    this.player.processingStateStream.listen((state) {
       if (state == ProcessingState.completed) {
         _advanceToNextChapter();
       }
     });
-    player.playbackEventStream.listen((_) => _broadcastPlaybackState());
+    this.player.playbackEventStream.listen((_) => _broadcastPlaybackState());
     // Playing can change without a playback event. Keep Android's media
     // session in sync so it advertises the correct play/pause action.
-    player.playerStateStream.listen((_) => _broadcastPlaybackState());
+    this.player.playerStateStream.listen((_) => _broadcastPlaybackState());
   }
 
   void _broadcastPlaybackState() {
@@ -183,8 +182,9 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
 
   Future<void> unloadChapter(String bookId, int index) async {
     if (_chapterKey != '$bookId:$index') return;
-    ++_loadGeneration;
+    final generation = ++_loadGeneration;
     await stop();
+    if (generation != _loadGeneration) return;
     _chapterKey = null;
     _bookId = null;
     _chapterIndex = null;

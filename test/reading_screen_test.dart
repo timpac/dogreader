@@ -9,7 +9,7 @@ void main() {
     final book = ImportedBook('Book', 'Author', [ReaderChapter('One', text, []), const ReaderChapter('Two', 'Second chapter', [])], 'book', null);
     await tester.pumpWidget(MaterialApp(home: ReadingScreen(book: book,
       chapterIndex: 0, initialOffset: 2537,
-      onSave: (_, offset) => saves.add(offset))));
+      onSave: (_, offset) async { saves.add(offset); })));
     await tester.pumpAndSettle();
     final dynamic state = tester.state(find.byType(ReadingScreen));
     expect(state.currentOffset, state.starts[state.currentPage]);
