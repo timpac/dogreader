@@ -52,6 +52,12 @@ jobs:
           cp /tmp/candidate-handler.dart lib/dogreader_audio_handler.dart
           flutter build apk --debug --target-platform android-x64 --target test/support/media_control_probe.dart --build-number 125
           cp build/app/outputs/flutter-apk/app-debug.apk /tmp/candidate-probe.apk
+      - name: Build native instrumentation helper and release Gradle memory
+        working-directory: android
+        run: |
+          ./gradlew app:assembleDebugAndroidTest -Ptarget="$GITHUB_WORKSPACE/test/support/media_control_probe.dart" -Ptarget-platform=android-x64
+          cp ../build/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk /tmp/media-controls-instrumentation.apk
+          ./gradlew --stop
       - name: Enable KVM for the isolated emulator
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -65,8 +71,8 @@ jobs:
           arch: x86_64
           disable-animations: true
           script: |
-            python3 tools/check_android_media_controls.py --apk /tmp/baseline-probe.apk --report /tmp/baseline-native-report.json || echo 'Baseline native check failed; inspect its report.'
-            python3 tools/check_android_media_controls.py --apk /tmp/candidate-probe.apk --report /tmp/candidate-native-report.json
+            python3 tools/check_android_media_controls.py --apk /tmp/baseline-probe.apk --instrumentation-apk /tmp/media-controls-instrumentation.apk --report /tmp/baseline-native-report.json || echo 'Baseline native check failed; inspect its report.'
+            python3 tools/check_android_media_controls.py --apk /tmp/candidate-probe.apk --instrumentation-apk /tmp/media-controls-instrumentation.apk --report /tmp/candidate-native-report.json
       - name: Summarize both results
         if: always()
         run: |

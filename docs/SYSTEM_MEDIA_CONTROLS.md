@@ -4,8 +4,8 @@ This change is based on build 124 source, commit
 `6aadd2a12d17a4842d9d5b7015dbc24a24e56640`, rather than the older default branch.
 The user has confirmed build 124: notification and lock-screen controls flash
 on touch but do not affect playback. The same symptom occurred around build
-119. Phone model, Android version, and whether in-app controls work remain
-unconfirmed.
+119. In-app controls still work; the failure is confined to notification and
+lock-screen controls. Phone model and Android version remain unconfirmed.
 Build 119 already added a player-state listener; adding that listener again is
 not the repair here.
 
@@ -52,8 +52,8 @@ MediaSession, notification rendering, or PendingIntent delivery.
 
 ## Required device verification before calling the reported issue fixed
 
-Build 124 and ignored system-control touches are confirmed. Record phone model,
-Android version, and whether in-app controls still work. Do not uninstall the app or
+Build 124 and ignored system-control touches are confirmed. Record phone model
+and Android version. In-app controls are confirmed working. Do not uninstall the app or
 clear its storage: that risks local books and recordings. Use an update signed
 with the existing key and a higher version code when an APK is prepared.
 
@@ -87,18 +87,33 @@ The test entrypoint records command counters and observed playback state while
 playing a bounded, locally generated WAV tone. It makes no cloud request and
 reads no existing recording.
 
-The host script first checks media-key delivery, then physically taps Play,
-Pause, Rewind and Fast Forward in Android System UI using accessibility bounds.
+Native instrumentation connects explicitly to DogReader's own media session,
+checks its transport, then physically taps Play, Pause, Rewind and Fast Forward
+in Android System UI using accessibility bounds. It reads the current window
+directly rather than requiring an idle UI dump while the seek bar is updating.
 It repeats Play/Pause with the lock screen visible and after Stop/restart. A tap
 passes only if the handler receives the command and the real player changes
 state or position. Tests use an isolated `.test` package, an ephemeral signing
 key, and an emulator; the script refuses a physical phone or another APK package.
+
+The instrumentation runs the whole case in one session: starting a separate
+instrumentation for each query would restart the target app. The separate helper
+APK has test-only AndroidX dependencies; the shipped runtime dependencies and
+signing configuration are unchanged. Twelve stages must report receipt and
+observed player/session response, including the locked-screen checks.
 
 The baseline result is reported separately and may fail; the candidate check is
 required. A baseline pass means the reported phone symptom was not reproduced
 on that emulator and must not be presented as a proven fix. The harness does
 not exercise every production screen or OEM power-management policy. No APK is
 uploaded, published, or installed on the user's phone by this job.
+
+An early native attempt did not establish the reported touch failure: a global
+media-key command was not observed by the baseline handler, while the candidate
+accepted direct commands but the CLI accessibility dump failed before a touch
+could be tested. The instrumentation replaces both ambiguous mechanisms. An
+earlier runner also exhausted disk space before starting the emulator; runner
+disk preparation is now explicit.
 
 ## Diagnosing a remaining failure
 
