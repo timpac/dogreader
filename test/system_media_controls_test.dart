@@ -201,5 +201,12 @@ void main() {
     expect(player.playing, isFalse);
     expect(handler.playbackState.value.playing, isFalse);
     expect(handler.playbackState.value.processingState, AudioProcessingState.idle);
+    // A source that finishes preparing after Stop must retain matching
+    // metadata. If replay is requested later it must not play chapter 2
+    // while Android still announces chapter 1.
+    expect(handler.mediaItem.value?.id, 'book:1');
+    await handler.play();
+    expect((player.audioSource as UriAudioSource).uri.path, endsWith('book_1.mp3'));
+    expect(handler.mediaItem.value?.id, 'book:1');
   });
 }

@@ -12,6 +12,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
   final Future<Directory> Function() _documentsDirectory;
   int _loadGeneration = 0;
   int _transportGeneration = 0;
+  int _stopGeneration = 0;
   bool _stopped = true;
   bool _disposed = false;
   int? _playbackError;
@@ -148,8 +149,9 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     _advancing = true;
     final generation = _loadGeneration;
     final transport = _transportGeneration;
-    bool current() => generation == _loadGeneration && !_stopped;
-    bool continuePlaying() => current() && transport == _transportGeneration;
+    bool current() => generation == _loadGeneration;
+    bool continuePlaying() => current() && !_stopped &&
+        transport == _transportGeneration;
     var startNext = false;
     try {
       // At EOF just_audio retains playing=true. End in a resumable paused
@@ -210,7 +212,9 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
   }) async {
     final generation = ++_loadGeneration;
     ++_transportGeneration;
-    bool active() => generation == _loadGeneration && (isCurrent?.call() ?? true);
+    final stopped = _stopGeneration;
+    bool active() => generation == _loadGeneration &&
+        stopped == _stopGeneration && (isCurrent?.call() ?? true);
     if (!active()) return;
     final key = '$bookId:$chapterIndex';
     if (!forceReload && mediaItem.value?.id == key && player.audioSource != null) {
@@ -247,7 +251,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
 
   Future<void> unloadChapter(String bookId, int index) async {
     if (_chapterKey != '$bookId:$index') return;
-    final generation = _loadGeneration + 1;
+    final generation = ++_loadGeneration;
     await stop();
     if (generation != _loadGeneration) return;
     _chapterKey = null;
@@ -294,7 +298,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
   Future<void> stop() async {
     _logCommand('stop');
     ++_transportGeneration;
-    ++_loadGeneration;
+    ++_stopGeneration;
     _stopped = true;
     _playbackError = null;
     // Never leave idle+playing=true in Android, even if the native player
@@ -341,6 +345,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
 
   Future<void> dispose() async {
     if (_disposed) return;
+    ++_loadGeneration;
     await stop();
     _disposed = true;
     for (final subscription in _subscriptions) {
