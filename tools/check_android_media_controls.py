@@ -71,14 +71,21 @@ def command(label, method, playing=None, direction=0):
     before = snapshot()
     count = before['commands'].get(method, 0)
     tap(label)
-    after = wait_for(lambda state: state['commands'].get(method, 0) > count and
-                     (playing is None or state['playing'] == playing) and
-                     (playing is None or state['sessionPlaying'] == playing))
-    if direction:
-        # Compare with position at callback entry, excluding UI dump/tap delay.
-        delta = after['positionMs'] - after['commandPositionsMs'][method]
-        if direction * delta < 10000:
-            raise AssertionError(f'{label} delivered but position did not move: {delta}')
+
+    def applied(state):
+        if state['commands'].get(method, 0) <= count:
+            return False
+        if playing is not None and (state['playing'] != playing or
+                                    state['sessionPlaying'] != playing):
+            return False
+        # Command arrival precedes asynchronous native seek completion.
+        # Wait for the actual movement, measured from callback entry.
+        if direction:
+            origin = state['commandPositionsMs'].get(method)
+            return origin is not None and direction * (state['positionMs'] - origin) >= 10000
+        return True
+
+    after = wait_for(applied)
     print(json.dumps({'control': label, 'received': method,
                       'playing': after['playing'], 'positionMs': after['positionMs']}), flush=True)
 
