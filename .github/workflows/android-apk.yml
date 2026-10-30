@@ -130,23 +130,9 @@ jobs:
           grep -Fq "package: name='com.example.audiobook_app' versionCode='$DOGREADER_BUILD_NUMBER'" /tmp/dogreader-apk-badging.txt
           sha256sum build/app/outputs/flutter-apk/app-debug.apk
 
-      - name: Name verified white-theme test APK
-        if: steps.signing.outputs.available == 'true' && github.ref_name == 'build/white-theme-125'
-        run: cp build/app/outputs/flutter-apk/app-debug.apk build/app/outputs/flutter-apk/Dogreader-125-white-theme.apk
-
-      - name: Upload signed white-theme test APK
-        if: steps.signing.outputs.available == 'true' && github.ref_name == 'build/white-theme-125'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: Dogreader-125-white-theme-original-key
-          path: build/app/outputs/flutter-apk/Dogreader-125-white-theme.apk
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 14
-
-      - name: Upload verified APK to draft GitHub Release
+      - name: Upload verified APK to private draft GitHub Release
         id: draft_release
-        if: steps.signing.outputs.available == 'true' && github.ref_name != 'build/white-theme-125'
+        if: steps.signing.outputs.available == 'true'
         uses: actions/github-script@v7
         with:
           script: |
@@ -154,9 +140,10 @@ jobs:
             const crypto = require('crypto');
             const { owner, repo } = context.repo;
             const source = 'build/app/outputs/flutter-apk/app-debug.apk';
-            const name = 'Dogreader-124.apk';
-            const title = 'Dogreader 124';
-            const preferredTag = 'dogreader-124';
+            const whiteTheme = process.env.DOGREADER_BUILD_NUMBER === '125';
+            const name = whiteTheme ? 'Dogreader-125-white-theme.apk' : 'Dogreader-124.apk';
+            const title = whiteTheme ? 'Dogreader 125 white theme test' : 'Dogreader 124';
+            const preferredTag = whiteTheme ? 'dogreader-125-white-theme' : 'dogreader-124';
             const data = fs.readFileSync(source);
             const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
             const expected = digest(data);
@@ -165,7 +152,7 @@ jobs:
             let release = releases.find(item => item.tag_name === preferredTag);
             if (!release) {
               const named = releases.filter(item => item.name === title);
-              if (named.length > 1) fail('Multiple Dogreader 124 releases exist; refusing an ambiguous upload.');
+              if (named.length > 1) fail(`Multiple ${title} releases exist; refusing an ambiguous upload.`);
               release = named[0];
             }
             const tag = release?.tag_name ?? preferredTag;
@@ -200,7 +187,7 @@ jobs:
               release = (await github.rest.repos.createRelease({
                 owner, repo, tag_name: tag, target_commitish: context.sha, name: title,
                 draft: true, prerelease: false, make_latest: 'false',
-                body: `Build 124, original Dogreader signing identity.\n\nSource: ${context.sha}\nWorkflow: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}\n\nAutomated analysis, regression tests, APK signature and package/version checks passed. Physical Android validation remains outstanding.`
+                body: `Build ${process.env.DOGREADER_BUILD_NUMBER}, original Dogreader signing identity.\n\nApp source: ${whiteTheme ? '8953bbedd413bb347419e4e6bfe914300a3e6af1' : context.sha}\nWorkflow source: ${context.sha}\nWorkflow: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}\n\n${whiteTheme ? 'Reuses successful white-theme validation run 41140280746 (27 tests); analysis and tests were not rerun. APK signature and package/version checks passed.' : 'Automated analysis, regression tests, APK signature and package/version checks passed.'} Physical Android validation remains outstanding.`
               })).data;
               assertDraft(release);
             }
@@ -236,7 +223,7 @@ jobs:
               .addLink(title, release.html_url)
               .addTable([
                 [{ data: 'APK', header: true }, { data: 'Value', header: true }],
-                ['Filename', name], ['Version code', '124'], ['Package', 'com.example.audiobook_app'],
+                ['Filename', name], ['Version code', process.env.DOGREADER_BUILD_NUMBER], ['Package', 'com.example.audiobook_app'],
                 ['Source commit', context.sha], ['Asset ID', String(asset.id)], ['APK SHA-256', expected],
                 ['Release visibility', 'Draft; not published']
               ]).write();
