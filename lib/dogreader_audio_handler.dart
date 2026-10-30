@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:audio_service/audio_service.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:just_audio/just_audio.dart';
 
@@ -9,6 +11,11 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
   final AudioPlayer player;
   final Future<Directory> Function() _documentsDirectory;
   int _loadGeneration = 0;
+  int _transportGeneration = 0;
+  bool _stopped = true;
+  bool _disposed = false;
+  int? _playbackError;
+  final List<StreamSubscription<dynamic>> _subscriptions = [];
   String? _chapterKey;
   String? _bookId;
   int? _chapterIndex;
@@ -50,73 +57,121 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
       Future<Directory> Function()? documentsDirectory})
       : player = player ?? AudioPlayer(),
         _documentsDirectory = documentsDirectory ?? getApplicationDocumentsDirectory {
-    this.player.positionStream.listen((position) {
-      if (_chapterKey == null) return;
+    _subscriptions.add(this.player.positionStream.listen((position) {
+      if (_chapterKey == null || _stopped) return;
       final second = position.inSeconds;
       if (second != _lastSavedSecond && second % 5 == 0) {
         _lastSavedSecond = second;
         _savePosition(position);
       }
-    });
-    this.player.processingStateStream.listen((state) {
-      if (state == ProcessingState.completed) {
-        _advanceToNextChapter();
+    }));
+    _subscriptions.add(this.player.processingStateStream.listen((state) {
+      if (state == ProcessingState.completed && !_stopped) {
+        unawaited(_advanceToNextChapter());
       }
-    });
-    this.player.playbackEventStream.listen((_) => _broadcastPlaybackState());
+    }));
+    _subscriptions.add(this.player.playbackEventStream.listen(
+      (_) => _broadcastPlaybackState(), onError: _recordPlaybackError));
     // Playing can change without a playback event. Keep Android's media
     // session in sync so it advertises the correct play/pause action.
-    this.player.playerStateStream.listen((_) => _broadcastPlaybackState());
+    _subscriptions.add(this.player.playerStateStream.listen((_) => _broadcastPlaybackState()));
+    _subscriptions.add(this.player.speedStream.listen((_) => _broadcastPlaybackState()));
+    _subscriptions.add(this.player.durationStream.listen((duration) {
+      final item = mediaItem.value;
+      if (item != null && duration != null && duration > Duration.zero &&
+          item.duration != duration) {
+        mediaItem.add(item.copyWith(duration: duration));
+      }
+      _broadcastPlaybackState();
+    }));
+    _subscriptions.add(this.player.errorStream.listen(_recordPlaybackError));
+  }
+
+  void _logCommand(String command) {
+    debugPrint(jsonEncode({
+      'event': 'dogreader_media_command', 'command': command,
+      'chapter': _chapterKey, 'playing': player.playing,
+      'processing': player.processingState.name,
+    }));
+  }
+
+  void _recordPlaybackError(Object error) {
+    if (_disposed) return;
+    _playbackError = error is PlayerException ? error.code : -1;
+    debugPrint(jsonEncode({'event': 'dogreader_media_error',
+      'chapter': _chapterKey, 'error_type': error.runtimeType.toString(),
+      'code': _playbackError}));
+    _broadcastPlaybackState();
   }
 
   void _broadcastPlaybackState() {
+      if (_disposed) return;
+      final playing = !_stopped && _playbackError == null && player.playing &&
+          player.processingState != ProcessingState.completed &&
+          player.processingState != ProcessingState.idle;
       playbackState.add(
         playbackState.value.copyWith(
           controls: [
             MediaControl.rewind,
-            player.playing ? MediaControl.pause : MediaControl.play,
+            playing ? MediaControl.pause : MediaControl.play,
             MediaControl.fastForward,
             MediaControl.stop,
           ],
           systemActions: const {MediaAction.seek},
           androidCompactActionIndices: const [0, 1, 2],
-          processingState: switch (player.processingState) {
+          processingState: _stopped ? AudioProcessingState.idle
+              : _playbackError != null ? AudioProcessingState.error
+              : switch (player.processingState) {
             ProcessingState.idle => AudioProcessingState.idle,
             ProcessingState.loading => AudioProcessingState.loading,
             ProcessingState.buffering => AudioProcessingState.buffering,
             ProcessingState.ready => AudioProcessingState.ready,
             ProcessingState.completed => AudioProcessingState.completed,
           },
-          playing: player.playing,
+          playing: playing,
           updatePosition: player.position,
           bufferedPosition: player.bufferedPosition,
           speed: player.speed,
+          errorCode: _stopped ? null : _playbackError,
+          errorMessage: !_stopped && _playbackError != null
+              ? 'Recording could not be played. Reopen the chapter or replace its MP3.'
+              : null,
         ),
       );
   }
 
   Future<void> _advanceToNextChapter() async {
-    if (_advancing || _bookId == null || _chapterIndex == null ||
+    if (_advancing || _stopped || _bookId == null || _chapterIndex == null ||
         _chapterCount == null || _author == null) {
       return;
     }
-    final nextIndex = _chapterIndex! + 1;
-    if (nextIndex >= _chapterCount!) return;
     _advancing = true;
     final generation = _loadGeneration;
+    final transport = _transportGeneration;
+    bool current() => generation == _loadGeneration && !_stopped;
+    bool continuePlaying() => current() && transport == _transportGeneration;
+    var startNext = false;
     try {
+      // At EOF just_audio retains playing=true. End in a resumable paused
+      // state even when this is the last chapter or the next file is missing.
+      await player.pause();
+      _broadcastPlaybackState();
+      if (!continuePlaying()) return;
+      final nextIndex = _chapterIndex! + 1;
+      if (nextIndex >= _chapterCount!) return;
       final root = await _documentsDirectory();
+      if (!continuePlaying()) return;
       final next = File('${root.path}/narration/${_bookId!}_$nextIndex.mp3');
       if (!await next.exists() || await next.length() == 0) return;
       final oldKey = _chapterKey;
       await _savePosition(Duration.zero);
       await _pendingSave;
-      if (_chapterKey != oldKey || generation != _loadGeneration) return;
+      if (_chapterKey != oldKey || !continuePlaying()) return;
       final bookId = _bookId!;
       final author = _author!;
       final count = _chapterCount!;
       await player.setFilePath(next.path, initialPosition: Duration.zero);
-      if (generation != _loadGeneration) return;
+      if (!current()) return;
       _chapterKey = '$bookId:$nextIndex';
       _chapterIndex = nextIndex;
       _lastSavedSecond = -1;
@@ -128,11 +183,17 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
         duration: player.duration,
       ));
       _chapterCount = count;
-      await player.play();
-    } catch (_) {
-      // Missing or unreadable next chapters should stop gracefully.
+      _broadcastPlaybackState();
+      startNext = continuePlaying();
+    } catch (error) {
+      if (current()) _recordPlaybackError(error);
     } finally {
       _advancing = false;
+    }
+    // play() completes only at pause/end. Holding _advancing until that
+    // Future completes drops the following chapter's completion event.
+    if (startNext && continuePlaying()) {
+      unawaited(_startPlayback().catchError(_recordPlaybackError));
     }
   }
 
@@ -148,6 +209,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     bool Function()? isCurrent,
   }) async {
     final generation = ++_loadGeneration;
+    ++_transportGeneration;
     bool active() => generation == _loadGeneration && (isCurrent?.call() ?? true);
     if (!active()) return;
     final key = '$bookId:$chapterIndex';
@@ -161,6 +223,8 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     if (!active()) return;
     _chapterKey = null;
     mediaItem.add(null);
+    _stopped = false;
+    _playbackError = null;
     await player.setFilePath(path, initialPosition: startPosition);
     if (!active()) return;
     _chapterKey = key;
@@ -178,11 +242,12 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
         duration: player.duration,
       ),
     );
+    _broadcastPlaybackState();
   }
 
   Future<void> unloadChapter(String bookId, int index) async {
     if (_chapterKey != '$bookId:$index') return;
-    final generation = ++_loadGeneration;
+    final generation = _loadGeneration + 1;
     await stop();
     if (generation != _loadGeneration) return;
     _chapterKey = null;
@@ -192,29 +257,69 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
   }
 
   @override
-  Future<void> play() => player.play();
+  Future<void> play() async {
+    _logCommand('play');
+    ++_transportGeneration;
+    if (_chapterKey == null || player.audioSource == null) return;
+    _stopped = false;
+    _playbackError = null;
+    try {
+      if (player.processingState == ProcessingState.completed) {
+        await player.seek(Duration.zero);
+      }
+      await _startPlayback();
+    } catch (error) {
+      _recordPlaybackError(error);
+      rethrow;
+    }
+  }
+
+  Future<void> _startPlayback() async {
+    final playing = player.play();
+    _broadcastPlaybackState();
+    await playing;
+    _broadcastPlaybackState();
+  }
 
   @override
   Future<void> pause() async {
+    _logCommand('pause');
+    ++_transportGeneration;
     await player.pause();
+    _broadcastPlaybackState();
     await _savePosition(player.position);
   }
 
   @override
   Future<void> stop() async {
-    await _savePosition(player.position);
-    await player.stop();
-    await super.stop();
+    _logCommand('stop');
+    ++_transportGeneration;
+    ++_loadGeneration;
+    _stopped = true;
+    _playbackError = null;
+    // Never leave idle+playing=true in Android, even if the native player
+    // emits no event. Stop immediately instead of waiting on a disk write.
+    _broadcastPlaybackState();
+    final saved = _savePosition(player.position);
+    try {
+      await player.stop();
+    } finally {
+      _broadcastPlaybackState();
+      await saved;
+    }
   }
 
   @override
   Future<void> seek(Duration position) async {
+    _logCommand('seek');
+    ++_transportGeneration;
     final end = player.duration;
     var target = position < Duration.zero ? Duration.zero : position;
-    if (end != null && target > end) target = end;
+    if (end != null && end > Duration.zero && target > end) target = end;
     final key = _chapterKey;
     final generation = _loadGeneration;
     await player.seek(target);
+    _broadcastPlaybackState();
     if (key == _chapterKey && generation == _loadGeneration) {
       await _savePosition(player.position);
     }
@@ -228,6 +333,19 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
       seek(player.position + const Duration(seconds: 30));
 
   @override
-  Future<void> setSpeed(double speed) => player.setSpeed(speed);
-}
+  Future<void> setSpeed(double speed) async {
+    _logCommand('speed');
+    await player.setSpeed(speed);
+    _broadcastPlaybackState();
+  }
 
+  Future<void> dispose() async {
+    if (_disposed) return;
+    await stop();
+    _disposed = true;
+    for (final subscription in _subscriptions) {
+      await subscription.cancel();
+    }
+    await player.dispose();
+  }
+}

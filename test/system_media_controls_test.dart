@@ -41,8 +41,7 @@ void main() {
   });
 
   tearDown(() async {
-    await handler.pause();
-    await player.dispose();
+    await handler.dispose();
     await root.delete(recursive: true);
   });
 
@@ -56,6 +55,34 @@ void main() {
     await flush();
     expect(handler.playbackState.value.playing, isFalse);
     expect(handler.playbackState.value.controls[1], MediaControl.play);
+  });
+
+  test('media-button toggle dispatches through the published playing state', () async {
+    await load();
+    await handler.click();
+    expect(player.playing, isTrue);
+    await handler.click();
+    expect(player.playing, isFalse);
+    player.position = player.duration!;
+    player.processingState = ProcessingState.completed;
+    player.emitState();
+    await flush();
+    await handler.click();
+    expect(player.position, Duration.zero);
+    expect(player.playing, isTrue);
+  });
+
+  test('notification seeks clamp at zero and the known end', () async {
+    await load();
+    player.duration = null;
+    await handler.rewind();
+    expect(player.position, Duration.zero);
+    player.duration = const Duration(seconds: 20);
+    player.position = const Duration(seconds: 15);
+    await handler.fastForward();
+    expect(player.position, const Duration(seconds: 20));
+    await handler.seek(const Duration(seconds: -10));
+    expect(player.position, Duration.zero);
   });
 
   test('stop publishes idle and not-playing even without a native event', () async {
@@ -157,5 +184,22 @@ void main() {
     await flush();
     expect(player.playing, isFalse);
     expect(handler.playbackState.value.playing, isFalse);
+  });
+
+  test('stop during next preparation cannot resurrect the media session', () async {
+    await Directory('${root.path}/narration').create();
+    await File('${root.path}/narration/book_1.mp3').writeAsBytes([1]);
+    await load(count: 2);
+    await handler.play();
+    player.preparing = Completer<void>();
+    player.complete();
+    await waitFor(() => player.loads == 2);
+    await handler.stop();
+    player.preparing!.complete();
+    await flush();
+    await flush();
+    expect(player.playing, isFalse);
+    expect(handler.playbackState.value.playing, isFalse);
+    expect(handler.playbackState.value.processingState, AudioProcessingState.idle);
   });
 }
