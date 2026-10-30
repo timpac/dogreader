@@ -14,6 +14,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:audio_service/audio_service.dart';
 
 import 'dogreader_audio_handler.dart';
+import 'app_theme.dart';
+export 'app_theme.dart' show background, panel, accent;
 
 import 'reader_content.dart';
 export 'reader_content.dart' show ReaderChapter, StyledRange;
@@ -37,9 +39,6 @@ Future<void> main() async {
   runApp(const AudiobookApp());
 }
 
-const background = Color(0xFF10131A);
-const panel = Color(0xFF202638);
-const accent = Color(0xFFB7A6F6);
 // Set by GitHub Actions at build time; visible on the library home screen.
 const dogreaderBuild = String.fromEnvironment('DOGREADER_BUILD', defaultValue: 'DEV');
 
@@ -48,24 +47,13 @@ class AudiobookApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = dogreaderLightTheme();
     return MaterialApp(
       title: 'Dogreader',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        textTheme: GoogleFonts.urbanistTextTheme(
-          ThemeData(brightness: Brightness.dark).textTheme,
-        ),
-        primaryTextTheme: GoogleFonts.urbanistTextTheme(
-          ThemeData(brightness: Brightness.dark).primaryTextTheme,
-        ),
-        brightness: Brightness.dark,
-        scaffoldBackgroundColor: background,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: accent,
-          brightness: Brightness.dark,
-          surface: const Color(0xFF1A1F2A),
-        ),
+      theme: theme.copyWith(
+        textTheme: GoogleFonts.urbanistTextTheme(theme.textTheme),
+        primaryTextTheme: GoogleFonts.urbanistTextTheme(theme.primaryTextTheme),
       ),
       home: const LibraryScreen(),
     );
@@ -451,7 +439,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
       bottomNavigationBar: NavigationBar(
         selectedIndex: selectedTab,
         onDestinationSelected: (value) => setState(() => selectedTab = value),
-        backgroundColor: const Color(0xFF1A1F2A),
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.library_books_outlined),
@@ -477,23 +464,27 @@ class _LibraryScreenState extends State<LibraryScreen> {
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 22),
       children: [
-        const Text(
+        Text(
           'Your library',
-          style: TextStyle(fontSize: 34, fontWeight: FontWeight.bold),
+          style: Theme.of(context).textTheme.headlineLarge?.copyWith(
+            fontSize: 34,
+            fontWeight: FontWeight.w600,
+            fontFamily: 'serif',
+            letterSpacing: -0.5,
+          ),
         ),
         const SizedBox(height: 8),
-        Text(
+        const Text(
           "I'm not surprised you're reading that, because you're stupid.",
           style: TextStyle(
             fontSize: 15,
-            color: Colors.white.withValues(alpha: 0.65),
+            color: textSecondary,
           ),
         ),
         const SizedBox(height: 26),
         if (books.isEmpty) _emptyLibrary(),
         for (final book in books)
           Card(
-            color: panel,
             margin: const EdgeInsets.only(bottom: 14),
             child: ListTile(
               contentPadding: const EdgeInsets.all(15),
@@ -546,11 +537,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 )
               : const Icon(Icons.add_rounded),
           label: Text(importing ? 'Importing…' : 'Import a book'),
-          style: FilledButton.styleFrom(
-            minimumSize: const Size.fromHeight(52),
-            backgroundColor: accent,
-            foregroundColor: const Color(0xFF171321),
-          ),
+          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
         ),
 
       ],
@@ -564,7 +551,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
       decoration: BoxDecoration(
         color: panel,
         borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: const Color(0xFF353D54)),
+        border: Border.all(color: divider),
       ),
       child: Column(
         children: [
@@ -576,12 +563,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
             style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 10),
-          Text(
+          const Text(
             'Import an EPUB, browse its chapters, and start reading.',
             textAlign: TextAlign.center,
             style: TextStyle(
               height: 1.5,
-              color: Colors.white.withValues(alpha: 0.72),
+              color: textSecondary,
             ),
           ),
         ],
@@ -640,7 +627,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
             Text(
               subtitle,
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white.withValues(alpha: 0.65)),
+              style: const TextStyle(color: textSecondary),
             ),
           ],
         ),
@@ -705,7 +692,6 @@ class ChapterListScreen extends StatelessWidget {
               itemBuilder: (context, row) {
                 if (saved != null && row == 0) {
                   return Card(
-                    color: panel,
                     child: ListTile(
                       leading: const Icon(Icons.bookmark, color: accent),
                       title: const Text('Continue reading'),
@@ -750,7 +736,6 @@ class ChapterListScreen extends StatelessWidget {
                     child: LinearProgressIndicator(
                       value: fraction,
                       minHeight: 3,
-                      backgroundColor: Colors.white12,
                       color: accent,
                     ),
                   ),
@@ -1490,7 +1475,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
       );
     }
     return TextSpan(
-      style: TextStyle(fontSize: fontSize, height: 1.55, color: Colors.white),
+      style: TextStyle(fontSize: fontSize, height: 1.55, color: textPrimary),
       children: children,
     );
   }
@@ -1843,9 +1828,9 @@ class _ReadingScreenState extends State<ReadingScreen> {
                             '${currentPage + 1} / ${pages.length}  •  Tap to jump',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
+                            style: const TextStyle(
                               fontSize: 12,
-                              color: Colors.white.withValues(alpha: 0.75),
+                              color: textSecondary,
                             ),
                           ),
                         ),
@@ -2280,7 +2265,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
                     padding: const EdgeInsets.only(top: 18),
                     child: Text(
                       error!,
-                      style: const TextStyle(color: Colors.orangeAccent),
+                      style: TextStyle(color: Theme.of(context).colorScheme.error),
                     ),
                   ),
               ],
@@ -2291,4 +2276,5 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
     );
   }
 }
+
 
