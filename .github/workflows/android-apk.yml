@@ -27,6 +27,12 @@ permissions:
 
 jobs:
   dogreader-update:
+    # GitHub Releases and their assets require contents: write; no other scopes.
+    permissions:
+      contents: write
+    concurrency:
+      group: dogreader-draft-release-124
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -118,12 +124,99 @@ jobs:
           grep -Fq "package: name='com.example.audiobook_app' versionCode='124'" /tmp/dogreader-apk-badging.txt
           sha256sum build/app/outputs/flutter-apk/app-debug.apk
 
-      - name: Upload original Dogreader update APK
+      - name: Upload verified APK to draft GitHub Release
+        id: draft_release
         if: steps.signing.outputs.available == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/github-script@v7
         with:
-          name: Dogreader-124-original-key
-          path: build/app/outputs/flutter-apk/app-debug.apk
-          if-no-files-found: error
-          retention-days: 14
-
+          script: |
+            const fs = require('fs');
+            const crypto = require('crypto');
+            const { owner, repo } = context.repo;
+            const source = 'build/app/outputs/flutter-apk/app-debug.apk';
+            const name = 'Dogreader-124.apk';
+            const title = 'Dogreader 124';
+            const preferredTag = 'dogreader-124';
+            const data = fs.readFileSync(source);
+            const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+            const expected = digest(data);
+            const fail = message => { throw new Error(message); };
+            const releases = await github.paginate(github.rest.repos.listReleases, { owner, repo, per_page: 100 });
+            let release = releases.find(item => item.tag_name === preferredTag);
+            if (!release) {
+              const named = releases.filter(item => item.name === title);
+              if (named.length > 1) fail('Multiple Dogreader 124 releases exist; refusing an ambiguous upload.');
+              release = named[0];
+            }
+            const tag = release?.tag_name ?? preferredTag;
+            let tagCommit;
+            let tagRef;
+            try {
+              tagRef = (await github.rest.git.getRef({ owner, repo, ref: `tags/${tag}` })).data;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+            if (tagRef) {
+              let object = tagRef.object;
+              for (let depth = 0; object.type === 'tag' && depth < 8; depth++) {
+                object = (await github.rest.git.getTag({ owner, repo, tag_sha: object.sha })).data.object;
+              }
+              if (object.type !== 'commit' || object.sha !== context.sha) {
+                fail(`Tag ${tag} does not point to this workflow commit; it will not be moved or overwritten.`);
+              }
+              tagCommit = object.sha;
+            }
+            const assertDraft = item => {
+              if (!item.draft || item.name !== title || item.tag_name !== tag) {
+                fail('The existing release is public or has conflicting metadata; refusing to modify it.');
+              }
+              if (item.target_commitish !== context.sha && tagCommit !== context.sha) {
+                fail('The existing draft targets another commit; refusing to attach a different build.');
+              }
+            };
+            if (release) {
+              assertDraft(release);
+            } else {
+              release = (await github.rest.repos.createRelease({
+                owner, repo, tag_name: tag, target_commitish: context.sha, name: title,
+                draft: true, prerelease: false, make_latest: 'false',
+                body: `Build 124, original Dogreader signing identity.\n\nSource: ${context.sha}\nWorkflow: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}\n\nAutomated analysis, regression tests, APK signature and package/version checks passed. Physical Android validation remains outstanding.`
+              })).data;
+              assertDraft(release);
+            }
+            // Never publish a release or replace any existing asset, including on reruns.
+            release = (await github.rest.repos.getRelease({ owner, repo, release_id: release.id })).data;
+            assertDraft(release);
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets, { owner, repo, release_id: release.id, per_page: 100 });
+            let asset = assets.find(item => item.name === name);
+            if (!asset) {
+              fs.copyFileSync(source, `build/app/outputs/flutter-apk/${name}`);
+              asset = (await github.rest.repos.uploadReleaseAsset({
+                owner, repo, release_id: release.id, name, data,
+                headers: { 'content-type': 'application/vnd.android.package-archive', 'content-length': data.length }
+              })).data;
+            }
+            if (asset.state !== 'uploaded' || asset.size !== data.length) {
+              fail(`Asset ${name} is incomplete or conflicts with this APK; no assets were overwritten.`);
+            }
+            const downloaded = await github.rest.repos.getReleaseAsset({
+              owner, repo, asset_id: asset.id, headers: { accept: 'application/octet-stream' }
+            });
+            const received = Buffer.from(downloaded.data);
+            if (digest(received) !== expected) {
+              fail(`Asset ${name} has different bytes; no assets were overwritten.`);
+            }
+            release = (await github.rest.repos.getRelease({ owner, repo, release_id: release.id })).data;
+            assertDraft(release);
+            core.setOutput('release_url', release.html_url);
+            core.setOutput('release_id', release.id);
+            core.setOutput('asset_id', asset.id);
+            core.notice(`Verified draft APK ready: ${release.html_url} (asset ${asset.id}, SHA-256 ${expected})`);
+            await core.summary.addHeading('Verified draft APK ready')
+              .addLink(title, release.html_url)
+              .addTable([
+                [{ data: 'APK', header: true }, { data: 'Value', header: true }],
+                ['Filename', name], ['Version code', '124'], ['Package', 'com.example.audiobook_app'],
+                ['Source commit', context.sha], ['Asset ID', String(asset.id)], ['APK SHA-256', expected],
+                ['Release visibility', 'Draft; not published']
+              ]).write();
