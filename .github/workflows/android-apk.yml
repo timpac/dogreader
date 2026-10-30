@@ -13,6 +13,7 @@ on:
       - feature/122-delete-chapter-audio
       - feature/123-audio-recovery-controls
       - feature/124-css-audio-seek
+      - build/white-theme-125
     paths:
       - 'lib/**'
       - 'test/**'
@@ -31,15 +32,20 @@ jobs:
     permissions:
       contents: write
     concurrency:
-      group: dogreader-draft-release-124
+      group: ${{ github.ref_name == 'build/white-theme-125' && 'dogreader-white-theme-125' || 'dogreader-draft-release-124' }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
       DOGREADER_KEYSTORE_B64: ${{ secrets.DOGREADER_KEYSTORE_B64 }}
+      # Same app and signing key; a higher code permits an in-place update from 124.
+      DOGREADER_BUILD_NUMBER: ${{ github.ref_name == 'build/white-theme-125' && '125' || '124' }}
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          # Reuse the exact app source whose white-theme validation is green.
+          ref: ${{ github.ref_name == 'build/white-theme-125' && '8953bbedd413bb347419e4e6bfe914300a3e6af1' || github.sha }}
 
       - name: Check signing secret
         id: signing
@@ -88,21 +94,21 @@ jobs:
 
       - name: Resolve Flutter dependencies
         if: steps.signing.outputs.available == 'true'
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
 
       - name: Analyze Dart code
-        if: steps.signing.outputs.available == 'true'
+        if: steps.signing.outputs.available == 'true' && github.ref_name != 'build/white-theme-125'
         run: flutter analyze
 
       - name: Run regression tests
-        if: steps.signing.outputs.available == 'true'
+        if: steps.signing.outputs.available == 'true' && github.ref_name != 'build/white-theme-125'
         run: flutter test --reporter expanded
 
       - name: Build original-app update APK
         if: steps.signing.outputs.available == 'true'
         env:
           ORG_GRADLE_PROJECT_dogreaderOriginalUpdate: 'true'
-        run: flutter build apk --debug --build-number 124 --dart-define=DOGREADER_BUILD=124
+        run: flutter build apk --debug --build-number "$DOGREADER_BUILD_NUMBER" --dart-define="DOGREADER_BUILD=$DOGREADER_BUILD_NUMBER"
 
       - name: Verify update signing certificate
         if: steps.signing.outputs.available == 'true'
@@ -121,12 +127,26 @@ jobs:
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           "$AAPT" dump badging build/app/outputs/flutter-apk/app-debug.apk > /tmp/dogreader-apk-badging.txt
           head -1 /tmp/dogreader-apk-badging.txt
-          grep -Fq "package: name='com.example.audiobook_app' versionCode='124'" /tmp/dogreader-apk-badging.txt
+          grep -Fq "package: name='com.example.audiobook_app' versionCode='$DOGREADER_BUILD_NUMBER'" /tmp/dogreader-apk-badging.txt
           sha256sum build/app/outputs/flutter-apk/app-debug.apk
+
+      - name: Name verified white-theme test APK
+        if: steps.signing.outputs.available == 'true' && github.ref_name == 'build/white-theme-125'
+        run: cp build/app/outputs/flutter-apk/app-debug.apk build/app/outputs/flutter-apk/Dogreader-125-white-theme.apk
+
+      - name: Upload signed white-theme test APK
+        if: steps.signing.outputs.available == 'true' && github.ref_name == 'build/white-theme-125'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Dogreader-125-white-theme-original-key
+          path: build/app/outputs/flutter-apk/Dogreader-125-white-theme.apk
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
 
       - name: Upload verified APK to draft GitHub Release
         id: draft_release
-        if: steps.signing.outputs.available == 'true'
+        if: steps.signing.outputs.available == 'true' && github.ref_name != 'build/white-theme-125'
         uses: actions/github-script@v7
         with:
           script: |
