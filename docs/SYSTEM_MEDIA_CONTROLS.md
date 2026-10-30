@@ -2,7 +2,10 @@
 
 This change is based on build 124 source, commit
 `6aadd2a12d17a4842d9d5b7015dbc24a24e56640`, rather than the older default branch.
-The installed APK version and exact device symptom still need confirmation.
+The user has confirmed build 124: notification and lock-screen controls flash
+on touch but do not affect playback. The same symptom occurred around build
+119. Phone model, Android version, and whether in-app controls work remain
+unconfirmed.
 Build 119 already added a player-state listener; adding that listener again is
 not the repair here.
 
@@ -49,9 +52,8 @@ MediaSession, notification rendering, or PendingIntent delivery.
 
 ## Required device verification before calling the reported issue fixed
 
-First confirm the installed build using the app's visible build number and the
-package version. Record phone model, Android version, and whether the problem is
-missing controls, ignored commands, or stale state. Do not uninstall the app or
+Build 124 and ignored system-control touches are confirmed. Record phone model,
+Android version, and whether in-app controls still work. Do not uninstall the app or
 clear its storage: that risks local books and recordings. Use an update signed
 with the existing key and a higher version code when an APK is prepared.
 
@@ -75,6 +77,28 @@ audio_service version already maps rewind/fast-forward to custom actions for
 those versions; this patch does not replace them with chapter-navigation buttons.
 Check the actual phone and an Android 13+ emulator/device before treating a
 source-level result as native command-dispatch validation.
+
+## Native delivery regression harness
+
+`Android native media controls` builds two synthetic probe APKs: the original
+build-124 handler and the candidate handler. Both use the real audio_service,
+just_audio, Android activity/service/receiver, and production service configuration.
+The test entrypoint records command counters and observed playback state while
+playing a bounded, locally generated WAV tone. It makes no cloud request and
+reads no existing recording.
+
+The host script first checks media-key delivery, then physically taps Play,
+Pause, Rewind and Fast Forward in Android System UI using accessibility bounds.
+It repeats Play/Pause with the lock screen visible and after Stop/restart. A tap
+passes only if the handler receives the command and the real player changes
+state or position. Tests use an isolated `.test` package, an ephemeral signing
+key, and an emulator; the script refuses a physical phone or another APK package.
+
+The baseline result is reported separately and may fail; the candidate check is
+required. A baseline pass means the reported phone symptom was not reproduced
+on that emulator and must not be presented as a proven fix. The harness does
+not exercise every production screen or OEM power-management policy. No APK is
+uploaded, published, or installed on the user's phone by this job.
 
 ## Diagnosing a remaining failure
 

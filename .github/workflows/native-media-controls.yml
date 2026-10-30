@@ -1,0 +1,76 @@
+name: Android native media controls
+
+on:
+  pull_request:
+    paths:
+      - 'lib/dogreader_audio_handler.dart'
+      - 'android/**'
+      - 'test/support/media_control_probe.dart'
+      - 'tools/check_android_media_controls.py'
+      - '.github/workflows/native-media-controls.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-media-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-controls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      ORG_GRADLE_PROJECT_dogreaderTestBuild: 'true'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          channel: stable
+          flutter-version: '3.47.7'
+          cache: false
+      - name: Resolve dependencies
+        run: flutter pub get --enforce-lockfile
+      - name: Build both synthetic probes with ephemeral debug signing
+        run: |
+          cp lib/dogreader_audio_handler.dart /tmp/candidate-handler.dart
+          git show 6aadd2a12d17a4842d9d5b7015dbc24a24e56640:lib/dogreader_audio_handler.dart > lib/dogreader_audio_handler.dart
+          flutter build apk --debug --target test/support/media_control_probe.dart --build-number 124
+          cp build/app/outputs/flutter-apk/app-debug.apk /tmp/baseline-probe.apk
+          cp /tmp/candidate-handler.dart lib/dogreader_audio_handler.dart
+          flutter build apk --debug --target test/support/media_control_probe.dart --build-number 125
+          cp build/app/outputs/flutter-apk/app-debug.apk /tmp/candidate-probe.apk
+      - name: Enable KVM for the isolated emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Tap notification and lock-screen controls on Android 13
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: 33
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          script: |
+            python3 tools/check_android_media_controls.py --apk /tmp/baseline-probe.apk --report /tmp/baseline-native-report.json || echo 'Baseline native check failed; inspect its report.'
+            python3 tools/check_android_media_controls.py --apk /tmp/candidate-probe.apk --report /tmp/candidate-native-report.json
+      - name: Summarize both results
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('Synthetic audio only; isolated emulator/test package; no APK published.\n\n')
+              for variant in ('baseline', 'candidate'):
+                  report = Path(f'/tmp/{variant}-native-report.json')
+                  summary.write(f'{variant}:\n\n```json\n{report.read_text() if report.exists() else "No report; inspect infrastructure/build failure."}\n```\n\n')
+          PY
