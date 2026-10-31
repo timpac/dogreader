@@ -9,12 +9,20 @@ import 'package:audiobook_app/reader_content.dart' show parseReaderChapter;
 
 import 'light_theme_test.dart' show contrast;
 
-class TestPreferences extends ThemePreferences {
-  TestPreferences(File file) : super(preferencesFile: () async => file);
-  Future<void>? lastSave;
+// Keep disk I/O in the persistence tests; widget tests use Flutter's fake clock.
+class MemoryPreferences extends ThemePreferences {
+  ThemeMode _value = ThemeMode.light;
+  final choices = <ThemeMode>[];
 
   @override
-  Future<void> setMode(ThemeMode mode) => lastSave = super.setMode(mode);
+  ThemeMode get mode => _value;
+
+  @override
+  Future<void> setMode(ThemeMode mode) async {
+    _value = mode;
+    choices.add(mode);
+    notifyListeners();
+  }
 }
 
 Widget themedApp(ThemePreferences preferences, {Widget? home}) => AnimatedBuilder(
@@ -103,7 +111,7 @@ void main() {
   testWidgets('Settings switches both ways without losing tab or library state', (tester) async {
     await tester.binding.setSurfaceSize(const Size(390, 844));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final preferences = TestPreferences(file);
+    final preferences = MemoryPreferences();
     addTearDown(preferences.dispose);
     await tester.pumpWidget(themedApp(preferences));
     await tester.pumpAndSettle();
@@ -112,22 +120,18 @@ void main() {
     await tester.pumpAndSettle();
     for (final label in ['Dark', 'Light']) {
       await tester.tap(find.text(label));
-      await tester.runAsync(() => preferences.lastSave!);
       await tester.pumpAndSettle();
       expect(find.text('Appearance'), findsOneWidget);
       expect(tester.state(find.byType(LibraryScreen)), same(libraryState));
       final theme = Theme.of(tester.element(find.byType(SegmentedButton<ThemeMode>)));
       expect(theme.brightness, label == 'Dark' ? Brightness.dark : Brightness.light);
-      final reopened = ThemePreferences(preferencesFile: () async => file);
-      await tester.runAsync(reopened.load);
-      expect(reopened.mode, preferences.mode);
-      reopened.dispose();
       expect(tester.takeException(), isNull);
     }
+    expect(preferences.choices, [ThemeMode.dark, ThemeMode.light]);
   });
 
   testWidgets('switching while reading preserves the route and page anchor', (tester) async {
-    final preferences = TestPreferences(file);
+    final preferences = MemoryPreferences();
     addTearDown(preferences.dispose);
     final chapter = parseReaderChapter('One', List.filled(80,
         '<p>Words with <em>emphasis</em> and <strong>bold</strong> text.</p>').join());
@@ -147,7 +151,7 @@ void main() {
     final page = state.currentPage;
     final pages = List<String>.from(state.pages as List);
     for (final mode in [ThemeMode.dark, ThemeMode.light]) {
-      await tester.runAsync(() => preferences.setMode(mode));
+      await preferences.setMode(mode);
       await tester.pumpAndSettle();
       expect(tester.state(find.byType(ReadingScreen)), same(state));
       expect(state.currentOffset, anchor);
