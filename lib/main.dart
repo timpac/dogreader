@@ -493,17 +493,18 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 const SizedBox(height: 8),
                 const Text('Choose how Dogreader looks.'),
                 const SizedBox(height: 20),
-                SegmentedButton<ThemeMode>(
-                  segments: const [
-                    ButtonSegment(value: ThemeMode.light,
-                        icon: Icon(Icons.light_mode_outlined), label: Text('Light')),
-                    ButtonSegment(value: ThemeMode.dark,
-                        icon: Icon(Icons.dark_mode_outlined), label: Text('Dark')),
+                DropdownButton<ThemeMode>(
+                  isExpanded: true,
+                  value: appearance?.mode ?? ThemeMode.light,
+                  items: const [
+                    DropdownMenuItem(value: ThemeMode.light, child: Text('Light')),
+                    DropdownMenuItem(value: ThemeMode.dark, child: Text('Dark')),
+                    DropdownMenuItem(value: ThemeMode.system, child: Text('Follow system')),
                   ],
-                  selected: {appearance?.mode ?? ThemeMode.light},
-                  onSelectionChanged: appearance == null ? null : (selection) async {
+                  onChanged: appearance == null ? null : (selection) async {
+                    if (selection == null) return;
                     try {
-                      await appearance.setMode(selection.first);
+                      await appearance.setMode(selection);
                     } catch (_) {
                       if (!mounted) return;
                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(

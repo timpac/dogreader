@@ -60,21 +60,23 @@ void main() {
     }
   });
 
-  test('both choices survive restart and rapid changes save the latest', () async {
+  test('all three choices survive restart and rapid changes save the latest', () async {
     final preferences = ThemePreferences(preferencesFile: () async => file);
     final reopened = ThemePreferences(preferencesFile: () async => file);
     addTearDown(preferences.dispose);
     addTearDown(reopened.dispose);
-    await preferences.setMode(ThemeMode.dark);
-    await reopened.load();
-    expect(reopened.mode, ThemeMode.dark);
+    for (final mode in ThemeMode.values) {
+      await preferences.setMode(mode);
+      await reopened.load();
+      expect(reopened.mode, mode);
+    }
     await Future.wait([
       preferences.setMode(ThemeMode.light),
       preferences.setMode(ThemeMode.dark),
-      preferences.setMode(ThemeMode.light),
+      preferences.setMode(ThemeMode.system),
     ]);
     await reopened.load();
-    expect(reopened.mode, ThemeMode.light);
+    expect(reopened.mode, ThemeMode.system);
   });
 
   test('failed save is reported and does not block a subsequent save', () async {
@@ -108,7 +110,7 @@ void main() {
     expect(theme.appBarTheme.systemOverlayStyle!.systemNavigationBarIconBrightness, Brightness.light);
   });
 
-  testWidgets('Settings switches both ways without losing tab or library state', (tester) async {
+  testWidgets('Settings switches all three modes without losing tab or library state', (tester) async {
     await tester.binding.setSurfaceSize(const Size(390, 844));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final preferences = MemoryPreferences();
@@ -118,16 +120,27 @@ void main() {
     final libraryState = tester.state(find.byType(LibraryScreen));
     await tester.tap(find.byIcon(Icons.settings_outlined));
     await tester.pumpAndSettle();
-    for (final label in ['Dark', 'Light']) {
-      await tester.tap(find.text(label));
+    tester.binding.platformDispatcher.platformBrightnessTestValue = Brightness.light;
+    addTearDown(tester.binding.platformDispatcher.clearPlatformBrightnessTestValue);
+    for (final label in ['Dark', 'Light', 'Follow system']) {
+      await tester.tap(find.byType(DropdownButton<ThemeMode>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(label).last);
       await tester.pumpAndSettle();
       expect(find.text('Appearance'), findsOneWidget);
       expect(tester.state(find.byType(LibraryScreen)), same(libraryState));
-      final theme = Theme.of(tester.element(find.byType(SegmentedButton<ThemeMode>)));
+      final theme = Theme.of(tester.element(find.byType(DropdownButton<ThemeMode>)));
       expect(theme.brightness, label == 'Dark' ? Brightness.dark : Brightness.light);
       expect(tester.takeException(), isNull);
     }
-    expect(preferences.choices, [ThemeMode.dark, ThemeMode.light]);
+    expect(preferences.choices, [ThemeMode.dark, ThemeMode.light, ThemeMode.system]);
+    for (final brightness in [Brightness.dark, Brightness.light]) {
+      tester.binding.platformDispatcher.platformBrightnessTestValue = brightness;
+      await tester.pumpAndSettle();
+      expect(Theme.of(tester.element(find.byType(DropdownButton<ThemeMode>))).brightness,
+          brightness);
+      expect(preferences.mode, ThemeMode.system);
+    }
   });
 
   testWidgets('switching while reading preserves the route and page anchor', (tester) async {

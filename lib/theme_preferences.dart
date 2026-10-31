@@ -23,8 +23,11 @@ class ThemePreferences extends ChangeNotifier {
     try {
       final file = await _preferencesFile();
       final data = jsonDecode(await file.readAsString());
-      _mode = data is Map && data['theme'] == 'dark'
-          ? ThemeMode.dark : ThemeMode.light;
+      _mode = switch (data is Map ? data['theme'] : null) {
+        'dark' => ThemeMode.dark,
+        'system' => ThemeMode.system,
+        _ => ThemeMode.light,
+      };
     } catch (_) {
       // Missing or unreadable preferences must never prevent opening a book.
       _mode = ThemeMode.light;
@@ -33,9 +36,6 @@ class ThemePreferences extends ChangeNotifier {
   }
 
   Future<void> setMode(ThemeMode mode) {
-    if (mode == ThemeMode.system) {
-      throw ArgumentError.value(mode, 'mode', 'Choose light or dark');
-    }
     _mode = mode;
     notifyListeners();
     final snapshot = jsonEncode({'theme': mode.name});
