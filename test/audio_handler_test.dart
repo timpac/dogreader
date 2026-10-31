@@ -15,7 +15,7 @@ void main() {
     player = FakePlayer();
     handler = DogreaderAudioHandler(player: player, documentsDirectory: () async => root);
   });
-  tearDown(() async { await handler.pause(); await player.dispose(); await root.delete(recursive: true); });
+  tearDown(() async { await handler.dispose(); await root.delete(recursive: true); });
   Future<void> load({bool force = false, bool Function()? active}) => handler.loadChapter(
     path: '${root.path}/book_0.mp3', title: 'Chapter', author: 'Author',
     bookId: 'book', chapterIndex: 0, chapterCount: 2,
