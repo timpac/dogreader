@@ -9,31 +9,44 @@ const textPrimary = Color(0xFF28262D);
 const textSecondary = Color(0xFF66616F);
 const divider = Color(0xFFE1DDE6);
 
-ThemeData dogreaderLightTheme() {
+ThemeData dogreaderLightTheme() => _dogreaderTheme(Brightness.light);
+
+ThemeData dogreaderDarkTheme() => _dogreaderTheme(Brightness.dark);
+
+ThemeData _dogreaderTheme(Brightness brightness) {
+  final dark = brightness == Brightness.dark;
+  final background = dark ? const Color(0xFF10131A) : const Color(0xFFFEFDFC);
+  final panel = dark ? const Color(0xFF202638) : const Color(0xFFF5F4F6);
+  final accent = dark ? const Color(0xFFB7A6F6) : const Color(0xFF655087);
+  final textPrimary = dark ? const Color(0xFFF3F0F8) : const Color(0xFF28262D);
+  final textSecondary = dark ? const Color(0xFFBBB7C6) : const Color(0xFF66616F);
+  final divider = dark ? const Color(0xFF353D54) : const Color(0xFFE1DDE6);
+  final tint = dark ? const Color(0xFF37304B) : const Color(0xFFEEE8F5);
+  final onTint = dark ? const Color(0xFFEBDEF9) : const Color(0xFF433159);
   final scheme = ColorScheme.fromSeed(
     seedColor: accent,
-    brightness: Brightness.light,
+    brightness: brightness,
   ).copyWith(
     primary: accent,
-    onPrimary: Colors.white,
-    primaryContainer: const Color(0xFFEEE8F5),
-    onPrimaryContainer: const Color(0xFF433159),
+    onPrimary: dark ? const Color(0xFF21182F) : Colors.white,
+    primaryContainer: tint,
+    onPrimaryContainer: onTint,
     secondary: textSecondary,
-    onSecondary: Colors.white,
-    secondaryContainer: const Color(0xFFEEE8F5),
-    onSecondaryContainer: const Color(0xFF433159),
+    onSecondary: dark ? background : Colors.white,
+    secondaryContainer: tint,
+    onSecondaryContainer: onTint,
     surface: background,
     onSurface: textPrimary,
     onSurfaceVariant: textSecondary,
-    surfaceContainerLowest: Colors.white,
+    surfaceContainerLowest: dark ? background : Colors.white,
     surfaceContainerLow: panel,
     surfaceContainer: panel,
-    surfaceContainerHigh: const Color(0xFFEEECEF),
-    surfaceContainerHighest: const Color(0xFFE8E5EC),
-    outline: const Color(0xFF8A8293),
+    surfaceContainerHigh: dark ? const Color(0xFF293047) : const Color(0xFFEEECEF),
+    surfaceContainerHighest: dark ? const Color(0xFF353D54) : const Color(0xFFE8E5EC),
+    outline: dark ? const Color(0xFF948B9F) : const Color(0xFF8A8293),
     outlineVariant: divider,
-    error: const Color(0xFFAB3131),
-    onError: Colors.white,
+    error: dark ? const Color(0xFFFFB4AB) : const Color(0xFFAB3131),
+    onError: dark ? const Color(0xFF690005) : Colors.white,
   );
   final base = ThemeData(useMaterial3: true, colorScheme: scheme);
   final rounded = RoundedRectangleBorder(
@@ -46,7 +59,7 @@ ThemeData dogreaderLightTheme() {
       displayColor: textPrimary,
     ),
     dividerColor: divider,
-    appBarTheme: const AppBarTheme(
+    appBarTheme: AppBarTheme(
       backgroundColor: background,
       foregroundColor: textPrimary,
       surfaceTintColor: Colors.transparent,
@@ -54,17 +67,17 @@ ThemeData dogreaderLightTheme() {
       scrolledUnderElevation: 0,
       systemOverlayStyle: SystemUiOverlayStyle(
         statusBarColor: Colors.transparent,
-        statusBarIconBrightness: Brightness.dark,
-        statusBarBrightness: Brightness.light,
+        statusBarIconBrightness: dark ? Brightness.light : Brightness.dark,
+        statusBarBrightness: brightness,
         systemNavigationBarColor: background,
-        systemNavigationBarIconBrightness: Brightness.dark,
+        systemNavigationBarIconBrightness: dark ? Brightness.light : Brightness.dark,
       ),
     ),
     cardTheme: CardThemeData(
       color: panel,
       surfaceTintColor: Colors.transparent,
       elevation: 0,
-      shape: rounded.copyWith(side: const BorderSide(color: divider)),
+      shape: rounded.copyWith(side: BorderSide(color: divider)),
       clipBehavior: Clip.antiAlias,
     ),
     navigationBarTheme: NavigationBarThemeData(
@@ -85,7 +98,7 @@ ThemeData dogreaderLightTheme() {
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
         backgroundColor: accent,
-        foregroundColor: Colors.white,
+        foregroundColor: scheme.onPrimary,
         minimumSize: const Size(48, 48),
         padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
         textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
@@ -114,11 +127,11 @@ ThemeData dogreaderLightTheme() {
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: divider),
+        borderSide: BorderSide(color: divider),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: accent, width: 2),
+        borderSide: BorderSide(color: accent, width: 2),
       ),
     ),
     dialogTheme: DialogThemeData(
@@ -126,22 +139,22 @@ ThemeData dogreaderLightTheme() {
       surfaceTintColor: Colors.transparent,
       shape: rounded,
     ),
-    bottomSheetTheme: const BottomSheetThemeData(
+    bottomSheetTheme: BottomSheetThemeData(
       backgroundColor: background,
       surfaceTintColor: Colors.transparent,
-      shape: RoundedRectangleBorder(
+      shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
     ),
     popupMenuTheme: PopupMenuThemeData(
       color: background,
       surfaceTintColor: Colors.transparent,
-      shape: rounded.copyWith(side: const BorderSide(color: divider)),
+      shape: rounded.copyWith(side: BorderSide(color: divider)),
     ),
     snackBarTheme: SnackBarThemeData(
       backgroundColor: textPrimary,
-      contentTextStyle: const TextStyle(color: Colors.white),
-      actionTextColor: const Color(0xFFE0D2F6),
+      contentTextStyle: TextStyle(color: background),
+      actionTextColor: dark ? const Color(0xFF573477) : const Color(0xFFE0D2F6),
       behavior: SnackBarBehavior.floating,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     ),

@@ -1,0 +1,164 @@
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:audiobook_app/app_theme.dart';
+import 'package:audiobook_app/main.dart';
+import 'package:audiobook_app/theme_preferences.dart';
+import 'package:audiobook_app/reader_content.dart' show parseReaderChapter;
+
+import 'light_theme_test.dart' show contrast;
+
+class TestPreferences extends ThemePreferences {
+  TestPreferences(File file) : super(preferencesFile: () async => file);
+  Future<void>? lastSave;
+
+  @override
+  Future<void> setMode(ThemeMode mode) => lastSave = super.setMode(mode);
+}
+
+Widget themedApp(ThemePreferences preferences, {Widget? home}) => AnimatedBuilder(
+  animation: preferences,
+  builder: (context, child) => MaterialApp(
+    theme: dogreaderLightTheme(),
+    darkTheme: dogreaderDarkTheme(),
+    themeMode: preferences.mode,
+    builder: (context, child) => MediaQuery(
+      data: MediaQuery.of(context).copyWith(textScaler: TextScaler.linear(1.5)),
+      child: child!,
+    ),
+    home: home ?? LibraryScreen(appearance: preferences),
+  ),
+);
+
+void main() {
+  late Directory directory;
+  late File file;
+  setUp(() async {
+    directory = await Directory.systemTemp.createTemp('dogreader-appearance-');
+    file = File('${directory.path}/appearance.json');
+  });
+  tearDown(() async => directory.delete(recursive: true));
+
+  test('missing, malformed, or unknown preferences default to light', () async {
+    final preferences = ThemePreferences(preferencesFile: () async => file);
+    addTearDown(preferences.dispose);
+    await preferences.load();
+    expect(preferences.mode, ThemeMode.light);
+    for (final content in ['broken json', '[]', '{"theme":"unknown"}']) {
+      await file.writeAsString(content);
+      await preferences.load();
+      expect(preferences.mode, ThemeMode.light);
+    }
+  });
+
+  test('both choices survive restart and rapid changes save the latest', () async {
+    final preferences = ThemePreferences(preferencesFile: () async => file);
+    final reopened = ThemePreferences(preferencesFile: () async => file);
+    addTearDown(preferences.dispose);
+    addTearDown(reopened.dispose);
+    await preferences.setMode(ThemeMode.dark);
+    await reopened.load();
+    expect(reopened.mode, ThemeMode.dark);
+    await Future.wait([
+      preferences.setMode(ThemeMode.light),
+      preferences.setMode(ThemeMode.dark),
+      preferences.setMode(ThemeMode.light),
+    ]);
+    await reopened.load();
+    expect(reopened.mode, ThemeMode.light);
+  });
+
+  test('failed save is reported and does not block a subsequent save', () async {
+    var fail = true;
+    final preferences = ThemePreferences(preferencesFile: () async {
+      if (fail) throw const FileSystemException('Unavailable');
+      return file;
+    });
+    addTearDown(preferences.dispose);
+    await expectLater(preferences.setMode(ThemeMode.dark), throwsA(isA<FileSystemException>()));
+    expect(preferences.mode, ThemeMode.dark);
+    fail = false;
+    await preferences.setMode(ThemeMode.light);
+    expect(await file.readAsString(), '{"theme":"light"}');
+  });
+
+  test('dark surfaces, text, buttons, and system bars remain readable', () {
+    final theme = dogreaderDarkTheme();
+    final scheme = theme.colorScheme;
+    expect(theme.brightness, Brightness.dark);
+    for (final surface in [scheme.surface, scheme.surfaceContainerLow]) {
+      for (final foreground in [scheme.onSurface, scheme.onSurfaceVariant,
+          scheme.primary, scheme.error]) {
+        expect(contrast(foreground, surface), greaterThanOrEqualTo(4.5));
+      }
+    }
+    final button = theme.filledButtonTheme.style!;
+    expect(contrast(button.foregroundColor!.resolve({})!,
+        button.backgroundColor!.resolve({})!), greaterThanOrEqualTo(4.5));
+    expect(theme.appBarTheme.systemOverlayStyle!.statusBarIconBrightness, Brightness.light);
+    expect(theme.appBarTheme.systemOverlayStyle!.systemNavigationBarIconBrightness, Brightness.light);
+  });
+
+  testWidgets('Settings switches both ways without losing tab or library state', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final preferences = TestPreferences(file);
+    addTearDown(preferences.dispose);
+    await tester.pumpWidget(themedApp(preferences));
+    await tester.pumpAndSettle();
+    final libraryState = tester.state(find.byType(LibraryScreen));
+    await tester.tap(find.byIcon(Icons.settings_outlined));
+    await tester.pumpAndSettle();
+    for (final label in ['Dark', 'Light']) {
+      await tester.tap(find.text(label));
+      await tester.runAsync(() => preferences.lastSave!);
+      await tester.pumpAndSettle();
+      expect(find.text('Appearance'), findsOneWidget);
+      expect(tester.state(find.byType(LibraryScreen)), same(libraryState));
+      final theme = Theme.of(tester.element(find.byType(SegmentedButton<ThemeMode>)));
+      expect(theme.brightness, label == 'Dark' ? Brightness.dark : Brightness.light);
+      final reopened = ThemePreferences(preferencesFile: () async => file);
+      await tester.runAsync(reopened.load);
+      expect(reopened.mode, preferences.mode);
+      reopened.dispose();
+      expect(tester.takeException(), isNull);
+    }
+  });
+
+  testWidgets('switching while reading preserves the route and page anchor', (tester) async {
+    final preferences = TestPreferences(file);
+    addTearDown(preferences.dispose);
+    final chapter = parseReaderChapter('One', List.filled(80,
+        '<p>Words with <em>emphasis</em> and <strong>bold</strong> text.</p>').join());
+    final book = ImportedBook('Book', 'Author', [chapter], 'appearance-book', null);
+    await tester.pumpWidget(themedApp(preferences));
+    await tester.pumpAndSettle();
+    final navigator = tester.state<NavigatorState>(find.byType(Navigator));
+    navigator.push(MaterialPageRoute<void>(builder: (_) => ReadingScreen(
+      book: book, chapterIndex: 0, initialOffset: 0,
+      onSave: (_, offset) async {},
+    )));
+    await tester.pumpAndSettle();
+    final dynamic state = tester.state(find.byType(ReadingScreen));
+    state.jumpToPage(3);
+    await tester.pumpAndSettle();
+    final anchor = state.currentOffset;
+    final page = state.currentPage;
+    final pages = List<String>.from(state.pages as List);
+    for (final mode in [ThemeMode.dark, ThemeMode.light]) {
+      await tester.runAsync(() => preferences.setMode(mode));
+      await tester.pumpAndSettle();
+      expect(tester.state(find.byType(ReadingScreen)), same(state));
+      expect(state.currentOffset, anchor);
+      expect(state.currentPage, page);
+      expect(state.pages, pages);
+      final span = state.styledPage(0, chapter.text.length) as TextSpan;
+      final scheme = Theme.of(tester.element(find.byType(ReadingScreen))).colorScheme;
+      expect(contrast(span.style!.color!, scheme.surface), greaterThanOrEqualTo(4.5));
+      expect(span.toPlainText(), chapter.text);
+      expect(tester.takeException(), isNull);
+    }
+    expect(navigator.canPop(), isTrue);
+  });
+}

@@ -55,7 +55,7 @@ void main() {
     expect(find.text('Narration'), findsOneWidget);
     await tester.tap(find.byIcon(Icons.settings_outlined));
     await tester.pumpAndSettle();
-    expect(find.text('Choose narration providers, voices, and API keys.'), findsOneWidget);
+    expect(find.text('Appearance'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
