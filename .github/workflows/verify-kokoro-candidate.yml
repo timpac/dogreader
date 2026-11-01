@@ -51,10 +51,10 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disk-size: 2048M
-          ram-size: 2048M
+          ram-size: 3072M
           emulator-boot-timeout: 300
           disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          emulator-options: -skin 720x1440 -dpi-device 240 -feature -Vulkan -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
           script: python3 tools/verify_android_screens.py candidate/app-debug.apk reports/screens
       - uses: actions/upload-artifact@v4
         if: always()
