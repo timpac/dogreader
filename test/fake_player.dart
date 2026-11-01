@@ -6,6 +6,9 @@ class FakePlayer implements AudioPlayer {
   final processing = StreamController<ProcessingState>.broadcast();
   final events = StreamController<PlaybackEvent>.broadcast();
   final states = StreamController<PlayerState>.broadcast();
+  final durations = StreamController<Duration?>.broadcast();
+  final speeds = StreamController<double>.broadcast();
+  final errors = StreamController<PlayerException>.broadcast();
   @override
   Duration position = Duration.zero;
   @override
@@ -22,6 +25,10 @@ class FakePlayer implements AudioPlayer {
   ProcessingState processingState = ProcessingState.ready;
   int loads = 0;
   int stops = 0;
+  int plays = 0;
+  bool emitStateOnStop = true;
+  bool holdPlayFuture = false;
+  Completer<void>? playback;
   bool ignoreSeek = false;
   Completer<void>? preparing;
   @override
@@ -33,33 +40,80 @@ class FakePlayer implements AudioPlayer {
   @override
   Stream<PlayerState> get playerStateStream => states.stream;
   @override
-  Stream<Duration?> get durationStream => Stream.value(duration);
+  Stream<Duration?> get durationStream => durations.stream;
+  @override
+  Stream<double> get speedStream => speeds.stream;
+  @override
+  Stream<PlayerException> get errorStream => errors.stream;
+
+  void emitState() => states.add(PlayerState(playing, processingState));
+
+  void complete() {
+    processingState = ProcessingState.completed;
+    processing.add(processingState);
+    emitState();
+    if (playback != null && !playback!.isCompleted) playback!.complete();
+  }
   @override
   Future<Duration?> setFilePath(String filePath, {Duration? initialPosition, bool preload = true, dynamic tag}) async {
     loads++;
     if (preparing != null) await preparing!.future;
     audioSource = AudioSource.uri(Uri.file(filePath));
     position = initialPosition ?? Duration.zero;
+    processingState = ProcessingState.ready;
+    emitState();
     return duration;
   }
   @override
-  Future<void> pause() async { playing = false; }
-  @override
-  Future<void> play() async { playing = true; }
-  @override
-  Future<void> stop() async { playing = false; stops++; }
-  @override
-  Future<void> seek(Duration? target, {int? index}) async {
-    if (!ignoreSeek) position = target ?? Duration.zero;
+  Future<void> pause() async {
+    playing = false;
+    emitState();
+    if (playback != null && !playback!.isCompleted) playback!.complete();
   }
   @override
-  Future<void> setSpeed(double value) async { speed = value; }
+  Future<void> play() {
+    playing = true;
+    plays++;
+    if (processingState == ProcessingState.idle) {
+      processingState = ProcessingState.ready;
+    }
+    emitState();
+    if (!holdPlayFuture) return Future<void>.value();
+    playback = Completer<void>();
+    return playback!.future;
+  }
+  @override
+  Future<void> stop() async {
+    playing = false;
+    stops++;
+    processingState = ProcessingState.idle;
+    if (emitStateOnStop) emitState();
+    if (playback != null && !playback!.isCompleted) playback!.complete();
+  }
+  @override
+  Future<void> seek(Duration? target, {int? index}) async {
+    if (!ignoreSeek) {
+      position = target ?? Duration.zero;
+      if (processingState == ProcessingState.completed) {
+        processingState = ProcessingState.ready;
+      }
+      emitState();
+    }
+  }
+  @override
+  Future<void> setSpeed(double value) async {
+    speed = value;
+    speeds.add(value);
+  }
   @override
   Future<void> dispose() async {
     await positions.close();
     await processing.close();
     await events.close();
     await states.close();
+    await durations.close();
+    await speeds.close();
+    await errors.close();
   }
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
