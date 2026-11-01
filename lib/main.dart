@@ -1205,6 +1205,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   }
 
   Future<void> regenerate(int index) async {
+    if (busy) return;
     final preference = NarrationPreference(narrationEngine, narrator);
     final confirmed = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
       title: const Text('Regenerate narration?'),
@@ -1215,7 +1216,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Generate narration')),
       ],
     ));
-    if (confirmed != true || !mounted) return;
+    if (confirmed != true || !mounted || busy) return;
     if (host.isEmpty || token.isEmpty) {
       setState(() => notice = 'Connect Dogreader Cloud first.');
       return;
