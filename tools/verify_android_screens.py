@@ -34,7 +34,16 @@ def xml():
         try:
             shell('rm', '-f', '/sdcard/window.xml')
             shell('uiautomator', 'dump', '/sdcard/window.xml')
-            return ET.fromstring(adb('exec-out', 'cat', '/sdcard/window.xml'))
+            root = ET.fromstring(adb('exec-out', 'cat', '/sdcard/window.xml'))
+            if any("System UI isn't responding" in label(n) for n in root.iter('node')):
+                waits = [n for n in root.iter('node') if label(n) == 'Wait']
+                if waits:
+                    print('Recovering emulator System UI startup ANR; app ANRs remain failures', flush=True)
+                    x1, y1, x2, y2 = bounds(waits[0])
+                    shell('input', 'tap', (x1+x2)//2, (y1+y2)//2)
+                    time.sleep(2)
+                    continue
+            return root
         except (ET.ParseError, subprocess.CalledProcessError):
             time.sleep(1)
     raise AssertionError('Android did not provide a ready accessibility window within 30 seconds')
@@ -188,6 +197,8 @@ def verify_mode(mode, audio_test=False):
 
 
 def main(apk):
+    shell('svc', 'power', 'stayon', 'true')
+    shell('input', 'keyevent', '224')
     print('Installing the verified signed candidate (180-second limit)', flush=True)
     adb('install', '-r', apk, timeout=180)
     shell('run-as', PACKAGE, 'mkdir', '-p', 'app_flutter/epubs', 'app_flutter/narration')
