@@ -22,14 +22,14 @@ jobs:
     permissions:
       contents: write
     concurrency:
-      group: ${{ github.ref_name == 'build/129-theme-audio-combined' && 'dogreader-combined-129' || 'dogreader-draft-release-124' }}
-      cancel-in-progress: false
+      group: dogreader-draft-release-124
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
       DOGREADER_KEYSTORE_B64: ${{ secrets.DOGREADER_KEYSTORE_B64 }}
       # Same app and signing key; a higher code permits an in-place update from 124.
-      DOGREADER_BUILD_NUMBER: ${{ github.ref_name == 'build/129-theme-audio-combined' && '129' || '124' }}
+      DOGREADER_BUILD_NUMBER: '130'
     steps:
       - name: Check out source
         uses: actions/checkout@v4
