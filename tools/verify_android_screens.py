@@ -151,7 +151,9 @@ def verify_mode(mode, audio_test=False):
         sliders = [n for n in xml().iter('node') if n.get('class') == 'android.widget.SeekBar']
         assert sliders, 'Native narration seek slider is absent'
         x1, y1, x2, y2 = bounds(sliders[0])
-        shell('input', 'tap', (x1 + x2) // 2, (y1 + y2) // 2)
+        # Flutter exposes the thumb, not the full track, as the SeekBar node.
+        width = max(bounds(n)[2] for n in xml().iter('node') if len(bounds(n)) == 4)
+        shell('input', 'tap', width // 2, (y1 + y2) // 2)
         time.sleep(1)
         assert abs(read_json('narration_state.json')['proof:0']['positionMs'] - 15000) < 3000, 'Native seek did not persist the middle position'
         checks.append('real decoder playback/pause and seek persisted')
