@@ -14,6 +14,7 @@ on:
       - feature/123-audio-recovery-controls
       - feature/124-css-audio-seek
       - build/129-theme-audio-combined
+      - feature/kokoro-narration-131
     paths:
       - 'lib/**'
       - 'test/**'
@@ -32,20 +33,25 @@ jobs:
     permissions:
       contents: write
     concurrency:
-      group: ${{ github.ref_name == 'build/129-theme-audio-combined' && 'dogreader-combined-129' || 'dogreader-draft-release-124' }}
+      group: ${{ github.ref_name == 'feature/kokoro-narration-131' && 'dogreader-kokoro-131' || github.ref_name == 'build/129-theme-audio-combined' && 'dogreader-combined-129' || 'dogreader-draft-release-124' }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
       DOGREADER_KEYSTORE_B64: ${{ secrets.DOGREADER_KEYSTORE_B64 }}
       # Same app and signing key; a higher code permits an in-place update from 124.
-      DOGREADER_BUILD_NUMBER: ${{ github.ref_name == 'build/129-theme-audio-combined' && '129' || '124' }}
+      DOGREADER_BUILD_NUMBER: ${{ github.ref_name == 'feature/kokoro-narration-131' && '131' || github.ref_name == 'build/129-theme-audio-combined' && '129' || '124' }}
     steps:
       - name: Check out source
         uses: actions/checkout@v4
         with:
           # Build and validate the exact combined source.
           ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Verify build 129 ancestry and preserved modules/tests
+        if: github.ref_name == 'feature/kokoro-narration-131'
+        run: python3 tools/check_build129.py
 
       - name: Check signing secret
         id: signing
@@ -130,6 +136,34 @@ jobs:
           grep -Fq "package: name='com.example.audiobook_app' versionCode='$DOGREADER_BUILD_NUMBER'" /tmp/dogreader-apk-badging.txt
           sha256sum build/app/outputs/flutter-apk/app-debug.apk
 
+      - name: Enable KVM for actual APK screen verification
+        if: github.ref_name == 'feature/kokoro-narration-131'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Verify actual book/chapter/reader/narration screens on Android
+        if: github.ref_name == 'feature/kokoro-narration-131'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          script: python3 tools/verify_android_screens.py build/app/outputs/flutter-apk/app-debug.apk reports/screens
+
+      - name: Retain actual APK screenshots and verification report
+        if: always() && github.ref_name == 'feature/kokoro-narration-131'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dogreader-131-actual-screens
+          path: reports/screens/
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Upload verified APK to private draft GitHub Release
         id: draft_release
         if: steps.signing.outputs.available == 'true'
@@ -140,10 +174,11 @@ jobs:
             const crypto = require('crypto');
             const { owner, repo } = context.repo;
             const source = 'build/app/outputs/flutter-apk/app-debug.apk';
+            const kokoro = process.env.DOGREADER_BUILD_NUMBER === '131';
             const themeSwitcher = process.env.DOGREADER_BUILD_NUMBER === '129';
-            const name = themeSwitcher ? 'Dogreader-129-theme-audio.apk' : 'Dogreader-124.apk';
-            const title = themeSwitcher ? 'Dogreader 129 themes and audio controls' : 'Dogreader 124';
-            const preferredTag = themeSwitcher ? 'dogreader-129-theme-audio' : 'dogreader-124';
+            const name = kokoro ? 'Dogreader-131-kokoro.apk' : themeSwitcher ? 'Dogreader-129-theme-audio.apk' : 'Dogreader-124.apk';
+            const title = kokoro ? 'Dogreader 131 Kokoro on build 129' : themeSwitcher ? 'Dogreader 129 themes and audio controls' : 'Dogreader 124';
+            const preferredTag = kokoro ? 'dogreader-131-kokoro' : themeSwitcher ? 'dogreader-129-theme-audio' : 'dogreader-124';
             const data = fs.readFileSync(source);
             const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
             const expected = digest(data);
@@ -187,7 +222,7 @@ jobs:
               release = (await github.rest.repos.createRelease({
                 owner, repo, tag_name: tag, target_commitish: context.sha, name: title,
                 draft: true, prerelease: false, make_latest: 'false',
-                body: `Build ${process.env.DOGREADER_BUILD_NUMBER}, original Dogreader signing identity.\n\nApp source: ${context.sha}\nWorkflow source: ${context.sha}\nWorkflow: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}\n\n${themeSwitcher ? 'Combined build-128 theme switcher and build-126 media-control repairs. Full analysis and combined regression tests passed. APK signature and package/version checks passed.' : 'Automated analysis, regression tests, APK signature and package/version checks passed.'} Physical Android validation remains outstanding.`
+                body: `Build ${process.env.DOGREADER_BUILD_NUMBER}, original Dogreader signing identity.\n\nApp source: ${context.sha}\nWorkflow source: ${context.sha}\nWorkflow: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}\n\n${kokoro ? 'Based on build 129 at 26fd3ef70978c686a2ac09ca0bf655ac7add600e, with Kokoro changes only. Full analysis, all regression tests and actual signed APK book/chapter/reader/theme/narration screen checks passed on Android 13. Screenshots and report are in the Actions artifact. Backend generation remains approval-gated.' : themeSwitcher ? 'Combined build-128 theme switcher and build-126 media-control repairs. Full analysis and combined regression tests passed. APK signature and package/version checks passed.' : 'Automated analysis, regression tests, APK signature and package/version checks passed.'} Physical Android validation remains outstanding.`
               })).data;
               assertDraft(release);
             }

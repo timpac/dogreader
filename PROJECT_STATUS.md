@@ -1,3 +1,23 @@
+# Build 131 baseline correction (2026-11-01)
+
+- User-selected base: build 129, `26fd3ef70978c686a2ac09ca0bf655ac7add600e`.
+- Comparison confirmed build 130 omitted 61 commits and reader/theme/audio modules.
+- New branch: `feature/kokoro-narration-131`, created directly from the pinned base.
+- Only Kokoro settings, preview, immutable job metadata/recording attribution and
+  explicit regeneration are ported into the existing narration screen.
+- Local baseline guard passes: ancestry, 53 protected baseline files and all
+  book/reader/player screen code outside narration are retained unchanged.
+- Existing repair/delete helper, audio handler, reader parser/seek and theme
+  modules and every baseline regression test remain byte-for-byte unchanged.
+- CI must pass strict full analysis and all tests, original signing/package/code
+  verification, and actual signed APK book/chapter/reader/theme/narration checks
+  on Android 13 before publication. Native screenshots are required for review.
+- Build/Android verification is pending at this checkpoint. No successful APK or
+  device result is claimed until the source-specific Actions run completes.
+- Backend PR #5 is unchanged. No deployment, generation, IAM or billing change.
+- Next: inspect the new CI run, fix failures, review actual APK screenshots, then
+  publish verified APK 131. Physical phone checks remain as documented below.
+
 # Dogreader — Project status and handoff
 
 ## Build 124 review (2026-10-30)

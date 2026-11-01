@@ -22,6 +22,7 @@ import 'reader_content.dart';
 export 'reader_content.dart' show ReaderChapter, StyledRange;
 import 'narration_seek.dart';
 import 'narration_files.dart';
+import 'narration_options.dart';
 
 late final DogreaderAudioHandler audioHandler;
 
@@ -743,7 +744,7 @@ class ChapterListScreen extends StatelessWidget {
                 ),
               ),
               icon: const Icon(Icons.headphones),
-              label: const Text('Listen / Generate audiobook'),
+              label: const Text('Listen / Generate narration'),
             ),
           ),
           Expanded(
@@ -834,14 +835,11 @@ class NarrationQueueScreen extends StatefulWidget {
 }
 
 class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
-  static const narratorNames = <String, String>{
-    'en-US-Chirp3-HD-Achernar': 'Achernar',
-    'en-US-Chirp3-HD-Charon': 'Charon',
-    'en-US-Chirp3-HD-Kore': 'Kore',
-    'en-US-Chirp3-HD-Puck': 'Puck',
-    'en-GB-Wavenet-B': 'Oliver (Cheap)',
-  };
+  String narrationEngine = 'google';
   String narrator = 'en-US-Chirp3-HD-Achernar';
+  ja.AudioPlayer? previewPlayer;
+  bool previewing = false;
+  int previewSequence = 0;
   final Set<int> selected = {};
   final Map<int, Map<String, dynamic>> jobs = {};
   String host = '';
@@ -863,11 +861,9 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
             jsonDecode(await file.readAsString()) as Map<String, dynamic>;
         host = data['host'] as String? ?? '';
         token = data['token'] as String? ?? '';
-        final savedNarrator = data['narrator'];
-        if (savedNarrator is String &&
-            narratorNames.containsKey(savedNarrator)) {
-          narrator = savedNarrator;
-        }
+        final preference = NarrationPreference.fromJson(data);
+        narrationEngine = preference.engine;
+        narrator = preference.voice;
         final bookJobs = (data['books'] as Map?)?[widget.book.id];
         if (bookJobs is Map) {
           for (final entry in bookJobs.entries) {
@@ -882,7 +878,8 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     final root = await getApplicationDocumentsDirectory();
     for (var index = 0; index < widget.book.chapters.length; index++) {
       final file = File('${root.path}/narration/${widget.book.id}_$index.mp3');
-      if (await file.exists() && await file.length() > 1000) {
+      if (await file.exists() && await file.length() > 1000 &&
+          !['waiting', 'queued', 'generating', 'error'].contains(jobs[index]?['status'])) {
         jobs[index] = {
           ...?jobs[index],
           'status': 'ready',
@@ -905,6 +902,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     data['host'] = host;
     data['token'] = token;
     data['narrator'] = narrator;
+    data['engine'] = narrationEngine;
     final books = Map<String, dynamic>.from((data['books'] as Map?) ?? {});
     books[widget.book.id] = jobs.map((k, v) => MapEntry('$k', v));
     data['books'] = books;
@@ -1097,6 +1095,100 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     );
   }
 
+  Future<void> stopPreview() async {
+    previewSequence++;
+    await previewPlayer?.stop();
+    if (mounted) setState(() => previewing = false);
+  }
+
+  Future<void> previewVoice() async {
+    if (host.isEmpty || token.isEmpty) {
+      setState(() => notice = 'Connect Dogreader Cloud before previewing.');
+      return;
+    }
+    final sequence = ++previewSequence;
+    final preference = NarrationPreference(narrationEngine, narrator);
+    setState(() { previewing = true; notice = 'Preparing voice preview…'; });
+    try {
+      var response = await requestJson('POST', '/dogreader/jobs', {
+        ...preference.toJson(),
+        'title': 'Voice preview',
+        'text': 'Welcome to Dogreader. “Shall we begin?” he asked. '
+            'Settle in, choose a chapter, and enjoy a few quiet moments with your next story.',
+      });
+      final id = response['id'] as String;
+      for (var attempt = 0; attempt < 60; attempt++) {
+        if (!mounted || sequence != previewSequence) { return; }
+        if (response['status'] == 'ready') { break; }
+        if (response['status'] == 'error') { throw Exception(response['error'] ?? 'Preview generation failed'); }
+        await Future<void>.delayed(const Duration(seconds: 2));
+        response = await requestJson('GET', '/dogreader/jobs/$id');
+      }
+      if (response['status'] != 'ready') { throw Exception('Preview is still queued. Tap Preview voice again to resume.'); }
+      if ((response['engine'] ?? 'google') != preference.engine ||
+          (response['voice'] != null && response['voice'] != preference.voice)) {
+        throw Exception('Server returned a different engine or voice. Update the backend.');
+      }
+      final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
+      late File preview;
+      try {
+        final req = await client.getUrl(endpoint('/dogreader/audio/$id'));
+        req.headers.set('X-Dogreader-Token', token);
+        final audio = await req.close().timeout(const Duration(seconds: 20));
+        if (audio.statusCode != 200) { throw Exception('Preview download failed (${audio.statusCode})'); }
+        final root = await getTemporaryDirectory();
+        preview = File('${root.path}/preview_$id.mp3');
+        final staged = File('${preview.path}.part');
+        await audio.pipe(staged.openWrite());
+        if (await staged.length() < 1000 ||
+            (audio.contentLength >= 0 && await staged.length() != audio.contentLength)) {
+          throw Exception('Preview download was incomplete');
+        }
+        await staged.rename(preview.path);
+      } finally {
+        client.close(force: true);
+      }
+      if (!mounted || sequence != previewSequence) { return; }
+      await audioHandler.pause();
+      final player = previewPlayer ??= ja.AudioPlayer();
+      await player.setFilePath(preview.path);
+      if (!mounted || sequence != previewSequence) { return; }
+      setState(() => notice = 'Preview: ${recordingLabel(preference.toJson())}');
+      await player.play();
+    } catch (e) {
+      if (mounted && sequence == previewSequence) { setState(() => notice = 'Voice preview: $e'); }
+    } finally {
+      if (mounted && sequence == previewSequence) { setState(() => previewing = false); }
+    }
+  }
+
+  Future<void> regenerate(int index) async {
+    if (busy) return;
+    final preference = NarrationPreference(narrationEngine, narrator);
+    final confirmed = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
+      title: const Text('Regenerate narration?'),
+      content: Text('Generate ${widget.book.chapters[index].title} with ${recordingLabel(preference.toJson())}? '
+          'The current download is replaced only after the new audio downloads successfully.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+        FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Generate narration')),
+      ],
+    ));
+    if (confirmed != true || !mounted || busy) return;
+    if (host.isEmpty || token.isEmpty) {
+      setState(() => notice = 'Connect Dogreader Cloud first.');
+      return;
+    }
+    setState(() {
+      jobs[index] = {
+        'previousRecording': jobs[index]?['previousRecording'] ?? jobs[index],
+        'status': 'waiting', ...preference.toJson(),
+      };
+    });
+    await save();
+    await checkJobs();
+  }
+
   Future<void> generate() async {
     if (busy || selected.isEmpty) return;
     if (host.isEmpty || token.isEmpty) {
@@ -1108,7 +1200,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       notice = null;
     });
     for (final index in selected.toList()..sort()) {
-      jobs[index] = {'status': 'waiting', 'voice': narrator};
+      jobs[index] = {'status': 'waiting', 'engine': narrationEngine, 'voice': narrator};
     }
     await save();
     if (mounted) {
@@ -1167,9 +1259,11 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
           ) as Map<String, dynamic>;
         } catch (_) {}
       }
-      data['${widget.book.id}:$index'] = {'path': target.path, 'positionMs': 0};
+      data['${widget.book.id}:$index'] = {'path': target.path, 'positionMs': 0,
+        ...recordingMetadata(jobs[index] ?? {})};
       await stateFile.writeAsString(jsonEncode(data));
       jobs[index] = {...?jobs[index], 'status': 'ready', 'id': id};
+      jobs[index]!.remove('previousRecording');
     } finally {
       client.close(force: true);
     }
@@ -1203,10 +1297,14 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
             final response = await requestJson('POST', '/dogreader/jobs', {
               'title': chapter.title,
               'text': chapter.text,
+              'engine': jobs[index]?['engine'] ?? 'google',
               'voice': jobs[index]?['voice'] ?? 'en-US-Chirp3-HD-Achernar',
+              ...{for (final key in ['model_version', 'settings'])
+                if (jobs[index]?.containsKey(key) == true) key: jobs[index]![key]},
             });
             jobs[index] = {
               ...?jobs[index],
+              ...recordingMetadata(response),
               'status': response['status'],
               'id': response['id'],
             };
@@ -1218,15 +1316,21 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
             result = await requestJson('GET', '/dogreader/jobs/$id');
           } catch (e) {
             // Re-submit if the cloud job record is missing; the server caches completed audio.
-            if (!e.toString().contains('Unknown job')) rethrow;
+            if (!e.toString().contains('Unknown job') && !e.toString().contains('Job not found')) {
+              rethrow;
+            }
             final chapter = widget.book.chapters[index];
             final submitted = await requestJson('POST', '/dogreader/jobs', {
               'title': chapter.title,
               'text': chapter.text,
+              'engine': jobs[index]?['engine'] ?? 'google',
               'voice': jobs[index]?['voice'] ?? 'en-US-Chirp3-HD-Achernar',
+              ...{for (final key in ['model_version', 'settings'])
+                if (jobs[index]?.containsKey(key) == true) key: jobs[index]![key]},
             });
             jobs[index] = {
               ...?jobs[index],
+              ...recordingMetadata(submitted),
               'status': submitted['status'],
               'id': submitted['id'],
             };
@@ -1239,6 +1343,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
           final currentId = jobs[index]?['id'] as String? ?? id;
           jobs[index] = {
             ...?jobs[index],
+            ...recordingMetadata(result),
             'status': nextStatus,
             'id': currentId,
             'error': result['error'],
@@ -1246,11 +1351,13 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
           if (nextStatus == 'ready') await downloadAudio(index, currentId);
           if (nextStatus == 'error') {
             notice =
-                'Cloud narration failed for ${widget.book.chapters[index].title}. Check Cloud Run logs.';
+                '${widget.book.chapters[index].title}: ${result['error'] ?? 'Narration failed. Retry to resume saved chunks.'}';
           }
         } catch (e) {
           // Preserve pending work for a later retry.
-          if (jobs[index]?['id'] == null) jobs[index] = {'status': 'waiting'};
+          if (jobs[index]?['id'] == null) {
+            jobs[index] = {...?jobs[index], 'status': 'waiting'};
+          }
           // A temporary socket failure should not masquerade as a failed job.
           // Keep the job queued and retry on the next refresh.
           if (e is SocketException ||
@@ -1280,6 +1387,8 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   @override
   void dispose() {
     timer?.cancel();
+    previewSequence++;
+    previewPlayer?.dispose();
     super.dispose();
   }
 
@@ -1328,29 +1437,14 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
               ],
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: DropdownButtonFormField<String>(
-              initialValue: narrator,
-              decoration: const InputDecoration(
-                labelText: 'Narrator',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.record_voice_over),
-              ),
-              items: narratorNames.entries
-                  .map(
-                    (entry) => DropdownMenuItem<String>(
-                      value: entry.key,
-                      child: Text(entry.value),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (value) {
-                if (value == null) return;
-                setState(() => narrator = value);
-                save();
-              },
-            ),
+          NarrationControls(
+            preference: NarrationPreference(narrationEngine, narrator),
+            onChanged: (value) {
+              setState(() { narrationEngine = value.engine; narrator = value.voice; });
+              save();
+            },
+            previewing: previewing,
+            onPreview: previewing ? stopPreview : previewVoice,
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -1383,17 +1477,14 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
               itemBuilder: (context, index) {
                 final chapter = widget.book.chapters[index];
                 final status = jobs[index]?['status'] as String?;
-                final voice = jobs[index]?['voice'] as String?;
-                final voiceLabel = voice == null
-                    ? null
-                    : narratorNames[voice] ?? voice;
-                return CheckboxListTile(
-                  secondary: status == 'ready'
+                final voiceLabel = jobs[index] == null ? null : recordingLabel(jobs[index]);
+                return Column(children: [CheckboxListTile(
+                  secondary: status == 'ready' || jobs[index]?['previousRecording'] is Map
                       ? Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             IconButton(
-                              tooltip: 'Play downloaded chapter',
+                              tooltip: status == 'ready' ? 'Play downloaded chapter' : 'Play previous recording',
                               icon: Icon(Icons.play_circle_fill, color: Theme.of(context).colorScheme.primary, size: 32),
                               onPressed: () => playChapter(index),
                             ),
@@ -1425,7 +1516,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
                             : status == 'queued'
                             ? 'Queued in cloud'
                             : status == 'error'
-                            ? 'Cloud job failed — check server logs'
+                            ? ((jobs[index]?['error'] as String?) ?? 'Narration failed. Retry to resume.')
                             : status) +
                         (voiceLabel == null ? '' : ' • $voiceLabel'),
                   ),
@@ -1442,7 +1533,13 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
                             selected.remove(index);
                           }
                         }),
-                );
+                ),
+                  if (status == 'ready' || status == 'error')
+                    Align(alignment: Alignment.centerRight, child: TextButton(
+                      onPressed: busy ? null : () => regenerate(index),
+                      child: const Text('Regenerate narration'),
+                    )),
+                ]);
               },
             ),
           ),
@@ -1452,7 +1549,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
               onPressed: selected.isEmpty || busy ? null : generate,
               icon: const Icon(Icons.record_voice_over),
               label: Text(
-                'Generate ${selected.length} chapter${selected.length == 1 ? '' : 's'}',
+                'Generate narration (${selected.length})',
               ),
             ),
           ),
