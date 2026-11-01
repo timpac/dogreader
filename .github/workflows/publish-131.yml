@@ -1,0 +1,36 @@
+name: Publish verified APK 131 without rebuilding
+on:
+  push:
+    branches: [feature/kokoro-narration-131]
+    paths: [.github/workflows/publish-131.yml]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Retrieve original signed Actions artifact
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 41331374454
+          artifact-ids: 13093778047
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          path: candidate
+      - name: Verify exact APK and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cp candidate/app-debug.apk Dogreader-131-kokoro.apk
+          echo 'b50cc3734734769bbc99769ff61e82a769e594e7095be54792269c43ad25b692  Dogreader-131-kokoro.apk' | sha256sum --check
+          if gh release view dogreader-131-kokoro --json id >/dev/null 2>&1; then
+            gh release upload dogreader-131-kokoro Dogreader-131-kokoro.apk
+            gh release edit dogreader-131-kokoro --draft=false --latest --notes-file docs/release-131.md
+          else
+            gh release create dogreader-131-kokoro Dogreader-131-kokoro.apk --target a60e87c232b8626672035c2730ff3f37f6a0e6c7 --title 'Dogreader 131 — build 129 with Kokoro' --notes-file docs/release-131.md --latest
+          fi
+          gh release view dogreader-131-kokoro --json url,isDraft,assets
