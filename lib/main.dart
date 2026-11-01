@@ -1221,7 +1221,10 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       return;
     }
     setState(() {
-      jobs[index] = {'status': 'waiting', ...preference.toJson()};
+      jobs[index] = {
+        'previousRecording': jobs[index]?['previousRecording'] ?? jobs[index],
+        'status': 'waiting', ...preference.toJson(),
+      };
     });
     await save();
     await checkJobs();
@@ -1288,6 +1291,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         ...recordingMetadata(jobs[index] ?? {})};
       await stateFile.writeAsString(jsonEncode(data));
       jobs[index] = {...?jobs[index], 'status': 'ready', 'id': id};
+      jobs[index]!.remove('previousRecording');
     } finally {
       client.close(force: true);
     }
@@ -1498,9 +1502,9 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
                 final status = jobs[index]?['status'] as String?;
                 final voiceLabel = jobs[index] == null ? null : recordingLabel(jobs[index]);
                 return Column(children: [CheckboxListTile(
-                  secondary: status == 'ready'
+                  secondary: status == 'ready' || jobs[index]?['previousRecording'] is Map
                       ? IconButton(
-                          tooltip: 'Play downloaded chapter',
+                          tooltip: status == 'ready' ? 'Play downloaded chapter' : 'Play previous recording',
                           icon: const Icon(
                             Icons.play_circle_fill,
                             color: accent,

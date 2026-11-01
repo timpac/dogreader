@@ -29,7 +29,22 @@ android {
         versionName = flutter.versionName
     }
 
+    // Explicitly select the recovered key for the verified in-place update build.
+    signingConfigs {
+        create("originalDogreader") {
+            storeFile = file(System.getProperty("user.home") + "/.android/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
+        getByName("debug") {
+            if (project.findProperty("dogreaderOriginalUpdate") == "true") {
+                signingConfig = signingConfigs.getByName("originalDogreader")
+            }
+        }
         release {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
@@ -47,3 +62,4 @@ kotlin {
 flutter {
     source = "../.."
 }
+

@@ -42,6 +42,9 @@ Map<String, dynamic> recordingMetadata(Map<String, dynamic> response) => {
 };
 
 String recordingLabel(Map<String, dynamic>? job) {
+  if (job?['id'] == null && job?['engine'] == null && job?['voice'] == null) {
+    return 'Recording • engine and voice not recorded';
+  }
   final engine = job?['engine'] as String? ?? 'google';
   final voice = job?['voice'] as String?;
   final name = voice == null ? 'voice not recorded' : narrationVoices[engine]?[voice] ?? voice;

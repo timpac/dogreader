@@ -13,6 +13,7 @@ void main() {
   });
 
   test('recording attribution uses stored engine and preserves model settings', () {
+    expect(recordingLabel({'status': 'ready'}), 'Recording • engine and voice not recorded');
     expect(recordingLabel({'voice': 'en-US-Chirp3-HD-Kore'}), 'Google Chirp • Kore');
     expect(recordingLabel({'engine': 'kokoro', 'voice': 'bm_daniel'}), 'Kokoro • Daniel');
     expect(recordingMetadata({'status': 'ready', 'engine': 'kokoro', 'voice': 'bm_fable',
