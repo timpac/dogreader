@@ -13,6 +13,7 @@ on:
       - feature/122-delete-chapter-audio
       - feature/123-audio-recovery-controls
       - feature/124-css-audio-seek
+      - build/129-theme-audio-combined
     paths:
       - 'lib/**'
       - 'test/**'
@@ -31,15 +32,20 @@ jobs:
     permissions:
       contents: write
     concurrency:
-      group: dogreader-draft-release-124
+      group: ${{ github.ref_name == 'build/129-theme-audio-combined' && 'dogreader-combined-129' || 'dogreader-draft-release-124' }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
       DOGREADER_KEYSTORE_B64: ${{ secrets.DOGREADER_KEYSTORE_B64 }}
+      # Same app and signing key; a higher code permits an in-place update from 124.
+      DOGREADER_BUILD_NUMBER: ${{ github.ref_name == 'build/129-theme-audio-combined' && '129' || '124' }}
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          # Build and validate the exact combined source.
+          ref: ${{ github.sha }}
 
       - name: Check signing secret
         id: signing
@@ -88,7 +94,7 @@ jobs:
 
       - name: Resolve Flutter dependencies
         if: steps.signing.outputs.available == 'true'
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
 
       - name: Analyze Dart code
         if: steps.signing.outputs.available == 'true'
@@ -102,7 +108,7 @@ jobs:
         if: steps.signing.outputs.available == 'true'
         env:
           ORG_GRADLE_PROJECT_dogreaderOriginalUpdate: 'true'
-        run: flutter build apk --debug --build-number 124 --dart-define=DOGREADER_BUILD=124
+        run: flutter build apk --debug --build-number "$DOGREADER_BUILD_NUMBER" --dart-define="DOGREADER_BUILD=$DOGREADER_BUILD_NUMBER"
 
       - name: Verify update signing certificate
         if: steps.signing.outputs.available == 'true'
@@ -121,10 +127,10 @@ jobs:
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
           "$AAPT" dump badging build/app/outputs/flutter-apk/app-debug.apk > /tmp/dogreader-apk-badging.txt
           head -1 /tmp/dogreader-apk-badging.txt
-          grep -Fq "package: name='com.example.audiobook_app' versionCode='124'" /tmp/dogreader-apk-badging.txt
+          grep -Fq "package: name='com.example.audiobook_app' versionCode='$DOGREADER_BUILD_NUMBER'" /tmp/dogreader-apk-badging.txt
           sha256sum build/app/outputs/flutter-apk/app-debug.apk
 
-      - name: Upload verified APK to draft GitHub Release
+      - name: Upload verified APK to private draft GitHub Release
         id: draft_release
         if: steps.signing.outputs.available == 'true'
         uses: actions/github-script@v7
@@ -134,9 +140,10 @@ jobs:
             const crypto = require('crypto');
             const { owner, repo } = context.repo;
             const source = 'build/app/outputs/flutter-apk/app-debug.apk';
-            const name = 'Dogreader-124.apk';
-            const title = 'Dogreader 124';
-            const preferredTag = 'dogreader-124';
+            const themeSwitcher = process.env.DOGREADER_BUILD_NUMBER === '129';
+            const name = themeSwitcher ? 'Dogreader-129-theme-audio.apk' : 'Dogreader-124.apk';
+            const title = themeSwitcher ? 'Dogreader 129 themes and audio controls' : 'Dogreader 124';
+            const preferredTag = themeSwitcher ? 'dogreader-129-theme-audio' : 'dogreader-124';
             const data = fs.readFileSync(source);
             const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
             const expected = digest(data);
@@ -145,7 +152,7 @@ jobs:
             let release = releases.find(item => item.tag_name === preferredTag);
             if (!release) {
               const named = releases.filter(item => item.name === title);
-              if (named.length > 1) fail('Multiple Dogreader 124 releases exist; refusing an ambiguous upload.');
+              if (named.length > 1) fail(`Multiple ${title} releases exist; refusing an ambiguous upload.`);
               release = named[0];
             }
             const tag = release?.tag_name ?? preferredTag;
@@ -180,7 +187,7 @@ jobs:
               release = (await github.rest.repos.createRelease({
                 owner, repo, tag_name: tag, target_commitish: context.sha, name: title,
                 draft: true, prerelease: false, make_latest: 'false',
-                body: `Build 124, original Dogreader signing identity.\n\nSource: ${context.sha}\nWorkflow: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}\n\nAutomated analysis, regression tests, APK signature and package/version checks passed. Physical Android validation remains outstanding.`
+                body: `Build ${process.env.DOGREADER_BUILD_NUMBER}, original Dogreader signing identity.\n\nApp source: ${context.sha}\nWorkflow source: ${context.sha}\nWorkflow: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}\n\n${themeSwitcher ? 'Combined build-128 theme switcher and build-126 media-control repairs. Full analysis and combined regression tests passed. APK signature and package/version checks passed.' : 'Automated analysis, regression tests, APK signature and package/version checks passed.'} Physical Android validation remains outstanding.`
               })).data;
               assertDraft(release);
             }
@@ -216,7 +223,7 @@ jobs:
               .addLink(title, release.html_url)
               .addTable([
                 [{ data: 'APK', header: true }, { data: 'Value', header: true }],
-                ['Filename', name], ['Version code', '124'], ['Package', 'com.example.audiobook_app'],
+                ['Filename', name], ['Version code', process.env.DOGREADER_BUILD_NUMBER], ['Package', 'com.example.audiobook_app'],
                 ['Source commit', context.sha], ['Asset ID', String(asset.id)], ['APK SHA-256', expected],
                 ['Release visibility', 'Draft; not published']
               ]).write();
