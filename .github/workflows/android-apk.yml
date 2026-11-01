@@ -136,6 +136,24 @@ jobs:
           grep -Fq "package: name='com.example.audiobook_app' versionCode='$DOGREADER_BUILD_NUMBER'" /tmp/dogreader-apk-badging.txt
           sha256sum build/app/outputs/flutter-apk/app-debug.apk
 
+      - name: Retain signed candidate before device checks
+        if: github.ref_name == 'feature/kokoro-narration-131'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: dogreader-131-signed-candidate-${{ github.sha }}
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Free build-only SDK space for the emulator
+        if: github.ref_name == 'feature/kokoro-narration-131'
+        run: |
+          (cd android && ./gradlew --stop)
+          rm -rf "$ANDROID_HOME/ndk" "$ANDROID_HOME/cmake" "$HOME/.gradle/caches"
+          df -h /
+
       - name: Enable KVM for actual APK screen verification
         if: github.ref_name == 'feature/kokoro-narration-131'
         run: |
@@ -151,6 +169,9 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_6
+          disk-size: 2048M
+          ram-size: 2048M
+          emulator-boot-timeout: 300
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
           script: python3 tools/verify_android_screens.py build/app/outputs/flutter-apk/app-debug.apk reports/screens

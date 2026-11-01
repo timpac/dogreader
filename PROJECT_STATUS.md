@@ -12,8 +12,13 @@
 - CI must pass strict full analysis and all tests, original signing/package/code
   verification, and actual signed APK book/chapter/reader/theme/narration checks
   on Android 13 before publication. Native screenshots are required for review.
-- Build/Android verification is pending at this checkpoint. No successful APK or
-  device result is claimed until the source-specific Actions run completes.
+- Initial CI 41329209236 passed full strict analysis, all 48 tests, APK compilation
+  and original certificate/package/version verification. The emulator failed
+  before app launch: 7,349.6 MB free versus 7,372.8 MB required for userdata.
+- The retry uses a 2 GiB test userdata disk and removes build-only NDK/CMake/Gradle
+  caches after compilation. A private signed-candidate artifact permits recovery
+  without losing the built APK if device checks fail. No release was uploaded.
+- Actual Android screen verification remains pending; no device success is claimed.
 - Backend PR #5 is unchanged. No deployment, generation, IAM or billing change.
 - Next: inspect the new CI run, fix failures, review actual APK screenshots, then
   publish verified APK 131. Physical phone checks remain as documented below.
