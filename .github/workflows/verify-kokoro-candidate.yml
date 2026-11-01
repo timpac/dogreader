@@ -1,0 +1,65 @@
+name: Verify retained signed APK 131
+on:
+  push:
+    branches: [verify/kokoro-131-candidate]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  actual-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify unchanged app source and build-129 preservation
+        run: |
+          python3 tools/check_build129.py
+          git diff --exit-code a60e87c232b8626672035c2730ff3f37f6a0e6c7 HEAD -- lib android assets pubspec.yaml pubspec.lock
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 41331374454
+          name: dogreader-131-signed-candidate-a60e87c232b8626672035c2730ff3f37f6a0e6c7
+          path: candidate
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Verify exact original-signed candidate and prepare emulator space
+        run: |
+          echo 'b50cc3734734769bbc99769ff61e82a769e594e7095be54792269c43ad25b692  candidate/app-debug.apk' | sha256sum --check
+          APKSIGNER="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner"
+          "$APKSIGNER" verify --print-certs candidate/app-debug.apk > candidate/certificate.txt
+          grep -Fqi c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177 candidate/certificate.txt
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/powershell /opt/hostedtoolcache/CodeQL
+          rm -rf "$ANDROID_HOME/ndk" "$ANDROID_HOME/cmake"
+          if ! command -v ffmpeg >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          fi
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Verify actual signed APK screens without rebuilding
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disk-size: 2048M
+          ram-size: 2048M
+          emulator-boot-timeout: 300
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          script: python3 tools/verify_android_screens.py candidate/app-debug.apk reports/screens
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dogreader-131-actual-screens
+          path: reports/screens/
+          if-no-files-found: error
+          retention-days: 7
