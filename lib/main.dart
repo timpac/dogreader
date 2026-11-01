@@ -1523,7 +1523,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
                             : status == 'queued'
                             ? 'Queued in cloud'
                             : status == 'error'
-                            ? jobs[index]?['error'] as String? ?? 'Narration failed. Retry to resume.'
+                            ? ((jobs[index]?['error'] as String?) ?? 'Narration failed. Retry to resume.')
                             : status) +
                         (voiceLabel == null ? '' : ' • $voiceLabel'),
                   ),
