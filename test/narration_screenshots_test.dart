@@ -13,6 +13,11 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
       final sdk = Platform.environment['FLUTTER_ROOT'];
       if (sdk != null) {
+        final icons = File('$sdk/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf');
+        if (icons.existsSync()) {
+          final loader = FontLoader('MaterialIcons')..addFont(Future.value(ByteData.sublistView(icons.readAsBytesSync())));
+          await loader.load();
+        }
         final font = File('$sdk/bin/cache/artifacts/material_fonts/Roboto-Regular.ttf');
         if (font.existsSync()) {
           final loader = FontLoader('Roboto')..addFont(Future.value(ByteData.sublistView(font.readAsBytesSync())));

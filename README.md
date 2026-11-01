@@ -37,11 +37,28 @@ theme for compatibility with the independent theme work.
 
 ## Validation and APK delivery
 
+[Download the signed private draft APK 130](https://github.com/timpac/dogreader/releases/download/untagged-c8d7b8bb60ac49725495/Dogreader-130-kokoro.apk).
+It was built from `e3cbcf7f21e36e826601a995c0cb825043c7a496` in
+[Actions 41326288250](https://github.com/timpac/dogreader/actions/runs/41326288250).
+Package `com.example.audiobook_app`, versionCode 130, the original signing
+certificate and downloaded asset bytes passed verification. APK SHA-256:
+`ee43a23d3d37b19a1923791914ea31ec8d2a8ee54bd33c6e2e315cbbaf2e9ad4`.
+
 GitHub Actions builds numbered APK **130**, signed with the original app key,
 and verifies certificate, package/version and uploaded bytes before private draft
 release delivery. It does not replace previous APK assets or publish a release.
 Rendered control screenshots in dark and light themes accompany that release;
 they show the actual controls with a sample recording row, not device playback.
+
+The captures below load the actual text and icon fonts. They were checked in
+[screenshot CI](https://github.com/timpac/dogreader/actions/runs/41327478412)
+and visually reviewed. The light image tests component theme compatibility; the
+selected app base retains its original dark theme. These are rendered control
+previews, not evidence of real cloud generation or phone playback.
+
+![Kokoro controls in the dark theme](docs/screenshots/kokoro-dark.png)
+
+![Kokoro controls in a light theme](docs/screenshots/kokoro-light.png)
 
 Focused checks: `flutter test test/narration_options_test.dart` and
 `flutter analyze lib/main.dart lib/narration_options.dart lib/dogreader_audio_handler.dart test/`.
