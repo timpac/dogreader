@@ -54,3 +54,31 @@ Physical phone checks remain for Pixel/Android-beta behavior, notification and
 lock-screen delivery, interruptions, installed-user data and in-place updates.
 Install as an update; do not uninstall or clear storage. Emulator checks do not
 establish actual Kokoro cloud generation or every physical-device behavior.
+
+## Build 131 delivery evidence
+
+APK source: `a60e87c232b8626672035c2730ff3f37f6a0e6c7`.
+APK SHA-256: `b50cc3734734769bbc99769ff61e82a769e594e7095be54792269c43ad25b692`.
+The signed candidate is unchanged; later commits correct only verification tools
+and documentation. Full strict analysis and all 48 tests passed in
+[Actions](https://github.com/timpac/dogreader/actions/runs/41331380907).
+
+Actual Android APK captures were visually reviewed:
+[library](docs/screenshots/build-131/library.png),
+[chapters](docs/screenshots/build-131/chapters.png),
+[reader](docs/screenshots/build-131/reader.png),
+[page jump](docs/screenshots/build-131/page-jump.png), and
+[player](docs/screenshots/build-131/player.png).
+They come from [the native run](https://github.com/timpac/dogreader/actions/runs/41333693025),
+using a real EPUB and local synthetic audio, not mocked screen widgets.
+
+The extended native script did **not** pass end to end: initial runner disk and
+install-time limits were corrected, and later runs encountered emulator System UI
+ANRs. The first native run reached the actual player, confirmed playback/pause,
+and stopped at a seek assertion that targeted the accessibility thumb rather than
+the track. That checker coordinate was corrected; native seek, complete dark-mode
+navigation, and restart verification remain unconfirmed. Existing reader/theme/
+audio source and all build-129 regression tests are unchanged and pass. No full
+native audio result or physical-phone validation is claimed. At the user's request
+to finish promptly, publication relies on the completed baseline, full test,
+signing and actual book/chapter/reader screen checks, with these limits explicit.

@@ -1,3 +1,25 @@
+# Build 131 delivered from build 129 (2026-11-01)
+
+- Runtime/APK source: `a60e87c232b8626672035c2730ff3f37f6a0e6c7`.
+- Build 129 at `26fd3ef70978c686a2ac09ca0bf655ac7add600e` is an ancestor;
+  zero baseline commits are missing, no baseline files are deleted, and all 53
+  protected files plus non-narration screen code are unchanged.
+- Full strict Flutter analysis and all 48 tests passed (41331380907).
+- Signed APK 131 compiled in 41331374454; original certificate/package/version
+  passed. Retained APK SHA-256:
+  `b50cc3734734769bbc99769ff61e82a769e594e7095be54792269c43ad25b692`.
+- Actual library, chapter list, reader, page-jump and player captures from run
+  41333693025 were visually reviewed and are under docs/screenshots/build-131/.
+- Extended native flow remains incomplete: emulator System UI ANRs and a checker
+  thumb-coordinate error prevented a complete seek/theme/restart result. No full
+  native pass is claimed. All existing baseline audio/theme/reader tests pass.
+- User requested expedient completion; further optional emulator retries stopped.
+- PR #17 supersedes closed PR #16. Build 130 is not the source baseline.
+- No app runtime change after the signed candidate; later commits affect only
+  verification tooling/documentation. No merge or cloud generation/deployment.
+- Next: install 131 in place and check physical-phone playback/seek/theme behavior.
+  Kokoro cloud benchmark/deployment still requires the earlier explicit approval.
+
 # Build 131 baseline correction (2026-11-01)
 
 - User-selected base: build 129, `26fd3ef70978c686a2ac09ca0bf655ac7add600e`.
