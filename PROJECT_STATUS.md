@@ -18,7 +18,12 @@
 - The retry uses a 2 GiB test userdata disk and removes build-only NDK/CMake/Gradle
   caches after compilation. A private signed-candidate artifact permits recovery
   without losing the built APK if device checks fail. No release was uploaded.
-- Actual Android screen verification remains pending; no device success is claimed.
+- Retry 41331374454 built and retained signed candidate from
+  `a60e87c232b8626672035c2730ff3f37f6a0e6c7` (artifact 13093778047).
+  The emulator booted, but installing the 171 MB APK exceeded the checker's
+  40-second limit. The bounded install limit is now 180 seconds.
+- A verification-only recovery will use that exact signed candidate; no app
+  runtime source is changed or rebuilt. Android verification remains pending.
 - Backend PR #5 is unchanged. No deployment, generation, IAM or billing change.
 - Next: inspect the new CI run, fix failures, review actual APK screenshots, then
   publish verified APK 131. Physical phone checks remain as documented below.

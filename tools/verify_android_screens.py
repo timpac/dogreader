@@ -19,8 +19,8 @@ TWO = 'Chapter Two - The Island'
 checks = []
 
 
-def adb(*args, binary=False):
-    return subprocess.check_output(['adb', *map(str, args)], text=not binary, timeout=40)
+def adb(*args, binary=False, timeout=40):
+    return subprocess.check_output(['adb', *map(str, args)], text=not binary, timeout=timeout)
 
 
 def shell(*args):
@@ -46,15 +46,22 @@ def find(text, timeout=25):
         nodes = [n for n in xml().iter('node') if text in label(n) and len(bounds(n)) == 4
                  and bounds(n)[2] > bounds(n)[0] and bounds(n)[3] > bounds(n)[1]]
         if nodes:
-            return sorted(nodes, key=lambda n: (bounds(n)[1], len(label(n))))[0]
+            return sorted(nodes, key=lambda n: (label(n) != text, len(label(n)), bounds(n)[1]))[0]
         time.sleep(0.5)
     raise AssertionError(f'Actual APK screen is missing: {text}')
 
 
 def expect(*texts):
-    for text in texts:
-        find(text)
-    checks.append('visible: ' + ', '.join(texts))
+    until = time.monotonic() + 25
+    while time.monotonic() < until:
+        labels = [label(n) for n in xml().iter('node')]
+        missing = [text for text in texts if not any(text in value for value in labels)]
+        if not missing:
+            checks.append('visible: ' + ', '.join(texts))
+            print(checks[-1], flush=True)
+            return
+        time.sleep(0.5)
+    raise AssertionError('Actual APK screen is missing: ' + ', '.join(missing))
 
 
 def tap(text):
@@ -69,6 +76,7 @@ def back():
 
 
 def capture(name):
+    print('Capturing actual APK screen: ' + name, flush=True)
     root = xml()
     (output / f'{name}.xml').write_bytes(ET.tostring(root))
     (output / f'{name}.png').write_bytes(adb('exec-out', 'screencap', '-p', binary=True))
@@ -170,7 +178,8 @@ def verify_mode(mode, audio_test=False):
 
 
 def main(apk):
-    adb('install', '-r', apk)
+    print('Installing the verified signed candidate (180-second limit)', flush=True)
+    adb('install', '-r', apk, timeout=180)
     shell('run-as', PACKAGE, 'mkdir', '-p', 'app_flutter/epubs', 'app_flutter/narration')
     with tempfile.TemporaryDirectory() as temp:
         folder = Path(temp)
