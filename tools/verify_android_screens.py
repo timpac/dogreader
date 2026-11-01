@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -28,8 +29,15 @@ def shell(*args):
 
 
 def xml():
-    shell('uiautomator', 'dump', '/sdcard/window.xml')
-    return ET.fromstring(adb('exec-out', 'cat', '/sdcard/window.xml'))
+    until = time.monotonic() + 30
+    while time.monotonic() < until:
+        try:
+            shell('rm', '-f', '/sdcard/window.xml')
+            shell('uiautomator', 'dump', '/sdcard/window.xml')
+            return ET.fromstring(adb('exec-out', 'cat', '/sdcard/window.xml'))
+        except (ET.ParseError, subprocess.CalledProcessError):
+            time.sleep(1)
+    raise AssertionError('Android did not provide a ready accessibility window within 30 seconds')
 
 
 def label(node):
@@ -195,7 +203,9 @@ def main(apk):
             path = folder / name
             path.write_text(json.dumps(value))
             seed(path, name)
-    shell('am', 'start', '-n', PACKAGE + '/.MainActivity')
+    launch = adb('shell', 'am', 'start', '-W', '-n', PACKAGE + '/.MainActivity', timeout=90)
+    print(launch, flush=True)
+    assert 'Error' not in launch, 'Android could not launch the installed APK'
     # Android 13 may ask for notification permission on the first launch.
     time.sleep(3)
     root = xml()
@@ -216,7 +226,9 @@ def main(apk):
     assert read_json('appearance.json')['theme'] == 'system'
     capture('system-settings')
     shell('am', 'force-stop', PACKAGE)
-    shell('am', 'start', '-n', PACKAGE + '/.MainActivity')
+    launch = adb('shell', 'am', 'start', '-W', '-n', PACKAGE + '/.MainActivity', timeout=90)
+    print(launch, flush=True)
+    assert 'Error' not in launch, 'Android could not launch the installed APK'
     expect(BOOK, 'BUILD 131')
     tap('Settings')
     expect('Follow system')
@@ -240,8 +252,15 @@ if __name__ == '__main__':
     try:
         main(sys.argv[1])
     except Exception:
-        try:
-            capture('failure')
-            (output / 'logcat.txt').write_text(adb('logcat', '-d', '-t', '1500'))
-        finally:
-            raise
+        (output / 'error.txt').write_text(traceback.format_exc())
+        for name, command in [
+            ('failure.png', ('exec-out', 'screencap', '-p')),
+            ('failure.xml', ('exec-out', 'cat', '/sdcard/window.xml')),
+            ('logcat.txt', ('logcat', '-d', '-t', '2000')),
+            ('activities.txt', ('shell', 'dumpsys', 'activity', 'activities')),
+        ]:
+            try:
+                (output / name).write_bytes(adb(*command, binary=True))
+            except Exception as capture_error:
+                (output / (name + '.error')).write_text(str(capture_error))
+        raise
