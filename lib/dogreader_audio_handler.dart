@@ -88,7 +88,18 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     _subscriptions.add(this.player.errorStream.listen(_recordPlaybackError));
   }
 
+  final diagnosticCommands = ValueNotifier<List<String>>(<String>[]);
+  int diagnosticCommandCount = 0;
+  final diagnosticStarted = DateTime.now();
+
   void _logCommand(String command) {
+    diagnosticCommandCount++;
+    final entry = '${DateTime.now().toIso8601String()} #$diagnosticCommandCount $command '
+        'playing=${player.playing} state=${player.processingState.name} '
+        'positionMs=${player.position.inMilliseconds}';
+    diagnosticCommands.value = [
+      entry, ...diagnosticCommands.value.take(39),
+    ];
     debugPrint(jsonEncode({
       'event': 'dogreader_media_command', 'command': command,
       'chapter': _chapterKey, 'playing': player.playing,
