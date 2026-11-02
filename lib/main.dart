@@ -2316,7 +2316,18 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
         : 1.0;
     final currentMs = position.inMilliseconds.toDouble().clamp(0.0, maxMs);
     return Scaffold(
-      appBar: AppBar(title: const Text('Chapter narration')),
+      appBar: AppBar(
+        title: const Text('Chapter narration'),
+        actions: [
+          IconButton(
+            tooltip: 'Audio diagnostics',
+            icon: const Icon(Icons.bug_report_outlined),
+            onPressed: () => Navigator.push(context, MaterialPageRoute<void>(
+              builder: (_) => const AudioDiagnosticsScreen(),
+            )),
+          ),
+        ],
+      ),
       body: Center(
         child: SingleChildScrollView(
           child: Padding(
@@ -2436,3 +2447,49 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
 }
 
 
+
+class AudioDiagnosticsScreen extends StatelessWidget {
+  const AudioDiagnosticsScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Audio diagnostics')),
+    body: ValueListenableBuilder<List<String>>(
+      valueListenable: audioHandler.diagnosticCommands,
+      builder: (context, commands, _) => StreamBuilder<ja.PlayerState>(
+        stream: audioHandler.player.playerStateStream,
+        builder: (context, snapshot) {
+          final player = audioHandler.player;
+          return SingleChildScrollView(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Build 132 • audio command diagnostics',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 16),
+                const Text('Before testing, note the command count. Open the notification '
+                    'or lock screen and press Pause or Play once. Return here without '
+                    'using the in-app playback buttons. Did the count increase?'),
+                const SizedBox(height: 16),
+                Text('Commands received: ${audioHandler.diagnosticCommandCount}'),
+                Text('Playing: ${player.playing}'),
+                Text('Player state: ${player.processingState.name}'),
+                Text('Session playing: ${audioHandler.playbackState.value.playing}'),
+                Text('Session state: ${audioHandler.playbackState.value.processingState.name}'),
+                const SizedBox(height: 16),
+                const Text('Both in-app and external commands appear below. '
+                    'The count resets when the audio handler restarts. '
+                    'Take a screenshot before restarting the phone. '
+                    'Opening this screen does not issue playback commands.'),
+                const SizedBox(height: 16),
+                SelectableText('Handler started: ${audioHandler.diagnosticStarted.toIso8601String()}\n\n'
+                    '${commands.isEmpty ? "No commands received yet." : commands.join("\n\n")}'),
+              ],
+            ),
+          );
+        },
+      ),
+    ),
+  );
+}
