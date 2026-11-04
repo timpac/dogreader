@@ -34,7 +34,8 @@ Future<void> main() async {
     config: const AudioServiceConfig(
       androidNotificationChannelId: 'com.example.audiobook_app.audio',
       androidNotificationChannelName: 'Dogreader narration',
-      androidNotificationOngoing: true,
+      // Keep the media service available for lock-screen/Bluetooth resume.
+      androidStopForegroundOnPause: false,
     ),
   );
 
@@ -2456,8 +2457,8 @@ class AudioDiagnosticsScreen extends StatelessWidget {
     appBar: AppBar(title: const Text('Audio diagnostics')),
     body: ValueListenableBuilder<List<String>>(
       valueListenable: audioHandler.diagnosticCommands,
-      builder: (context, commands, _) => StreamBuilder<ja.PlayerState>(
-        stream: audioHandler.player.playerStateStream,
+      builder: (context, commands, _) => StreamBuilder<PlaybackState>(
+        stream: audioHandler.playbackState,
         builder: (context, snapshot) {
           final player = audioHandler.player;
           return SingleChildScrollView(
@@ -2465,7 +2466,7 @@ class AudioDiagnosticsScreen extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Build 132 • audio command diagnostics',
+                const Text('Build $dogreaderBuild • audio command diagnostics',
                     style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 16),
                 const Text('Before testing, note the command count. Open the notification '
@@ -2477,6 +2478,8 @@ class AudioDiagnosticsScreen extends StatelessWidget {
                 Text('Player state: ${player.processingState.name}'),
                 Text('Session playing: ${audioHandler.playbackState.value.playing}'),
                 Text('Session state: ${audioHandler.playbackState.value.processingState.name}'),
+                Text('Session error code: ${audioHandler.playbackState.value.errorCode ?? "none"}'),
+                SelectableText('Last error: ${audioHandler.diagnosticLastError ?? "none"}'),
                 const SizedBox(height: 16),
                 const Text('Both in-app and external commands appear below. '
                     'The count resets when the audio handler restarts. '
@@ -2493,3 +2496,4 @@ class AudioDiagnosticsScreen extends StatelessWidget {
     ),
   );
 }
+

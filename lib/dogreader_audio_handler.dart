@@ -16,6 +16,8 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
   bool _stopped = true;
   bool _disposed = false;
   int? _playbackError;
+  String? diagnosticLastError;
+  String? _loadedPath;
   final List<StreamSubscription<dynamic>> _subscriptions = [];
   String? _chapterKey;
   String? _bookId;
@@ -97,9 +99,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     final entry = '${DateTime.now().toIso8601String()} #$diagnosticCommandCount $command '
         'playing=${player.playing} state=${player.processingState.name} '
         'positionMs=${player.position.inMilliseconds}';
-    diagnosticCommands.value = [
-      entry, ...diagnosticCommands.value.take(39),
-    ];
+    _logDiagnostic(entry);
     debugPrint(jsonEncode({
       'event': 'dogreader_media_command', 'command': command,
       'chapter': _chapterKey, 'playing': player.playing,
@@ -107,9 +107,21 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     }));
   }
 
+  void _logDiagnostic(String entry) {
+    diagnosticCommands.value = [entry, ...diagnosticCommands.value.take(79)];
+  }
+
   void _recordPlaybackError(Object error) {
     if (_disposed) return;
     _playbackError = error is PlayerException ? error.code : -1;
+    // Keep the native reason on-device, but redact local paths/URLs before
+    // users share screenshots. Do not replace this with a generic MP3 error.
+    final reason = error.toString()
+        .replaceAll(RegExp(r'https?://\S+'), '[URL]')
+        .replaceAll(RegExp(r'(?:file://)?/\S+'), '[path]');
+    diagnosticLastError = '${DateTime.now().toIso8601String()} '
+        '${error.runtimeType} code=$_playbackError: $reason';
+    _logDiagnostic('ERROR $diagnosticLastError');
     debugPrint(jsonEncode({'event': 'dogreader_media_error',
       'chapter': _chapterKey, 'error_type': error.runtimeType.toString(),
       'code': _playbackError}));
@@ -185,6 +197,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
       final count = _chapterCount!;
       await player.setFilePath(next.path, initialPosition: Duration.zero);
       if (!current()) return;
+      _loadedPath = next.path;
       _chapterKey = '$bookId:$nextIndex';
       _chapterIndex = nextIndex;
       _lastSavedSecond = -1;
@@ -242,6 +255,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     _playbackError = null;
     await player.setFilePath(path, initialPosition: startPosition);
     if (!active()) return;
+    _loadedPath = path;
     _chapterKey = key;
     _bookId = bookId;
     _chapterIndex = chapterIndex;
@@ -266,6 +280,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     await stop();
     if (generation != _loadGeneration) return;
     _chapterKey = null;
+    _loadedPath = null;
     _bookId = null;
     _chapterIndex = null;
     mediaItem.add(null);
@@ -274,18 +289,37 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
   @override
   Future<void> play() async {
     _logCommand('play');
-    ++_transportGeneration;
+    final transport = ++_transportGeneration;
+    final generation = _loadGeneration;
+    bool current() => !_disposed && transport == _transportGeneration &&
+        generation == _loadGeneration && !_stopped;
     if (_chapterKey == null || player.audioSource == null) return;
     _stopped = false;
-    _playbackError = null;
     try {
+      if ((_playbackError != null ||
+          player.processingState == ProcessingState.idle) && _loadedPath != null) {
+        final resumePosition = player.position;
+        await _savePosition(resumePosition);
+        if (!current()) return;
+        // A failed native player can retain its Dart audioSource. Reprepare
+        // that source explicitly instead of merely clearing the error flag.
+        await player.pause();
+        if (!current()) return;
+        _playbackError = null;
+        _logDiagnostic('${DateTime.now().toIso8601String()} '
+            'RELOAD positionMs=${resumePosition.inMilliseconds}');
+        await player.setFilePath(_loadedPath!, initialPosition: resumePosition);
+        if (!current()) return;
+      }
+      _playbackError = null;
       if (player.processingState == ProcessingState.completed) {
         await player.seek(Duration.zero);
       }
+      if (!current()) return;
       await _startPlayback();
     } catch (error) {
+      if (error is PlayerInterruptedException && !current()) return;
       _recordPlaybackError(error);
-      rethrow;
     }
   }
 
@@ -300,9 +334,16 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
   Future<void> pause() async {
     _logCommand('pause');
     ++_transportGeneration;
-    await player.pause();
-    _broadcastPlaybackState();
-    await _savePosition(player.position);
+    // Snapshot before a failing native operation can reset the position.
+    final saved = _savePosition(player.position);
+    try {
+      await player.pause();
+    } catch (error) {
+      _recordPlaybackError(error);
+    } finally {
+      _broadcastPlaybackState();
+      await saved;
+    }
   }
 
   @override
@@ -365,3 +406,4 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     await player.dispose();
   }
 }
+

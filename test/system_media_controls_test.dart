@@ -57,6 +57,67 @@ void main() {
     expect(handler.playbackState.value.controls[1], MediaControl.play);
   });
 
+  test('Play reloads a failed source at the listening position', () async {
+    await load();
+    player.position = const Duration(minutes: 42);
+    player.processingState = ProcessingState.idle;
+    player.errors.add(PlayerException(42, 'decoder failed', null));
+    await flush();
+    await handler.play();
+    expect(player.loads, 2);
+    expect(player.position, const Duration(minutes: 42));
+    expect(handler.playbackState.value.playing, isTrue);
+    expect(handler.playbackState.value.errorCode, isNull);
+    expect(handler.diagnosticLastError, contains('decoder failed'));
+    expect(handler.diagnosticCommandCount, 1);
+  });
+
+  test('Pause during recovery prevents playback after loading completes', () async {
+    await load();
+    player.processingState = ProcessingState.idle;
+    player.preparing = Completer<void>();
+    final recovering = handler.play();
+    await waitFor(() => player.loads == 2);
+    await handler.pause();
+    player.preparing!.complete();
+    await recovering;
+    expect(player.plays, 0);
+    expect(handler.playbackState.value.playing, isFalse);
+  });
+
+  test('failed recovery is reported without an unhandled media callback error', () async {
+    await load();
+    player.processingState = ProcessingState.idle;
+    player.loadError = PlayerException(43, 'decoder unavailable', null);
+    await handler.play();
+    expect(handler.playbackState.value.processingState, AudioProcessingState.error);
+    expect(handler.playbackState.value.controls[1], MediaControl.play);
+    expect(player.plays, 0);
+    expect(handler.diagnosticLastError, contains('decoder unavailable'));
+  });
+
+  test('Pause saves the position even when the native player fails', () async {
+    await load();
+    player.position = const Duration(seconds: 73);
+    player.pauseError = PlayerException(44, 'pause failed', null);
+    await handler.pause();
+    expect(await File('${root.path}/narration_state.json').readAsString(),
+        contains('73000'));
+    expect(handler.playbackState.value.processingState, AudioProcessingState.error);
+    player.pauseError = null;
+  });
+
+  test('diagnostic errors redact paths and URLs without changing command count', () async {
+    await load();
+    player.errors.add(PlayerException(45,
+        'Cannot read /data/user/0/private.mp3 https://example.com/token', null));
+    await flush();
+    expect(handler.diagnosticLastError, contains('Cannot read'));
+    expect(handler.diagnosticLastError, isNot(contains('/data/user')));
+    expect(handler.diagnosticLastError, isNot(contains('example.com')));
+    expect(handler.diagnosticCommandCount, 0);
+  });
+
   test('media-button toggle dispatches through the published playing state', () async {
     await load();
     await handler.click();
@@ -210,3 +271,4 @@ void main() {
     expect(handler.mediaItem.value?.id, 'book:1');
   });
 }
+

@@ -28,6 +28,8 @@ class FakePlayer implements AudioPlayer {
   int plays = 0;
   bool emitStateOnStop = true;
   bool holdPlayFuture = false;
+  Object? pauseError;
+  Object? loadError;
   Completer<void>? playback;
   bool ignoreSeek = false;
   Completer<void>? preparing;
@@ -58,6 +60,7 @@ class FakePlayer implements AudioPlayer {
   Future<Duration?> setFilePath(String filePath, {Duration? initialPosition, bool preload = true, dynamic tag}) async {
     loads++;
     if (preparing != null) await preparing!.future;
+    if (loadError != null) throw loadError!;
     audioSource = AudioSource.uri(Uri.file(filePath));
     position = initialPosition ?? Duration.zero;
     processingState = ProcessingState.ready;
@@ -66,6 +69,10 @@ class FakePlayer implements AudioPlayer {
   }
   @override
   Future<void> pause() async {
+    if (pauseError != null) {
+      position = Duration.zero;
+      throw pauseError!;
+    }
     playing = false;
     emitState();
     if (playback != null && !playback!.isCompleted) playback!.complete();
@@ -118,3 +125,4 @@ class FakePlayer implements AudioPlayer {
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
+
