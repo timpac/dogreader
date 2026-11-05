@@ -72,6 +72,7 @@ void main() {
     await Directory('${root.path}/narration').create();
     await File('${root.path}/narration/book_1.mp3').writeAsBytes([1]);
     await load();
+    await handler.play();
     player.processing.add(ProcessingState.completed);
     for (var i = 0; i < 100 && handler.mediaItem.value?.id != 'book:1'; i++) {
       await Future<void>.delayed(const Duration(milliseconds: 1));

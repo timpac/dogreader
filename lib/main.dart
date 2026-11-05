@@ -39,6 +39,8 @@ Future<void> main() async {
     ),
   );
 
+  await audioHandler.initializeAudioSession();
+
   final appearance = ThemePreferences();
   await appearance.load();
   runApp(AudiobookApp(appearance: appearance));
@@ -838,7 +840,6 @@ class NarrationQueueScreen extends StatefulWidget {
 class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   String narrationEngine = 'google';
   String narrator = 'en-US-Chirp3-HD-Achernar';
-  ja.AudioPlayer? previewPlayer;
   bool previewing = false;
   int previewSequence = 0;
   final Set<int> selected = {};
@@ -1098,7 +1099,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
 
   Future<void> stopPreview() async {
     previewSequence++;
-    await previewPlayer?.stop();
+    await audioHandler.stopPreview();
     if (mounted) setState(() => previewing = false);
   }
 
@@ -1150,12 +1151,8 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         client.close(force: true);
       }
       if (!mounted || sequence != previewSequence) { return; }
-      await audioHandler.pause();
-      final player = previewPlayer ??= ja.AudioPlayer();
-      await player.setFilePath(preview.path);
-      if (!mounted || sequence != previewSequence) { return; }
       setState(() => notice = 'Preview: ${recordingLabel(preference.toJson())}');
-      await player.play();
+      await audioHandler.playPreview(preview.path, 'Preview: ${recordingLabel(preference.toJson())}');
     } catch (e) {
       if (mounted && sequence == previewSequence) { setState(() => notice = 'Voice preview: $e'); }
     } finally {
@@ -1389,7 +1386,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   void dispose() {
     timer?.cancel();
     previewSequence++;
-    previewPlayer?.dispose();
+    unawaited(audioHandler.stopPreview());
     super.dispose();
   }
 
@@ -2164,7 +2161,8 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
           // Seeking is a separate step and always runs for reader navigation.
           final completed = await seekNarrationFromText(
             fraction: widget.initialTextFraction!, load: prepare,
-            pause: audioHandler.pause, seek: audioHandler.seek,
+            pause: () => audioHandler.pause(origin: 'reader jump'),
+            seek: (target) => audioHandler.seek(target, origin: 'reader jump'),
             duration: () => player.duration, position: () => player.position,
             isCurrent: () => active() &&
                 (!prepared || audioHandler.mediaItem.value?.id == chapterKey),
@@ -2243,7 +2241,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
       if (!mounted) return;
       await refreshDuration();
       if (!mounted || audioHandler.mediaItem.value?.id != chapterKey) return;
-      await audioHandler.seek(Duration.zero);
+      await audioHandler.seek(Duration.zero, origin: 'import audio');
       await updateState({'path': target.path, 'positionMs': 0});
       if (mounted) {
         setState(() {
@@ -2261,9 +2259,9 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
   Future<void> togglePlayback() async {
     try {
       if (playing) {
-        await audioHandler.pause();
+        await audioHandler.pause(origin: 'in-app');
       } else if (audioPath != null) {
-        await audioHandler.play();
+        await audioHandler.play(origin: 'in-app');
       }
     } catch (e) {
       if (mounted) setState(() => error = 'Playback error: $e');
@@ -2278,7 +2276,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
       maxMs > 0 ? maxMs : value.inMilliseconds,
     );
     final target = Duration(milliseconds: ms);
-    await audioHandler.seek(target);
+    await audioHandler.seek(target, origin: 'in-app seek');
     if (mounted) setState(() => position = target);
   }
 
@@ -2475,6 +2473,7 @@ class AudioDiagnosticsScreen extends StatelessWidget {
                 const SizedBox(height: 16),
                 Text('Commands received: ${audioHandler.diagnosticCommandCount}'),
                 Text('Playing: ${player.playing}'),
+                Text('Playback requested: ${audioHandler.diagnosticWantsPlayback}'),
                 Text('Player state: ${player.processingState.name}'),
                 Text('Session playing: ${audioHandler.playbackState.value.playing}'),
                 Text('Session state: ${audioHandler.playbackState.value.processingState.name}'),
