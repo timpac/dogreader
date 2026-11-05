@@ -1,0 +1,49 @@
+name: Deliver existing verified Build 134 APK
+on:
+  workflow_dispatch:
+  push:
+    branches: [delivery/build-134-apk]
+    paths: ['.github/workflows/deliver-build-134.yml']
+permissions:
+  contents: read
+jobs:
+  deliver:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      APK_NAME: Dogreader-134-media-controls.apk
+      APK_SHA256: 1ad73080de73ee04e83dd3d002a8890f25fec404306e1337510648632fc8d5f9
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download the exact existing verified APK, without building
+        run: |
+          mkdir -p payload
+          gh api "repos/$GITHUB_REPOSITORY/releases/assets/713814592" -H 'Accept: application/octet-stream' > "payload/$APK_NAME"
+          printf '%s  %s\n' "$APK_SHA256" "payload/$APK_NAME" | sha256sum --check --strict
+      - name: Publish downloadable APK artifact
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dogreader-134-verified-apk
+          path: payload/Dogreader-134-media-controls.apk
+          compression-level: 9
+          retention-days: 7
+          if-no-files-found: error
+      - name: Download the published artifact to verify delivery
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.upload.outputs.artifact-id }}
+          path: download-check
+          merge-multiple: true
+      - name: Verify downloaded APK is byte-identical and summarize
+        env:
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: |
+          printf '%s  %s\n' "$APK_SHA256" "download-check/$APK_NAME" | sha256sum --check --strict
+          {
+            echo 'Verified existing Build 134 APK; no rebuild, re-signing, or version change.'
+            echo
+            echo "Artifact: [Dogreader-134-verified-apk]($ARTIFACT_URL)"
+            echo
+            echo "APK SHA-256: $APK_SHA256"
+          } >> "$GITHUB_STEP_SUMMARY"
