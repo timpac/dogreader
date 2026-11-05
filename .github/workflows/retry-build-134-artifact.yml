@@ -1,0 +1,47 @@
+name: Retry verified Build 134 artifact delivery
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 * * * *'
+permissions:
+  contents: read
+  actions: write
+concurrency:
+  group: build-134-artifact-delivery-retry
+  cancel-in-progress: false
+jobs:
+  retry-delivery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Retry only the existing APK delivery run; stop after success
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const runId = 42054500816;
+            const workflow = 'retry-build-134-artifact.yml';
+            const run = (await github.rest.actions.getWorkflowRun({owner, repo, run_id: runId})).data;
+            const result = await github.rest.actions.listWorkflowRunArtifacts({owner, repo, run_id: runId});
+            const artifact = result.data.artifacts.find(a => a.name === 'Dogreader-134-verified-apk' && !a.expired);
+            if (run.conclusion === 'success' && artifact) {
+              core.notice(`Verified artifact is downloadable: ${run.html_url}/artifacts/${artifact.id}`);
+              await core.summary.addHeading('Build 134 delivery verified')
+                .addLink('Download Dogreader-134-verified-apk', `${run.html_url}/artifacts/${artifact.id}`)
+                .addRaw('The target run downloads its own artifact and checks the original APK SHA-256 before success.').write();
+              await github.rest.actions.disableWorkflow({owner, repo, workflow_id: workflow});
+              return;
+            }
+            if (Date.now() > Date.parse('2026-11-06T15:33:52.602704+00:00')) {
+              await github.rest.actions.disableWorkflow({owner, repo, workflow_id: workflow});
+              throw new Error('Delivery quota is still unavailable after 24 hours. Retry stopped; existing APK and Releases are unchanged.');
+            }
+            if (run.status === 'completed') {
+              await github.rest.actions.reRunWorkflow({owner, repo, run_id: runId});
+              core.notice(`Retried the delivery-only run: ${run.html_url}`);
+            } else {
+              core.notice(`Delivery is already ${run.status}: ${run.html_url}`);
+            }
+            await core.summary.addHeading('Waiting for GitHub artifact quota recalculation')
+              .addLink('Exact Build 134 APK delivery run', run.html_url)
+              .addRaw('Hourly retry; automatically disabled after verified delivery or 24 hours. No app build, signing, or version change.').write();
