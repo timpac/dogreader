@@ -114,3 +114,39 @@ Confirm audible silence after Pause and no delayed resumption. Repeat after a
 real decoder fault if one occurs naturally; synthetic tests cannot reproduce
 every codec/OEM fault. Command completion and Android output activity are stronger
 evidence than receipt, but cannot establish the user's phone's audible behavior.
+
+## Verified Android result and release source
+
+[Run 42042177585](https://github.com/timpac/dogreader/actions/runs/42042177585)
+completed successfully on Android 13 from
+`fb523835170dfe2565d8c8051b36d1249125b533`.
+
+The Build-133 baseline failed with **"Audio output resumed after deliberate
+Pause"** during real Android audio-focus regain. This assertion reads
+`AudioManager.isMusicActive()` independently of the Dart playing flag. It is a
+reproduced native output failure, not merely a command counter, session icon,
+or mock assertion. The baseline's plugin resumed without a handler Play command.
+The candidate passed all 16 native stages, including remaining paused through
+focus regain, native output inactivity, background/locked-session Pause/Play,
+seek, in-app Stop/restart, foreground changes and rapid commands. The candidate
+snapshot after focus-regain cancellation had player=false, session=false and
+processing=idle, while the native session remained resumably paused.
+
+Full Flutter analysis and all **71 tests** passed locally and in that CI run.
+The initial System UI selector failure is not counted as a playback failure or
+a touch pass. The artifact quota warning is not a test failure: complete native
+reports are retained in the successful job's logs and summary.
+
+The signed APK workflow requires a successful native run with identical library,
+Android, test, dependency and native-harness contents, checks out its own exact
+commit, runs analysis and the complete suite again, and verifies the original
+signing certificate, package and version code 134. The release commit changes
+only the APK workflow and this report relative to the verified native source.
+Release upload is hash-checked before publication and refuses existing assets
+or tags belonging to another commit.
+
+This proves and fixes an actual Build-133 Pause bypass on Android. The original
+Pixel screenshot does not establish that a focus interruption was its exact
+trigger, or that the historical renderer error caused it. Physical Pixel audible
+output, notification/lock-screen taps, long background periods and real Bluetooth
+or codec faults still require the device checks above.
