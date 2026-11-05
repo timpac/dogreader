@@ -162,6 +162,10 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
               _wantsPlayback && event.type != AudioInterruptionType.unknown
               ? _intentRevision
               : null;
+          if (event.type == AudioInterruptionType.unknown) {
+            ++_intentRevision;
+            _wantsPlayback = false;
+          }
           _interrupted = true;
           unawaited(_silence().catchError(_recordPlaybackError));
         } else {

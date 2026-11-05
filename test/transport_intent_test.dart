@@ -187,6 +187,15 @@ void main() {
     expect(handler.diagnosticWantsPlayback, isFalse);
   });
 
+  test('permanent focus loss leaves a resumable media-button intent', () async {
+    await load();
+    await handler.play();
+    focus.add(AudioInterruptionEvent(true, AudioInterruptionType.unknown));
+    await waitFor(() => !player.playing);
+    await handler.click();
+    expect(player.playing, isTrue);
+  });
+
   test('headset disconnect cancels focus resumption', () async {
     await load();
     await handler.play();
