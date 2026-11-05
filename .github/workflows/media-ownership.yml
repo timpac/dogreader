@@ -76,8 +76,22 @@ jobs:
           script: |
             python3 tools/check_android_media_controls.py --apk /tmp/baseline-probe.apk --instrumentation-apk /tmp/instrumentation.apk --report /tmp/baseline-native-report.json || echo 'Baseline failure retained in report; candidate must pass.'
             python3 tools/check_android_media_controls.py --apk /tmp/candidate-probe.apk --instrumentation-apk /tmp/instrumentation.apk --report /tmp/candidate-native-report.json
+      - name: Retain reports in logs and job summary independent of artifact quota
+        if: always()
+        run: |
+          python3 - <<'PYREPORT'
+          import os
+          from pathlib import Path
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('Real Android MediaSession completion and native audio output activity. Physical System UI taps remain device verification.\n\n')
+              for report in sorted(Path('/tmp').glob('*-native-report.json')):
+                  data = report.read_text()
+                  print(f'NATIVE_REPORT {report.name} {data}', flush=True)
+                  summary.write(f'### {report.name}\n\n```json\n{data}\n```\n\n')
+          PYREPORT
       - uses: actions/upload-artifact@v4
         if: always()
+        continue-on-error: true
         with:
           name: media-ownership-native-reports
           path: /tmp/*-native-report.json

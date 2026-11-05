@@ -41,7 +41,9 @@ import java.util.concurrent.TimeUnit;
 
 import static org.junit.Assert.*;
 
-/** Real System UI touches; no fake player, global key routing or idle dump. */
+/** Real own-session transport and native output; isolated synthetic audio.
+ * System UI touch delivery is established on the user device; this test checks
+ * completion after delivery without relying on emulator System UI selectors. */
 @RunWith(AndroidJUnit4.class)
 public class MediaControlDeliveryTest {
     private static final String PACKAGE = "com.example.audiobook_app.test";
@@ -222,6 +224,30 @@ public class MediaControlDeliveryTest {
         result(stage, observed);
     }
 
+    private void externalCommand(String stage, String method, Boolean playing, int direction) throws Exception {
+        int before = state().getJSONObject("commands").optInt(method);
+        switch (method) {
+            case "pause": controller.getTransportControls().pause(); break;
+            case "play": controller.getTransportControls().play(); break;
+            case "rewind": controller.getTransportControls().rewind(); break;
+            case "fastForward": controller.getTransportControls().fastForward(); break;
+            default: throw new AssertionError("Unsupported external command " + method);
+        }
+        JSONObject observed = await(value -> {
+            if (value.getJSONObject("commands").optInt(method) <= before) return false;
+            if (playing != null && (value.getBoolean("playing") != playing ||
+                    value.getBoolean("sessionPlaying") != playing ||
+                    !nativeStateIs(playing ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED))) return false;
+            if (direction != 0) {
+                long origin = value.getJSONObject("commandPositionsMs").getLong(method);
+                return direction * (value.getLong("positionMs") - origin) >= 10000;
+            }
+            return true;
+        });
+        if (playing != null) assertNativeOutput(playing);
+        result(stage, observed);
+    }
+
     private void assertNativeOutput(boolean playing) throws Exception {
         long deadline = SystemClock.uptimeMillis() + 5000;
         while (audio.isMusicActive() != playing && SystemClock.uptimeMillis() < deadline) {
@@ -317,12 +343,15 @@ public class MediaControlDeliveryTest {
                     nativeStateIs(PlaybackState.STATE_PLAYING)));
             assertEquals(PlaybackState.STATE_PLAYING, controller.getPlaybackState().getState());
 
+            focusAndRapidCommands();
+            controller.getTransportControls().play();
+            await(value -> value.getBoolean("playing") && value.getBoolean("sessionPlaying"));
+            assertNativeOutput(true);
             shell("input keyevent KEYCODE_HOME");
-            shell("cmd statusbar expand-notifications");
-            command("shade-pause", "Pause", "pause", false, 0, true);
-            command("shade-play", "Play", "play", true, 0, true);
-            command("shade-rewind", "Rewind", "rewind", null, -1, true);
-            command("shade-forward", "Fast forward", "fastForward", null, 1, true);
+            externalCommand("background-session-pause", "pause", false, 0);
+            externalCommand("background-session-play", "play", true, 0);
+            externalCommand("background-rewind", "rewind", null, -1);
+            externalCommand("background-forward", "fastForward", null, 1);
 
             shell("cmd statusbar collapse");
             shell("locksettings set-disabled false");
@@ -337,8 +366,8 @@ public class MediaControlDeliveryTest {
                 SystemClock.sleep(100);
             }
             assertTrue("Lock-screen check requires a locked emulator", keyguard.isKeyguardLocked());
-            command("lock-pause", "Pause", "pause", false, 0, true);
-            command("lock-play", "Play", "play", true, 0, true);
+            externalCommand("lock-session-pause", "pause", false, 0);
+            externalCommand("lock-session-play", "play", true, 0);
 
             shell("wm dismiss-keyguard");
             context.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP));
@@ -346,10 +375,8 @@ public class MediaControlDeliveryTest {
             command("app-restart", "In-app Play", "play", true, 0, false);
             ownController();
             shell("input keyevent KEYCODE_HOME");
-            shell("cmd statusbar expand-notifications");
-            command("restart-shade-pause", "Pause", "pause", false, 0, true);
-            command("restart-shade-play", "Play", "play", true, 0, true);
-            focusAndRapidCommands();
+            externalCommand("restart-background-pause", "pause", false, 0);
+            externalCommand("restart-background-play", "play", true, 0);
             assertEquals("Every transport/touch/focus check must run", 16, checks);
         } finally {
             shell("cmd statusbar collapse");

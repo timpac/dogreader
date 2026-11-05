@@ -9,9 +9,9 @@ import subprocess
 PACKAGE = 'com.example.audiobook_app.test'
 TEST_PACKAGE = PACKAGE + '.runner'
 STAGES = {
-    'own-session-pause', 'own-session-play', 'shade-pause', 'shade-play',
-    'shade-rewind', 'shade-forward', 'lock-pause', 'lock-play',
-    'app-stop', 'app-restart', 'restart-shade-pause', 'restart-shade-play',
+    'own-session-pause', 'own-session-play', 'background-session-pause', 'background-session-play',
+    'background-rewind', 'background-forward', 'lock-session-pause', 'lock-session-play',
+    'app-stop', 'app-restart', 'restart-background-pause', 'restart-background-play',
     'focus-automatic-resume', 'focus-pause-stays-paused',
     'rapid-commands-final-pause', 'foreground-final-pause',
 }

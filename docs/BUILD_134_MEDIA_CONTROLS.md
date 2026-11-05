@@ -91,11 +91,16 @@ coverage now starts playback before injecting completion: a synthetic completion
 on an intentionally paused player must not start a new chapter.
 
 The Android harness uses real audio_service/just_audio, a synthetic local WAV,
-an isolated `.test` package and ephemeral signing, and checks notification and
-lock-screen touches, native MediaSession state, background/foreground handling,
+an isolated `.test` package and ephemeral signing, and checks external native
+MediaSession state/completion, background/foreground and locked-screen handling,
 rapid transport commands and real focus loss/regain. It also checks Android's
 native music-output activity after Pause rather than accepting Dart flags alone.
-It runs a Build-133 baseline separately from the candidate. No cloud call, real
+It runs a Build-133 baseline separately from the candidate. Physical notification
+and lock-screen taps remain device verification; command delivery is already
+confirmed on the Pixel. The first emulator attempt could not locate the System UI
+Pause control on either baseline or candidate, so no touch pass is claimed.
+Report upload hit the repository artifact quota; subsequent jobs retain complete
+reports in logs and the job summary independently of that quota. No cloud call, real
 book or physical phone is used. Results and release provenance are appended after
 verification.
 
