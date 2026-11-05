@@ -4,6 +4,12 @@ Baseline: published Build 133, `69016ca19c86be1dafa53b65a7624094ebc73c61`.
 Work is isolated on `fix/134-media-ownership`; the older default branch and
 other development/release branches are not modified.
 
+Final verified playback source: `fe9e1a7d9d7581607b78dcacf6ae8d483536d8c1`.
+[Final verification run 42047990148](https://github.com/timpac/dogreader/actions/runs/42047990148)
+passed analysis, all 74 Flutter tests and all 17 native Android stages, including
+Seek→Pause→Play after engine release. The signed release is gated on identical
+playback/test source. Physical Pixel verification remains required.
+
 ## Architecture and defects
 
 `main()` initializes one `DogreaderAudioHandler` through `AudioService.init`.
@@ -115,7 +121,7 @@ real decoder fault if one occurs naturally; synthetic tests cannot reproduce
 every codec/OEM fault. Command completion and Android output activity are stronger
 evidence than receipt, but cannot establish the user's phone's audible behavior.
 
-## Verified Android result and release source
+## Initial native proof of the Build-133 defect
 
 [Run 42042177585](https://github.com/timpac/dogreader/actions/runs/42042177585)
 completed successfully on Android 13 from
@@ -171,7 +177,24 @@ times and requires audio output to stop and then restart, making 17 native stage
 
 Cancellation of the first signed build arrived after its own release upload had
 finished. Its asset had zero downloads. That release was immediately withdrawn,
-retained as a private draft under `dogreader-134-withdrawn-a9bbf4a`, and its original
-134 tag removed only after verifying it belonged to that exact task-created
-commit. The final 134 release must contain the corrected source and a new native
+retained as a private draft titled `Withdrawn pre-seek candidate - do not install`.
+The archival Git tag `dogreader-134-withdrawn-a9bbf4a` preserves its source commit.
+The original 134 tag was removed only after verifying it belonged to that exact
+task-created commit. The final 134 release must contain the corrected source and a new native
 verification; that earlier asset must not be installed.
+
+## Final native verification
+
+[Run 42047990148](https://github.com/timpac/dogreader/actions/runs/42047990148)
+passed from `fe9e1a7d9d7581607b78dcacf6ae8d483536d8c1`. Analysis and all 74 tests
+passed, and the candidate passed all 17 real Android stages. The additional stage
+ran six native Seek→Pause→Play sequences, checking audio inactivity after Pause
+and active audio after Play. The Build-133 baseline again failed the focus-regain
+Pause test. The native reports remain in logs and the job summary despite the
+artifact storage quota warning.
+
+The final publication commit changes only this report and the APK workflow's
+push trigger relative to that verified source. It re-enables the signed build
+only after successful native verification. The original signing identity,
+version 134, original application package and uploaded bytes are checked before
+the corrected release is published.

@@ -15,6 +15,7 @@ on:
       - feature/124-css-audio-seek
       - build/129-theme-audio-combined
       - feature/kokoro-narration-131
+      - fix/134-media-ownership
     paths:
       - 'lib/**'
       - 'test/**'
