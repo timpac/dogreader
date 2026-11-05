@@ -347,6 +347,19 @@ public class MediaControlDeliveryTest {
             controller.getTransportControls().play();
             await(value -> value.getBoolean("playing") && value.getBoolean("sessionPlaying"));
             assertNativeOutput(true);
+            // Seek may be buffering when Pause releases the native engine.
+            // A lost native Seek reply must not block the subsequent Play.
+            for (int i = 0; i < 6; i++) {
+                int seeks = state().getJSONObject("commands").optInt("seek");
+                controller.getTransportControls().seekTo(200000 + i * 1000);
+                controller.getTransportControls().pause();
+                await(value -> value.getJSONObject("commands").optInt("seek") > seeks && !value.getBoolean("playing"));
+                assertNativeOutput(false);
+                controller.getTransportControls().play();
+                await(value -> value.getBoolean("playing") && value.getBoolean("sessionPlaying"));
+                assertNativeOutput(true);
+            }
+            result("seek-pause-play-no-deadlock", state());
             shell("input keyevent KEYCODE_HOME");
             externalCommand("background-session-pause", "pause", false, 0);
             externalCommand("background-session-play", "play", true, 0);
@@ -377,7 +390,7 @@ public class MediaControlDeliveryTest {
             shell("input keyevent KEYCODE_HOME");
             externalCommand("restart-background-pause", "pause", false, 0);
             externalCommand("restart-background-play", "play", true, 0);
-            assertEquals("Every transport/touch/focus check must run", 16, checks);
+            assertEquals("Every transport/touch/focus check must run", 17, checks);
         } finally {
             shell("cmd statusbar collapse");
             if (controller != null) controller.getTransportControls().stop();

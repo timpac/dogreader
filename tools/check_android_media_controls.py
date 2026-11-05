@@ -14,6 +14,7 @@ STAGES = {
     'app-stop', 'app-restart', 'restart-background-pause', 'restart-background-play',
     'focus-automatic-resume', 'focus-pause-stays-paused',
     'rapid-commands-final-pause', 'foreground-final-pause',
+    'seek-pause-play-no-deadlock',
 }
 
 

@@ -51,6 +51,8 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
   bool _disposed = false;
   bool _advancing = false;
   bool _preparing = false;
+  bool _seeking = false;
+  Completer<void> _engineReleased = Completer<void>();
   bool _interrupted = false;
   int? _resumeFocusRevision;
   int? _playbackError;
@@ -76,6 +78,9 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
         if (_recording == null ||
             _stopped ||
             _preparing ||
+            _seeking ||
+            this.player.processingState == ProcessingState.idle ||
+            this.player.processingState == ProcessingState.loading ||
             _playbackError != null) {
           return;
         }
@@ -252,7 +257,9 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
 
   void _recordPlaybackError(Object error) {
     if (_disposed) return;
-    if (player.position > Duration.zero || _resumePosition == Duration.zero) {
+    if (!_seeking &&
+        !_preparing &&
+        (player.position > Duration.zero || _resumePosition == Duration.zero)) {
       _resumePosition = player.position;
     }
     _playbackError = error is PlayerException ? error.code : -1;
@@ -309,6 +316,25 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     );
   }
 
+  Future<void> _releaseNative() async {
+    await player.stop().timeout(const Duration(seconds: 3));
+    if (_seeking) {
+      // Seek updates Dart position optimistically. Reset the now-inactive
+      // platform to the last confirmed position before cancelling its waiter.
+      try {
+        await player.seek(_resumePosition).timeout(const Duration(seconds: 1));
+      } catch (error) {
+        _recordPlaybackError(error);
+      }
+    }
+    // just_audio Android can abandon a Seek result when releasing ExoPlayer.
+    // Only abandon our waiter after release is acknowledged: a later Play can
+    // then create a fresh native engine without a competing old output stream.
+    final released = _engineReleased;
+    _engineReleased = Completer<void>();
+    released.complete();
+  }
+
   /// Native acknowledgement is awaited; a failed Pause must release the engine.
   /// Subsequent Play waits for this boundary, never for a disk write or EOF.
   Future<void> _silence({bool stop = false, bool release = false}) {
@@ -320,7 +346,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
         /* Retry silencing after a previous native failure. */
       }
       if (stop) {
-        await player.stop().timeout(const Duration(seconds: 3));
+        await _releaseNative();
       } else {
         try {
           await player.pause().timeout(const Duration(seconds: 3));
@@ -330,10 +356,10 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
         } catch (error) {
           _recordPlaybackError(error);
           _logDiagnostic('PAUSE fallback: release native decoder');
-          await player.stop().timeout(const Duration(seconds: 3));
+          await _releaseNative();
         }
         if (release) {
-          await player.stop().timeout(const Duration(seconds: 3));
+          await _releaseNative();
         }
       }
       _broadcastPlaybackState();
@@ -382,6 +408,10 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
       _previewActive = false;
       ++_previewSequence;
     }
+    final seekPosition = _seeking ? _resumePosition : null;
+    if (_seeking) {
+      unawaited(_silence(stop: true).catchError(_recordPlaybackError));
+    }
     final revision = ++_sourceRevision;
     ++_intentRevision;
     _wantsPlayback = false;
@@ -402,7 +432,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
           revision == _sourceRevision &&
           (isCurrent?.call() ?? true);
       if (!current()) return;
-      await _savePosition(_resumePosition = player.position);
+      await _savePosition(_resumePosition = seekPosition ?? player.position);
       if (!current()) return;
       await _silence();
       if (!current()) return;
@@ -555,7 +585,9 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     _resumeFocusRevision = null;
     final saved = _preparing
         ? Future<void>.value()
-        : _savePosition(_resumePosition = player.position);
+        : _savePosition(
+            _resumePosition = _seeking ? _resumePosition : player.position,
+          );
     // just_audio.pause() returns without a platform call when its Dart playing
     // flag is false. Always release the native engine on deliberate Pause:
     // this is a real output boundary even if Dart/native state has drifted.
@@ -583,7 +615,9 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     _pausedReleased = false;
     final saved = _preparing
         ? Future<void>.value()
-        : _savePosition(_resumePosition = player.position);
+        : _savePosition(
+            _resumePosition = _seeking ? _resumePosition : player.position,
+          );
     try {
       await _silence(stop: true);
       _playbackError = null;
@@ -607,11 +641,36 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
       final end = player.duration;
       var target = position < Duration.zero ? Duration.zero : position;
       if (end != null && end > Duration.zero && target > end) target = end;
-      await player.seek(target);
       _resumePosition = player.position;
-      _broadcastPlaybackState();
-      await _savePosition(player.position);
-      _result(id, 'completed');
+      _seeking = true;
+      final released = _engineReleased.future;
+      try {
+        final completed =
+            await Future.any<bool>([
+              player.seek(target).then((_) => true),
+              released.then((_) => false),
+            ]).timeout(
+              const Duration(seconds: 5),
+              onTimeout: () async {
+                await pause(origin: 'seek timeout');
+                final error = TimeoutException(
+                  'Native Seek did not complete; engine released',
+                );
+                _recordPlaybackError(error);
+                throw error;
+              },
+            );
+        if (!completed || revision != _sourceRevision) {
+          _result(id, 'cancelled after native engine release');
+          return;
+        }
+        _resumePosition = player.position;
+        _broadcastPlaybackState();
+        await _savePosition(player.position);
+        _result(id, 'completed');
+      } finally {
+        _seeking = false;
+      }
     });
   }
 

@@ -150,3 +150,28 @@ Pixel screenshot does not establish that a focus interruption was its exact
 trigger, or that the historical renderer error caused it. Physical Pixel audible
 output, notification/lock-screen taps, long background periods and real Bluetooth
 or codec faults still require the device checks above.
+
+## Seek cancellation correction before final delivery
+
+Review of locked just_audio Android `AudioPlayer.dispose()` found that its
+outstanding `seekResult` is not necessarily completed when ExoPlayer is released.
+The initial serialized candidate therefore had a reproducible queue deadlock:
+Pause silenced output, but a subsequent Play waited indefinitely for a Seek reply
+from a released engine. A dedicated lost-callback regression failed before the
+correction. No final installation link was delivered for that candidate.
+
+The operation queue now cancels its Seek waiter only after native release is
+acknowledged, restores the inactive player's last confirmed position, and ignores
+late replies from the released engine. Navigation also releases a pending Seek;
+a five-second native seek deadline safely pauses/releases before returning an
+error. The queue never starts a replacement while the prior output is unconfirmed.
+Three regression cases cover Pause→Play, navigation plus a late error, and timeout
+plus replay. Android verification additionally races native Seek→Pause→Play six
+times and requires audio output to stop and then restart, making 17 native stages.
+
+Cancellation of the first signed build arrived after its own release upload had
+finished. Its asset had zero downloads. That release was immediately withdrawn,
+retained as a private draft under `dogreader-134-withdrawn-a9bbf4a`, and its original
+134 tag removed only after verifying it belonged to that exact task-created
+commit. The final 134 release must contain the corrected source and a new native
+verification; that earlier asset must not be installed.
