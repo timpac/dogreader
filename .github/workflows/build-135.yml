@@ -10,6 +10,8 @@ permissions:
 
 jobs:
   apk:
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -18,7 +20,9 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
       - name: Require final Build 134 ancestry
-        run: git merge-base --is-ancestor ebffd30cc20932c7dc5bee2b93f4efe9461ca6c0 HEAD
+        run: |
+          git merge-base --is-ancestor ebffd30cc20932c7dc5bee2b93f4efe9461ca6c0 HEAD
+          git diff --exit-code 0d8aedf59c6e0676772860e3abdd142f1a3806b4 HEAD -- lib android assets test tools pubspec.yaml pubspec.lock
       - name: Free unused runner disk space
         run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/powershell
       - uses: actions/setup-java@v4
@@ -68,8 +72,54 @@ jobs:
           head -1 /tmp/apk-identity.txt >> dist/BUILD.txt
           cat dist/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
           printf '\nCandidate only: physical Pixel notification/lock-screen validation remains required. No release published or branch merged.\n' >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve signed candidate in a draft release before artifact upload
+        id: draft
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const crypto = require('crypto');
+            const { owner, repo } = context.repo;
+            const tag = 'build-135-candidate';
+            const name = 'Dogreader-135.apk';
+            const data = fs.readFileSync(`dist/${name}`);
+            const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+            const sha256 = digest(data);
+            const releases = await github.paginate(github.rest.repos.listReleases, { owner, repo, per_page: 100 });
+            let release = releases.find(item => item.tag_name === tag);
+            if (release && (!release.draft || release.target_commitish !== context.sha)) {
+              throw new Error('Existing candidate belongs to another build; refusing to change it.');
+            }
+            if (!release) {
+              release = (await github.rest.repos.createRelease({
+                owner, repo, tag_name: tag, target_commitish: context.sha,
+                name: 'Dogreader 135 - device test candidate', draft: true,
+                make_latest: 'false',
+                body: `Unmerged test candidate. Physical Pixel media-control validation is still required.\n\nApp source is identical to 0d8aedf59c6e0676772860e3abdd142f1a3806b4; this commit changes delivery only.\nBuild source: ${context.sha}\nRun: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}\nAPK SHA-256: ${sha256}\n\nThe first build passed all checks but its artifact upload was rejected by GitHub storage quota. This necessary delivery rebuild retains the original signing identity and version 135. It is not claimed to be the first build's exact bytes.`
+              })).data;
+            }
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets, { owner, repo, release_id: release.id, per_page: 100 });
+            let asset = assets.find(item => item.name === name);
+            if (!asset) {
+              asset = (await github.rest.repos.uploadReleaseAsset({
+                owner, repo, release_id: release.id, name, data,
+                headers: { 'content-type': 'application/vnd.android.package-archive', 'content-length': data.length }
+              })).data;
+            }
+            if (asset.state !== 'uploaded' || asset.size !== data.length) throw new Error('Incomplete or conflicting APK asset');
+            const response = await github.rest.repos.getReleaseAsset({
+              owner, repo, asset_id: asset.id, headers: { accept: 'application/octet-stream' }
+            });
+            if (digest(Buffer.from(response.data)) !== sha256) throw new Error('Downloaded release APK hash mismatch');
+            release = (await github.rest.repos.getRelease({ owner, repo, release_id: release.id })).data;
+            if (!release.draft) throw new Error('Candidate must remain a draft');
+            core.notice(`Verified draft APK: ${release.html_url} asset ${asset.id} SHA-256 ${sha256}`);
+            await core.summary.addHeading('Verified APK download (draft candidate)')
+              .addLink('Download candidate', release.html_url)
+              .addRaw(`\n\nAsset: ${name}\n\nSHA-256: ${sha256}\n\nRelease remains a draft. No merge or deployment.\n`).write();
       - name: Upload APK download
         id: upload
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: Dogreader-135-apk
@@ -78,11 +128,13 @@ jobs:
           retention-days: 14
           compression-level: 6
       - name: Download uploaded artifact for verification
+        if: steps.upload.outcome == 'success'
         uses: actions/download-artifact@v4
         with:
           name: Dogreader-135-apk
           path: downloaded
       - name: Check downloaded APK bytes
+        if: steps.upload.outcome == 'success'
         working-directory: downloaded
         run: |
           sha256sum -c SHA256SUMS

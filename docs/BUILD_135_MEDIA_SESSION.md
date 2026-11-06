@@ -58,10 +58,16 @@ APK was built during investigation. The state-mapping baseline bridge regression
 fails with `Actual: MethodCall(stopService, {})` during chapter navigation.
 
 The dedicated Build 135 Actions workflow checks out its exact source commit,
-runs analysis and the full Flutter suite, builds one APK with version code 135,
+runs analysis and the full Flutter suite, builds an APK with version code 135,
 checks the original package/signing identity, uploads `Dogreader-135-apk`, then
 downloads it and compares bytes and SHA-256. It publishes no release and merges
-no branch.
+no branch. The first run, 42288430395 at 0d8aedf, passed analysis, all 81 tests,
+compilation and APK identity checks, but GitHub rejected artifact creation for
+storage quota despite zero existing artifacts. No binary survived that hosted
+runner. A delivery-only recovery run is therefore necessary. It preserves and
+hash-verifies a **draft** Release asset before attempting Actions artifacts;
+the draft remains unpublished. This is an additional build of identical app
+source, not the exact bytes of the discarded first APK.
 
 ## Physical-device acceptance test
 
