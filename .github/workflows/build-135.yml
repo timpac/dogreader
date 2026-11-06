@@ -1,0 +1,89 @@
+name: Dogreader 135 candidate APK
+
+on:
+  push:
+    branches: [fix/135-session-lifecycle]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Require final Build 134 ancestry
+        run: git merge-base --is-ancestor ebffd30cc20932c7dc5bee2b93f4efe9461ca6c0 HEAD
+      - name: Free unused runner disk space
+        run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/powershell
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.47.7'
+          cache: false
+      - name: Restore and check original signing identity
+        env:
+          DOGREADER_KEYSTORE_B64: ${{ secrets.DOGREADER_KEYSTORE_B64 }}
+        run: |
+          test -n "$DOGREADER_KEYSTORE_B64"
+          mkdir -p "$HOME/.android"
+          printf '%s' "$DOGREADER_KEYSTORE_B64" | base64 --decode > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+          keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey > /tmp/certificate.txt
+          grep -Fqi 'C5:CC:08:D9:75:7C:0E:92:89:3A:71:62:04:A2:6F:EB:61:57:F5:35:0A:00:DB:B0:B7:96:20:49:D6:D9:D1:77' /tmp/certificate.txt
+      - name: Resolve locked dependencies
+        run: flutter pub get --enforce-lockfile > /tmp/dependencies.log 2>&1 || { tail -60 /tmp/dependencies.log; exit 1; }
+      - name: Analyze
+        run: flutter analyze --no-pub > /tmp/analysis.log 2>&1 || { tail -80 /tmp/analysis.log; exit 1; }
+      - name: Run full Flutter regression suite
+        run: flutter test --no-pub --reporter expanded > /tmp/tests.log 2>&1 || { tail -100 /tmp/tests.log; exit 1; }
+      - name: Build original-app update 135 once
+        env:
+          ORG_GRADLE_PROJECT_dogreaderOriginalUpdate: 'true'
+        run: flutter build apk --debug --no-pub --build-number 135 --dart-define=DOGREADER_BUILD=135 > /tmp/build.log 2>&1 || { tail -100 /tmp/build.log; exit 1; }
+      - name: Verify signature, package and version; prepare download
+        run: |
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          APK=build/app/outputs/flutter-apk/app-debug.apk
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" > /tmp/apk-certificates.txt
+          grep -Fqi 'c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177' /tmp/apk-certificates.txt
+          "$BUILD_TOOLS/aapt" dump badging "$APK" > /tmp/apk-identity.txt
+          grep -Fq "package: name='com.example.audiobook_app' versionCode='135'" /tmp/apk-identity.txt
+          mkdir -p dist
+          cp "$APK" dist/Dogreader-135.apk
+          (cd dist && sha256sum Dogreader-135.apk > SHA256SUMS)
+          printf 'Dogreader Build 135 test candidate\nSource: %s\nRun: %s/%s/actions/runs/%s\n\n' "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > dist/BUILD.txt
+          cat /tmp/analysis.log >> dist/BUILD.txt
+          tail -1 /tmp/tests.log >> dist/BUILD.txt
+          cat /tmp/apk-certificates.txt >> dist/BUILD.txt
+          head -1 /tmp/apk-identity.txt >> dist/BUILD.txt
+          cat dist/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
+          printf '\nCandidate only: physical Pixel notification/lock-screen validation remains required. No release published or branch merged.\n' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload APK download
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dogreader-135-apk
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 6
+      - name: Download uploaded artifact for verification
+        uses: actions/download-artifact@v4
+        with:
+          name: Dogreader-135-apk
+          path: downloaded
+      - name: Check downloaded APK bytes
+        working-directory: downloaded
+        run: |
+          sha256sum -c SHA256SUMS
+          cmp Dogreader-135.apk ../dist/Dogreader-135.apk

@@ -2479,6 +2479,7 @@ class AudioDiagnosticsScreen extends StatelessWidget {
                 Text('Session state: ${audioHandler.playbackState.value.processingState.name}'),
                 Text('Session error code: ${audioHandler.playbackState.value.errorCode ?? "none"}'),
                 SelectableText('Last error: ${audioHandler.diagnosticLastError ?? "none"}'),
+                SelectableText('Last session bridge error: ${audioHandler.diagnosticLastSessionError ?? "none"}'),
                 const SizedBox(height: 16),
                 const Text('Both in-app and external commands appear below. '
                     'The count resets when the audio handler restarts. '

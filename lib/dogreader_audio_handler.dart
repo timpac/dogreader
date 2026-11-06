@@ -138,6 +138,12 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
       }),
     );
     _subscriptions.add(this.player.errorStream.listen(_recordPlaybackError));
+    _subscriptions.add(
+      AudioService.asyncError.listen((error) {
+        diagnosticLastSessionError = _diagnosticReason(error);
+        _logDiagnostic('SESSION ERROR $diagnosticLastSessionError');
+      }),
+    );
   }
 
   /// Called once at application startup. No screen owns session/focus listeners.
@@ -186,7 +192,11 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
         }
       }),
     );
-    _subscriptions.add(becomingNoisy.listen((_) => unawaited(pause())));
+    _subscriptions.add(
+      becomingNoisy.listen(
+        (_) => unawaited(pause(origin: 'headset disconnect')),
+      ),
+    );
   }
 
   Future<T> _serial<T>(Future<T> Function() operation) {
@@ -230,6 +240,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
   int diagnosticCommandCount = 0;
   final diagnosticStarted = DateTime.now();
   String? diagnosticLastError;
+  String? diagnosticLastSessionError;
   bool get diagnosticWantsPlayback => _wantsPlayback;
 
   int _logCommand(String command, {String origin = 'external'}) {
@@ -263,14 +274,16 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
       _resumePosition = player.position;
     }
     _playbackError = error is PlayerException ? error.code : -1;
-    final reason = error
-        .toString()
-        .replaceAll(RegExp(r'https?://\S+'), '[URL]')
-        .replaceAll(RegExp(r'(?:file://)?/\S+'), '[path]');
+    final reason = _diagnosticReason(error);
     diagnosticLastError = '${error.runtimeType} code=$_playbackError: $reason';
     _logDiagnostic('ERROR $diagnosticLastError');
     _broadcastPlaybackState();
   }
+
+  String _diagnosticReason(Object error) => error
+      .toString()
+      .replaceAll(RegExp(r'https?://\S+'), '[URL]')
+      .replaceAll(RegExp(r'(?:file://)?/\S+'), '[path]');
 
   void _broadcastPlaybackState() {
     if (_disposed) return;
@@ -296,9 +309,13 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
             ? AudioProcessingState.error
             : switch (player.processingState) {
                 ProcessingState.idle =>
-                  _pausedReleased && _recording != null
-                      ? AudioProcessingState.ready
-                      : AudioProcessingState.idle,
+                  // audio_service treats idle as stopService(), deactivating
+                  // the Android MediaSession. Native decoder release/loading
+                  // must not end a retained, resumable session. Only our
+                  // explicit Stop above owns that lifecycle boundary.
+                  _preparing || _recording == null
+                      ? AudioProcessingState.loading
+                      : AudioProcessingState.ready,
                 ProcessingState.loading => AudioProcessingState.loading,
                 ProcessingState.buffering => AudioProcessingState.buffering,
                 ProcessingState.ready => AudioProcessingState.ready,
@@ -502,6 +519,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
         final recording = _recording;
         if (recording == null) {
           _wantsPlayback = false;
+          _stopped = true;
           _result(id, 'no source');
           return;
         }
