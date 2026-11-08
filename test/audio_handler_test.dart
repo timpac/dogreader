@@ -34,6 +34,24 @@ void main() {
     final data = jsonDecode(await File('${root.path}/narration_state.json').readAsString());
     expect(data['book:0']['positionMs'], 25000);
   });
+  test('reading snapshot preserves playback, speed and position and rejects old chapters', () async {
+    await load();
+    await handler.play();
+    await handler.setSpeed(1.5);
+    player.position = const Duration(minutes: 30);
+    final location = handler.readingLocation!;
+    expect(location.position, const Duration(minutes: 30));
+    expect(location.chapterIndex, 0);
+    expect(handler.isReadingLocationCurrent(location), isTrue);
+    expect(player.playing, isTrue);
+    expect(player.speed, 1.5);
+    expect(player.loads, 1);
+    expect(player.stops, 0);
+    await handler.loadChapter(path: '${root.path}/book_1.mp3', title: 'Next', author: 'Author',
+        bookId: 'book', chapterIndex: 1, chapterCount: 2);
+    expect(handler.isReadingLocationCurrent(location), isFalse);
+    expect(handler.readingLocation!.chapterIndex, 1);
+  });
   test('failed native seek never persists the requested but unobserved target', () async {
     await load();
     player.ignoreSeek = true;

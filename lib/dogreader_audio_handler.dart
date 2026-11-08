@@ -24,6 +24,15 @@ class _Recording {
   String get key => '$bookId:$index';
 }
 
+/// A read-only snapshot. Opening the reader never changes transport intent.
+class NarrationPlaybackLocation {
+  final String bookId, path;
+  final int chapterIndex, _revision;
+  final Duration position;
+  const NarrationPlaybackLocation._(this.bookId, this.chapterIndex, this.path,
+      this.position, this._revision);
+}
+
 /// The sole owner of audio output, source changes, focus and playback intent.
 ///
 /// Source/seek/play preparation is serialized. Pause/Stop invalidate intent
@@ -61,6 +70,25 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
   _Recording? _beforePreview;
   Duration _beforePreviewPosition = Duration.zero;
   Completer<void>? _previewDone;
+
+  NarrationPlaybackLocation? get readingLocation {
+    final recording = _recording;
+    if (_disposed || recording == null || recording.preview || _previewActive ||
+        _preparing || _seeking || _advancing || _playbackError != null ||
+        player.processingState == ProcessingState.loading ||
+        (player.processingState == ProcessingState.idle && !_pausedReleased && !_stopped) ||
+        player.processingState == ProcessingState.completed) {
+      return null;
+    }
+    return NarrationPlaybackLocation._(recording.bookId, recording.index,
+        recording.path, _pausedReleased || _stopped ? _resumePosition : player.position,
+        _sourceRevision);
+  }
+
+  bool isReadingLocationCurrent(NarrationPlaybackLocation location) =>
+      readingLocation != null && location._revision == _sourceRevision &&
+      location.bookId == _recording?.bookId &&
+      location.chapterIndex == _recording?.index && location.path == _recording?.path;
 
   DogreaderAudioHandler({
     AudioPlayer? player,

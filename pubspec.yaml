@@ -43,6 +43,7 @@ dependencies:
   audio_session: ^0.2.4
   audio_service: ^0.18.19
   just_audio: ^0.10.6
+  crypto: ^3.0.7
 
 dev_dependencies:
   audio_service_platform_interface: 0.1.3
