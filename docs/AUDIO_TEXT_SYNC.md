@@ -49,14 +49,25 @@ playing/paused route changes, highlight expiry, early long-chapter display and
 the existing seek/session regressions. They do not establish acoustic accuracy
 or 30-minute Pixel background-playback acceptance.
 
-Validation on this candidate: Flutter 3.47.7 analysis passed with no issues and
+Validation on the initial candidate: Flutter 3.47.7 analysis passed with no issues and
 all 87 Flutter tests passed. The companion backend's full 122-test suite passed
 without skips. No APK or container build was run for this preparation.
 
-The approved real-recording pilot is pending an existing chapter MP3 plus its
-exact submitted text and recording identity. The environment has repository
-access but no recordings or GCP identity. The backend provides a bounded offline
-pilot adapter; no actual model alignment or production deployment has occurred.
+The supplied section-4 MP3 and EPUB are downloaded. The MP3 is 12,113.424 seconds
+(about 3 hours 22 minutes), so the pilot must use an excerpt within its approved
+30-minute cap. The spoken opening is still needed to match the app's section
+label to this EPUB's different chapter labels. The environment has no GCP
+identity or immutable server job record. No actual model alignment or production
+deployment has occurred.
+
+This EPUB also exposed empty XHTML `<title/>` elements, which HTML parsing
+treated as an unclosed title and swallowed the chapter body. A minimal parser
+correction expands that metadata tag before the existing parsing logic. It adds
+no text and changes no offsets in already-readable chapters. Extraction now
+produces chapter text, and a regression covers the empty-title variants and
+preserved styling.
+
+After that correction, analysis is clean and all 88 Flutter regressions pass.
 Complete that pilot and report measured accuracy/runtime/cost before a production
 alignment rollout or a claim that real books meet the synchronization objective.
 Build 135 remains the known-good release; no replacement APK is implied here.

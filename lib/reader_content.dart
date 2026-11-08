@@ -31,7 +31,13 @@ String? _resource(Map<String, String> files, String path) {
 
 ReaderChapter parseReaderChapter(String title, String rawHtml,
     {String documentPath = '', Map<String, String> styleSheets = const {}}) {
-  final document = html_parser.parse(rawHtml);
+  // EPUB XHTML allows an empty <title/>. HTML treats title as raw text and
+  // otherwise consumes the following body until a closing </title>, leaving
+  // the chapter empty. Expand only this metadata element before HTML parsing.
+  final source = rawHtml.replaceAllMapped(
+      RegExp(r'<title\b([^<>]*?)/\s*>', caseSensitive: false),
+      (match) => '<title${match.group(1)}></title>');
+  final document = html_parser.parse(source);
   final spaced = <dom.Element>{};
   final visited = <String>{};
   final cssRules = RegExp(r'([^{}]+)\{([^{}]+)\}');
