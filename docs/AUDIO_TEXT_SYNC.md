@@ -71,6 +71,22 @@ produces chapter text, and a regression covers the empty-title variants and
 preserved styling.
 
 After that correction, analysis is clean and all 88 Flutter regressions pass.
+
+The owner subsequently approved the full-recording compute budget. A 14-segment
+batch exposed later alignment failures; a controlled single-job comparison
+reproduced them. Exact stored job text and checkpoint identities are now required
+before spending the remaining processing budget or publishing a full map. The
+backend provides a tested read-only Cloud Shell export helper. No APK release or
+production map is claimed by these partial results.
+
+The read-only Cloud Shell utility is mirrored at
+`tool/export_alignment_source.py` in this public app repository so the owner
+can download it without authenticating GitHub in Cloud Shell. It is byte-for-byte
+identical to the tested helper in the private backend candidate; keep both
+copies synchronized when updating the export protocol. It is outside the
+Flutter app and does not access storage until the owner runs it with their own
+existing gcloud sign-in. It exports only one digest-matched job and bounded
+checkpoint proofs, never credentials, and performs no cloud writes or inference.
 Complete that pilot and report measured accuracy/runtime/cost before a production
 alignment rollout or a claim that real books meet the synchronization objective.
 Build 135 remains the known-good release; no replacement APK is implied here.
