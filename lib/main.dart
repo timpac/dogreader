@@ -11,13 +11,18 @@ import 'package:epubx/epubx.dart' hide Image;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:audioplayers/audioplayers.dart';
 import 'package:audio_service/audio_service.dart';
 
 import 'dogreader_audio_handler.dart';
+import 'app_theme.dart';
+import 'theme_preferences.dart';
+export 'app_theme.dart' show background, panel, accent;
 
-import 'package:html/parser.dart' as html_parser;
-import 'package:html/dom.dart' as dom;
+import 'reader_content.dart';
+export 'reader_content.dart' show ReaderChapter, StyledRange;
+import 'narration_seek.dart';
+import 'narration_files.dart';
+import 'narration_options.dart';
 
 late final DogreaderAudioHandler audioHandler;
 
@@ -29,63 +34,48 @@ Future<void> main() async {
     config: const AudioServiceConfig(
       androidNotificationChannelId: 'com.example.audiobook_app.audio',
       androidNotificationChannelName: 'Dogreader narration',
-      androidNotificationOngoing: true,
+      // Keep the media service available for lock-screen/Bluetooth resume.
+      androidStopForegroundOnPause: false,
     ),
   );
 
-  runApp(const AudiobookApp());
+  await audioHandler.initializeAudioSession();
+
+  final appearance = ThemePreferences();
+  await appearance.load();
+  runApp(AudiobookApp(appearance: appearance));
 }
 
-const background = Color(0xFF10131A);
-const panel = Color(0xFF202638);
-const accent = Color(0xFFB7A6F6);
+// Set by GitHub Actions at build time; visible on the library home screen.
+const dogreaderBuild = String.fromEnvironment('DOGREADER_BUILD', defaultValue: 'DEV');
 
 class AudiobookApp extends StatelessWidget {
-  const AudiobookApp({super.key});
+  const AudiobookApp({super.key, required this.appearance});
+
+  final ThemePreferences appearance;
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Dogreader',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        textTheme: GoogleFonts.urbanistTextTheme(
-          ThemeData(brightness: Brightness.dark).textTheme,
+    final theme = dogreaderLightTheme();
+    final darkTheme = dogreaderDarkTheme();
+    return AnimatedBuilder(
+      animation: appearance,
+      builder: (context, child) => MaterialApp(
+        title: 'Dogreader',
+        debugShowCheckedModeBanner: false,
+        theme: theme.copyWith(
+          textTheme: GoogleFonts.urbanistTextTheme(theme.textTheme),
+          primaryTextTheme: GoogleFonts.urbanistTextTheme(theme.primaryTextTheme),
         ),
-        primaryTextTheme: GoogleFonts.urbanistTextTheme(
-          ThemeData(brightness: Brightness.dark).primaryTextTheme,
+        darkTheme: darkTheme.copyWith(
+          textTheme: GoogleFonts.urbanistTextTheme(darkTheme.textTheme),
+          primaryTextTheme: GoogleFonts.urbanistTextTheme(darkTheme.primaryTextTheme),
         ),
-        brightness: Brightness.dark,
-        scaffoldBackgroundColor: background,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: accent,
-          brightness: Brightness.dark,
-          surface: const Color(0xFF1A1F2A),
-        ),
+        themeMode: appearance.mode,
+        home: LibraryScreen(appearance: appearance),
       ),
-      home: const LibraryScreen(),
     );
   }
-}
-
-class StyledRange {
-  final int start, end;
-  final bool italic, bold, heading;
-  const StyledRange(
-    this.start,
-    this.end, {
-    this.italic = false,
-    this.bold = false,
-    this.heading = false,
-  });
-}
-
-class ReaderChapter {
-  final String title;
-  final String text;
-  final List<StyledRange> ranges;
-  const ReaderChapter(this.title, this.text, this.ranges);
 }
 
 class ImportedBook {
@@ -104,7 +94,9 @@ class ImportedBook {
 }
 
 class LibraryScreen extends StatefulWidget {
-  const LibraryScreen({super.key});
+  const LibraryScreen({super.key, this.appearance});
+
+  final ThemePreferences? appearance;
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -115,6 +107,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   bool importing = false;
   final List<ImportedBook> books = [];
   final Map<String, Map<String, int>> progress = {};
+  final Map<String, Map<String, int>> chapterProgress = {};
   final Map<String, int> lastOpened = {};
   Future<void> _pendingStateWrite = Future<void>.value();
 
@@ -129,6 +122,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   Future<void> persistReadingState() {
     final snapshot = jsonEncode({
       'positions': progress,
+      'chapterProgress': chapterProgress,
       'lastOpened': lastOpened,
     });
     _pendingStateWrite = _pendingStateWrite.catchError((Object _) {}).then((
@@ -178,6 +172,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
           book: book,
           saved: progress[book.id],
           onSave: (chapter, offset) => saveProgress(book.id, chapter, offset),
+          chapterOffsets: chapterProgress[book.id] ?? {},
         ),
       ),
     );
@@ -206,6 +201,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
         final recent = data['lastOpened'] as Map<String, dynamic>? ?? {};
         for (final entry in recent.entries) {
           lastOpened[entry.key] = (entry.value as num?)?.toInt() ?? 0;
+        }
+        final history = data['chapterProgress'] as Map<String, dynamic>? ?? {};
+        for (final entry in history.entries) {
+          if (entry.value is Map) {
+            chapterProgress[entry.key] = (entry.value as Map).map((key, value) =>
+              MapEntry(key.toString(), (value as num?)?.toInt() ?? 0));
+          }
         }
         final positions = data['positions'] as Map<String, dynamic>? ?? {};
         for (final entry in positions.entries) {
@@ -252,6 +254,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   Future<void> saveProgress(String id, int chapter, int offset) async {
     progress[id] = {'chapter': chapter, 'offset': offset};
+    final offsets = chapterProgress.putIfAbsent(id, () => {});
+    final key = '$chapter';
+    if (offset > (offsets[key] ?? 0)) offsets[key] = offset;
     try {
       await persistReadingState();
     } catch (_) {
@@ -265,120 +270,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
     );
   }
 
-  // Use the EPUB's structure, not its CSS. Character offsets refer to
-  // exactly the same text used by pagination and the reading-position store.
-  ReaderChapter parseChapter(String title, String rawHtml) {
-    final document = html_parser.parse(rawHtml);
-    for (final element in document.querySelectorAll('script, style, nav')) {
-      element.remove();
-    }
-    final output = StringBuffer();
-    final ranges = <StyledRange>[];
-    final blocks = <_TextBlock>[];
-    final pending = StringBuffer();
-    final pendingRanges = <StyledRange>[];
-
-    void flush({bool heading = false, bool scene = false}) {
-      final raw = pending.toString();
-      pending.clear();
-      final leading = raw.length - raw.trimLeft().length;
-      final clean = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
-      if (clean.isEmpty && !scene) {
-        pendingRanges.clear();
-        return;
-      }
-      final text = scene ? '⁂' : clean;
-      final indent =
-          blocks.isNotEmpty &&
-              !heading &&
-              !scene &&
-              blocks.last.heading == false &&
-              blocks.last.scene == false
-          ? '　'
-          : '';
-      final prefix = blocks.isEmpty ? '' : (heading || scene ? '\n\n' : '\n');
-      final base = output.length + prefix.length + indent.length;
-      output.write(prefix);
-      output.write(indent);
-      output.write(text);
-      for (final range in pendingRanges) {
-        final a = (range.start - leading).clamp(0, clean.length);
-        final b = (range.end - leading).clamp(0, clean.length);
-        if (b > a)
-          ranges.add(
-            StyledRange(
-              base + a,
-              base + b,
-              italic: range.italic,
-              bold: range.bold,
-            ),
-          );
-      }
-      pendingRanges.clear();
-      if (heading)
-        ranges.add(StyledRange(base, base + text.length, heading: true));
-      blocks.add(_TextBlock(heading, scene));
-    }
-
-    void walk(
-      dom.Node node, {
-      bool italic = false,
-      bool bold = false,
-      bool heading = false,
-    }) {
-      if (node is dom.Text) {
-        final start = pending.length;
-        pending.write(node.text);
-        if ((italic || bold) && pending.length > start) {
-          pendingRanges.add(
-            StyledRange(start, pending.length, italic: italic, bold: bold),
-          );
-        }
-        return;
-      }
-      if (node is! dom.Element) return;
-      final tag = node.localName ?? '';
-      if (tag == 'br') {
-        flush(heading: heading);
-        return;
-      }
-      if (tag == 'hr') {
-        flush();
-        flush(scene: true);
-        return;
-      }
-      final isHeading =
-          heading || {'h1', 'h2', 'h3', 'h4', 'h5', 'h6'}.contains(tag);
-      final isBlock = {
-        'p',
-        'div',
-        'h1',
-        'h2',
-        'h3',
-        'h4',
-        'h5',
-        'h6',
-        'li',
-        'blockquote',
-        'pre',
-        'tr',
-      }.contains(tag);
-      if (isBlock && pending.isNotEmpty) flush();
-      for (final child in node.nodes) {
-        walk(
-          child,
-          italic: italic || tag == 'i' || tag == 'em',
-          bold: bold || tag == 'b' || tag == 'strong',
-          heading: isHeading,
-        );
-      }
-      if (isBlock) flush(heading: isHeading);
-    }
-
-    if (document.body != null) walk(document.body!);
-    flush();
-    return ReaderChapter(title, output.toString(), ranges);
-  }
+  ReaderChapter parseChapter(String title, String rawHtml) =>
+      parseReaderChapter(title, rawHtml);
 
   Uint8List? extractCover(EpubBook epub) {
     try {
@@ -402,20 +295,27 @@ class _LibraryScreenState extends State<LibraryScreen> {
     return null;
   }
 
-  void collectChapters(List<EpubChapter> source, List<ReaderChapter> output) {
+  void collectChapters(List<EpubChapter> source, List<ReaderChapter> output,
+      Map<String, String> styleSheets) {
     for (final chapter in source) {
       final title = (chapter.Title ?? '').trim();
-      final parsed = parseChapter(
+      final parsed = parseReaderChapter(
         title.isEmpty ? 'Section ${output.length + 1}' : title,
         chapter.HtmlContent ?? '',
+        documentPath: chapter.ContentFileName ?? '',
+        styleSheets: styleSheets,
       );
       if (parsed.text.isNotEmpty) output.add(parsed);
-      collectChapters(chapter.SubChapters ?? [], output);
+      collectChapters(chapter.SubChapters ?? [], output, styleSheets);
     }
   }
 
   void loadBookChapters(EpubBook epub, List<ReaderChapter> output) {
-    collectChapters(epub.Chapters ?? [], output);
+    final styleSheets = <String, String>{
+      for (final entry in (epub.Content?.Css ?? {}).entries)
+        entry.key: entry.value.Content ?? '',
+    };
+    collectChapters(epub.Chapters ?? [], output, styleSheets);
     if (output.isNotEmpty) return;
 
     final schema = epub.Schema;
@@ -451,7 +351,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
       final rawHtml = content?.Content;
       if (rawHtml == null || rawHtml.isEmpty) continue;
 
-      final parsed = parseChapter('Section ${output.length + 1}', rawHtml);
+      final parsed = parseReaderChapter('Section ${output.length + 1}', rawHtml,
+          documentPath: normalized, styleSheets: styleSheets);
 
       if (parsed.text.trim().isNotEmpty) {
         output.add(parsed);
@@ -517,32 +418,46 @@ class _LibraryScreenState extends State<LibraryScreen> {
     final pages = <Widget>[
       _libraryPage(),
       _narrationLibraryPage(),
-      _placeholderPage(
-        Icons.tune_rounded,
-        'Settings',
-        'Choose narration providers, voices, and API keys.',
-      ),
+      _settingsPage(),
     ];
 
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: background,
-        title: const Row(
+        title: Row(
           children: [
-            Icon(Icons.auto_stories_rounded, color: accent),
-            SizedBox(width: 12),
-            Text(
-              'Dogreader',
-              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 19),
+            Icon(Icons.auto_stories_rounded, color: Theme.of(context).colorScheme.primary),
+            const SizedBox(width: 12),
+            const Flexible(
+              child: Text(
+                'Dogreader',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 19),
+              ),
             ),
           ],
         ),
+        actions: [
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.only(right: 16),
+              child: Text(
+                'BUILD $dogreaderBuild',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.primary,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
       body: SafeArea(child: pages[selectedTab]),
       bottomNavigationBar: NavigationBar(
         selectedIndex: selectedTab,
         onDestinationSelected: (value) => setState(() => selectedTab = value),
-        backgroundColor: const Color(0xFF1A1F2A),
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.library_books_outlined),
@@ -564,27 +479,77 @@ class _LibraryScreenState extends State<LibraryScreen> {
     );
   }
 
+  Widget _settingsPage() {
+    final appearance = widget.appearance;
+    return ListView(
+      padding: const EdgeInsets.all(22),
+      children: [
+        Text('Settings', style: Theme.of(context).textTheme.headlineMedium),
+        const SizedBox(height: 24),
+        Card(
+          margin: EdgeInsets.zero,
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Appearance', style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 8),
+                const Text('Choose how Dogreader looks.'),
+                const SizedBox(height: 20),
+                DropdownButton<ThemeMode>(
+                  isExpanded: true,
+                  value: appearance?.mode ?? ThemeMode.light,
+                  items: const [
+                    DropdownMenuItem(value: ThemeMode.light, child: Text('Light')),
+                    DropdownMenuItem(value: ThemeMode.dark, child: Text('Dark')),
+                    DropdownMenuItem(value: ThemeMode.system, child: Text('Follow system')),
+                  ],
+                  onChanged: appearance == null ? null : (selection) async {
+                    if (selection == null) return;
+                    try {
+                      await appearance.setMode(selection);
+                    } catch (_) {
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                        content: Text('Appearance changed, but could not be saved. Please try again.'),
+                      ));
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _libraryPage() {
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 22),
       children: [
-        const Text(
+        Text(
           'Your library',
-          style: TextStyle(fontSize: 34, fontWeight: FontWeight.bold),
+          style: Theme.of(context).textTheme.headlineLarge?.copyWith(
+            fontSize: 34,
+            fontWeight: FontWeight.w600,
+            fontFamily: 'serif',
+            letterSpacing: -0.5,
+          ),
         ),
         const SizedBox(height: 8),
         Text(
           "I'm not surprised you're reading that, because you're stupid.",
           style: TextStyle(
             fontSize: 15,
-            color: Colors.white.withValues(alpha: 0.65),
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
           ),
         ),
         const SizedBox(height: 26),
         if (books.isEmpty) _emptyLibrary(),
         for (final book in books)
           Card(
-            color: panel,
             margin: const EdgeInsets.only(bottom: 14),
             child: ListTile(
               contentPadding: const EdgeInsets.all(15),
@@ -592,9 +557,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 width: 54,
                 height: 76,
                 child: book.cover == null
-                    ? const Icon(
+                    ? Icon(
                         Icons.menu_book_rounded,
-                        color: accent,
+                        color: Theme.of(context).colorScheme.primary,
                         size: 36,
                       )
                     : ClipRRect(
@@ -603,9 +568,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
                           book.cover!,
                           fit: BoxFit.cover,
                           errorBuilder: (context, error, stackTrace) =>
-                              const Icon(
+                              Icon(
                                 Icons.menu_book_rounded,
-                                color: accent,
+                                color: Theme.of(context).colorScheme.primary,
                               ),
                         ),
                       ),
@@ -620,7 +585,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
               isThreeLine: true,
               trailing: IconButton(
                 tooltip: 'Chapters and narration',
-                icon: const Icon(Icons.list_rounded, color: accent),
+                icon: Icon(Icons.list_rounded, color: Theme.of(context).colorScheme.primary),
                 onPressed: () => openChapters(book),
               ),
               onTap: () => openBook(book),
@@ -637,35 +602,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 )
               : const Icon(Icons.add_rounded),
           label: Text(importing ? 'Importing…' : 'Import a book'),
-          style: FilledButton.styleFrom(
-            minimumSize: const Size.fromHeight(52),
-            backgroundColor: accent,
-            foregroundColor: const Color(0xFF171321),
-          ),
+          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
         ),
-        const SizedBox(height: 25),
-        const Text(
-          'Built for reading and listening your way',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-        ),
-        const SizedBox(height: 16),
-        const _FeatureRow(
-          Icons.record_voice_over_rounded,
-          'Choose your narrator',
-          'Bring your preferred AI voice service.',
-        ),
-        const SizedBox(height: 12),
-        const _FeatureRow(
-          Icons.offline_bolt_rounded,
-          'Listen offline',
-          'Keep generated audio on your device.',
-        ),
-        const SizedBox(height: 12),
-        const _FeatureRow(
-          Icons.bookmark_added_outlined,
-          'Pick up where you left off',
-          'Your books and reading positions are saved.',
-        ),
+
       ],
     );
   }
@@ -675,13 +614,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
       padding: const EdgeInsets.all(24),
       margin: const EdgeInsets.only(bottom: 18),
       decoration: BoxDecoration(
-        color: panel,
+        color: Theme.of(context).colorScheme.surfaceContainerLow,
         borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: const Color(0xFF353D54)),
+        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
       ),
       child: Column(
         children: [
-          const Icon(Icons.menu_book_rounded, size: 62, color: accent),
+          Icon(Icons.menu_book_rounded, size: 62, color: Theme.of(context).colorScheme.primary),
           const SizedBox(height: 20),
           const Text(
             'A new chapter begins',
@@ -694,7 +633,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
             textAlign: TextAlign.center,
             style: TextStyle(
               height: 1.5,
-              color: Colors.white.withValues(alpha: 0.72),
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),
           ),
         ],
@@ -703,12 +642,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   Widget _narrationLibraryPage() {
-    if (books.isEmpty)
+    if (books.isEmpty) {
       return _placeholderPage(
         Icons.queue_music_rounded,
         'Narration',
         'Import a book to generate or listen to narration.',
       );
+    }
     return ListView(
       children: [
         const Padding(
@@ -720,7 +660,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
         ),
         for (final book in books)
           ListTile(
-            leading: const Icon(Icons.headphones, color: accent),
+            leading: Icon(Icons.headphones, color: Theme.of(context).colorScheme.primary),
             title: Text(book.title),
             subtitle: Text(book.author),
             trailing: const Icon(Icons.chevron_right),
@@ -742,7 +682,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 64, color: accent),
+            Icon(icon, size: 64, color: Theme.of(context).colorScheme.primary),
             const SizedBox(height: 20),
             Text(
               title,
@@ -752,7 +692,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
             Text(
               subtitle,
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white.withValues(alpha: 0.65)),
+              style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
             ),
           ],
         ),
@@ -767,11 +707,13 @@ class ChapterListScreen extends StatelessWidget {
   final ImportedBook book;
   final Map<String, int>? saved;
   final SavePosition onSave;
+  final Map<String, int> chapterOffsets;
   const ChapterListScreen({
     super.key,
     required this.book,
     required this.saved,
     required this.onSave,
+    required this.chapterOffsets,
   });
 
   @override
@@ -805,7 +747,7 @@ class ChapterListScreen extends StatelessWidget {
                 ),
               ),
               icon: const Icon(Icons.headphones),
-              label: const Text('Listen / Generate audiobook'),
+              label: const Text('Listen / Generate narration'),
             ),
           ),
           Expanded(
@@ -815,9 +757,8 @@ class ChapterListScreen extends StatelessWidget {
               itemBuilder: (context, row) {
                 if (saved != null && row == 0) {
                   return Card(
-                    color: panel,
                     child: ListTile(
-                      leading: const Icon(Icons.bookmark, color: accent),
+                      leading: Icon(Icons.bookmark, color: Theme.of(context).colorScheme.primary),
                       title: const Text('Continue reading'),
                       subtitle: Text(
                         book
@@ -838,9 +779,11 @@ class ChapterListScreen extends StatelessWidget {
                 }
                 final index = row - (saved == null ? 0 : 1);
                 final chapter = book.chapters[index];
-                final savedOffset = saved != null && saved!['chapter'] == index
-                    ? (saved!['offset'] ?? 0)
-                    : 0;
+                final savedOffset = math.max(
+                  chapterOffsets['$index'] ?? 0,
+                  saved != null && saved!['chapter'] == index
+                      ? (saved!['offset'] ?? 0) : 0,
+                );
                 final fraction =
                     (savedOffset / math.max(1, chapter.text.length)).clamp(
                       0.0,
@@ -848,31 +791,18 @@ class ChapterListScreen extends StatelessWidget {
                     );
 
                 return ListTile(
-                  leading: const Icon(
+                  leading: Icon(
                     Icons.auto_stories_outlined,
-                    color: accent,
+                    color: Theme.of(context).colorScheme.primary,
                   ),
                   title: Text(chapter.title),
                   subtitle: Padding(
                     padding: const EdgeInsets.only(top: 8),
-                    child: savedOffset > 0
-                        ? LinearProgressIndicator(
-                            value: fraction,
-                            minHeight: 3,
-                            backgroundColor: Colors.white12,
-                            color: accent,
-                          )
-                        : const Text(
-                            'whatsgonnahappenwhatsgonnahappenwhatsgonnahappenwhatsgonnahappen',
-                            maxLines: 1,
-                            softWrap: false,
-                            overflow: TextOverflow.clip,
-                            style: TextStyle(
-                              fontSize: 5,
-                              letterSpacing: -0.3,
-                              color: accent,
-                            ),
-                          ),
+                    child: LinearProgressIndicator(
+                      value: fraction,
+                      minHeight: 3,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
                   ),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => openChapter(context, index),
@@ -908,13 +838,10 @@ class NarrationQueueScreen extends StatefulWidget {
 }
 
 class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
-  static const narratorNames = <String, String>{
-    'en-US-Chirp3-HD-Achernar': 'Achernar',
-    'en-US-Chirp3-HD-Charon': 'Charon',
-    'en-US-Chirp3-HD-Kore': 'Kore',
-    'en-US-Chirp3-HD-Puck': 'Puck',
-  };
+  String narrationEngine = 'google';
   String narrator = 'en-US-Chirp3-HD-Achernar';
+  bool previewing = false;
+  int previewSequence = 0;
   final Set<int> selected = {};
   final Map<int, Map<String, dynamic>> jobs = {};
   String host = '';
@@ -936,11 +863,9 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
             jsonDecode(await file.readAsString()) as Map<String, dynamic>;
         host = data['host'] as String? ?? '';
         token = data['token'] as String? ?? '';
-        final savedNarrator = data['narrator'];
-        if (savedNarrator is String &&
-            narratorNames.containsKey(savedNarrator)) {
-          narrator = savedNarrator;
-        }
+        final preference = NarrationPreference.fromJson(data);
+        narrationEngine = preference.engine;
+        narrator = preference.voice;
         final bookJobs = (data['books'] as Map?)?[widget.book.id];
         if (bookJobs is Map) {
           for (final entry in bookJobs.entries) {
@@ -955,7 +880,8 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     final root = await getApplicationDocumentsDirectory();
     for (var index = 0; index < widget.book.chapters.length; index++) {
       final file = File('${root.path}/narration/${widget.book.id}_$index.mp3');
-      if (await file.exists() && await file.length() > 1000) {
+      if (await file.exists() && await file.length() > 1000 &&
+          !['waiting', 'queued', 'generating', 'error'].contains(jobs[index]?['status'])) {
         jobs[index] = {
           ...?jobs[index],
           'status': 'ready',
@@ -978,6 +904,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     data['host'] = host;
     data['token'] = token;
     data['narrator'] = narrator;
+    data['engine'] = narrationEngine;
     final books = Map<String, dynamic>.from((data['books'] as Map?) ?? {});
     books[widget.book.id] = jobs.map((k, v) => MapEntry('$k', v));
     data['books'] = books;
@@ -1005,8 +932,9 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       final response = await req.close().timeout(const Duration(seconds: 15));
       final body = await utf8.decoder.bind(response).join();
       final result = jsonDecode(body) as Map<String, dynamic>;
-      if (response.statusCode >= 400)
+      if (response.statusCode >= 400) {
         throw Exception(result['error'] ?? 'HTTP ${response.statusCode}');
+      }
       return result;
     } finally {
       client.close(force: true);
@@ -1063,8 +991,9 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       final candidate = hostController.text.trim();
       if (!candidate.startsWith('https://') ||
           Uri.tryParse(candidate)?.host.isEmpty != false) {
-        if (mounted)
+        if (mounted) {
           setState(() => notice = 'Enter a valid HTTPS Cloud Run URL.');
+        }
         hostController.dispose();
         tokenController.dispose();
         return;
@@ -1072,8 +1001,9 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       host = candidate;
       token = tokenController.text.trim();
       await save();
-      if (mounted)
+      if (mounted) {
         setState(() => notice = 'Settings saved. Tap Check connection.');
+      }
     }
     hostController.dispose();
     tokenController.dispose();
@@ -1082,8 +1012,9 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   Future<void> checkConnection() async {
     try {
       final data = await requestJson('GET', '/dogreader/ping');
-      if (mounted)
+      if (mounted) {
         setState(() => notice = 'Connected! Voice: ${data['voice']}');
+      }
     } catch (e) {
       if (mounted) setState(() => notice = 'Cannot reach cloud server: $e');
     }
@@ -1102,15 +1033,58 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     });
   }
 
+  Future<void> deleteChapterAudio(int index) async {
+    if (busy) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete chapter audio?'),
+        content: Text(
+          'Remove the downloaded narration for "${widget.book.chapters[index].title}"? '
+          'The chapter text and reading progress will remain. '
+          'You can generate it again with another voice.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete audio'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted || busy) return;
+    setState(() => busy = true);
+    try {
+      final root = await getApplicationDocumentsDirectory();
+      await deleteNarrationFile(
+        root: root, bookId: widget.book.id, index: index,
+        pause: () => audioHandler.unloadChapter(widget.book.id, index),
+        jobs: jobs, selected: selected,
+      );
+      await save();
+      notice = 'Audio deleted. Choose a narrator and generate this chapter again.';
+    } catch (e) {
+      notice = 'Could not delete audio: $e';
+    } finally {
+      busy = false;
+      if (mounted) setState(() {});
+    }
+  }
+
   Future<void> playChapter(int index) async {
     final root = await getApplicationDocumentsDirectory();
     final file = File('${root.path}/narration/${widget.book.id}_$index.mp3');
     if (!await file.exists()) {
-      if (mounted)
+      if (mounted) {
         setState(
           () =>
               notice = 'Recording not found locally. Try refreshing the queue.',
         );
+      }
       return;
     }
     if (!mounted) return;
@@ -1121,6 +1095,96 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
             ChapterNarrationScreen(book: widget.book, chapterIndex: index),
       ),
     );
+  }
+
+  Future<void> stopPreview() async {
+    previewSequence++;
+    await audioHandler.stopPreview();
+    if (mounted) setState(() => previewing = false);
+  }
+
+  Future<void> previewVoice() async {
+    if (host.isEmpty || token.isEmpty) {
+      setState(() => notice = 'Connect Dogreader Cloud before previewing.');
+      return;
+    }
+    final sequence = ++previewSequence;
+    final preference = NarrationPreference(narrationEngine, narrator);
+    setState(() { previewing = true; notice = 'Preparing voice preview…'; });
+    try {
+      var response = await requestJson('POST', '/dogreader/jobs', {
+        ...preference.toJson(),
+        'title': 'Voice preview',
+        'text': 'Welcome to Dogreader. “Shall we begin?” he asked. '
+            'Settle in, choose a chapter, and enjoy a few quiet moments with your next story.',
+      });
+      final id = response['id'] as String;
+      for (var attempt = 0; attempt < 60; attempt++) {
+        if (!mounted || sequence != previewSequence) { return; }
+        if (response['status'] == 'ready') { break; }
+        if (response['status'] == 'error') { throw Exception(response['error'] ?? 'Preview generation failed'); }
+        await Future<void>.delayed(const Duration(seconds: 2));
+        response = await requestJson('GET', '/dogreader/jobs/$id');
+      }
+      if (response['status'] != 'ready') { throw Exception('Preview is still queued. Tap Preview voice again to resume.'); }
+      if ((response['engine'] ?? 'google') != preference.engine ||
+          (response['voice'] != null && response['voice'] != preference.voice)) {
+        throw Exception('Server returned a different engine or voice. Update the backend.');
+      }
+      final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
+      late File preview;
+      try {
+        final req = await client.getUrl(endpoint('/dogreader/audio/$id'));
+        req.headers.set('X-Dogreader-Token', token);
+        final audio = await req.close().timeout(const Duration(seconds: 20));
+        if (audio.statusCode != 200) { throw Exception('Preview download failed (${audio.statusCode})'); }
+        final root = await getTemporaryDirectory();
+        preview = File('${root.path}/preview_$id.mp3');
+        final staged = File('${preview.path}.part');
+        await audio.pipe(staged.openWrite());
+        if (await staged.length() < 1000 ||
+            (audio.contentLength >= 0 && await staged.length() != audio.contentLength)) {
+          throw Exception('Preview download was incomplete');
+        }
+        await staged.rename(preview.path);
+      } finally {
+        client.close(force: true);
+      }
+      if (!mounted || sequence != previewSequence) { return; }
+      setState(() => notice = 'Preview: ${recordingLabel(preference.toJson())}');
+      await audioHandler.playPreview(preview.path, 'Preview: ${recordingLabel(preference.toJson())}');
+    } catch (e) {
+      if (mounted && sequence == previewSequence) { setState(() => notice = 'Voice preview: $e'); }
+    } finally {
+      if (mounted && sequence == previewSequence) { setState(() => previewing = false); }
+    }
+  }
+
+  Future<void> regenerate(int index) async {
+    if (busy) return;
+    final preference = NarrationPreference(narrationEngine, narrator);
+    final confirmed = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
+      title: const Text('Regenerate narration?'),
+      content: Text('Generate ${widget.book.chapters[index].title} with ${recordingLabel(preference.toJson())}? '
+          'The current download is replaced only after the new audio downloads successfully.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+        FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Generate narration')),
+      ],
+    ));
+    if (confirmed != true || !mounted || busy) return;
+    if (host.isEmpty || token.isEmpty) {
+      setState(() => notice = 'Connect Dogreader Cloud first.');
+      return;
+    }
+    setState(() {
+      jobs[index] = {
+        'previousRecording': jobs[index]?['previousRecording'] ?? jobs[index],
+        'status': 'waiting', ...preference.toJson(),
+      };
+    });
+    await save();
+    await checkJobs();
   }
 
   Future<void> generate() async {
@@ -1134,15 +1198,38 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       notice = null;
     });
     for (final index in selected.toList()..sort()) {
-      jobs[index] = {'status': 'waiting', 'voice': narrator};
+      jobs[index] = {'status': 'waiting', 'engine': narrationEngine, 'voice': narrator};
     }
     await save();
-    if (mounted)
+    if (mounted) {
       setState(() {
         selected.clear();
         busy = false;
       });
+    }
     await checkJobs();
+  }
+
+  Future<void> repairChapterAudio(int index) async {
+    if (busy) return;
+    final id = jobs[index]?['id'];
+    if (id is! String || id.isEmpty) {
+      setState(() => notice = 'No cloud recording is linked to this chapter.');
+      return;
+    }
+    setState(() {
+      busy = true;
+      notice = 'Recovering existing cloud recording…';
+    });
+    try {
+      await downloadAudio(index, id);
+      await save();
+      if (mounted) setState(() => notice = 'Recording recovered from cloud.');
+    } catch (e) {
+      if (mounted) setState(() => notice = 'Recovery failed: $e');
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
   }
 
   Future<void> downloadAudio(int index, String id) async {
@@ -1151,18 +1238,16 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       final req = await client.getUrl(endpoint('/dogreader/audio/$id'));
       req.headers.set('X-Dogreader-Token', token);
       final response = await req.close();
-      if (response.statusCode != 200)
+      if (response.statusCode != 200) {
         throw Exception('Download failed: ${response.statusCode}');
+      }
       final root = await getApplicationDocumentsDirectory();
       final folder = Directory('${root.path}/narration');
       await folder.create(recursive: true);
       final target = File('${folder.path}/${widget.book.id}_$index.mp3');
-      final temp = File('${target.path}.part');
-      final sink = temp.openWrite();
-      await response.pipe(sink);
-      if (await temp.length() < 1000) throw Exception('Audio file was empty');
-      if (await target.exists()) await target.delete();
-      await temp.rename(target.path);
+      await replaceNarrationFile(target, response,
+          contentLength: response.contentLength,
+          beforeReplace: () => audioHandler.unloadChapter(widget.book.id, index));
       final stateFile = File('${root.path}/narration_state.json');
       Map<String, dynamic> data = {};
       if (await stateFile.exists()) {
@@ -1172,9 +1257,11 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
           ) as Map<String, dynamic>;
         } catch (_) {}
       }
-      data['${widget.book.id}:$index'] = {'path': target.path, 'positionMs': 0};
+      data['${widget.book.id}:$index'] = {'path': target.path, 'positionMs': 0,
+        ...recordingMetadata(jobs[index] ?? {})};
       await stateFile.writeAsString(jsonEncode(data));
-      jobs[index] = {'status': 'ready', 'id': id};
+      jobs[index] = {...?jobs[index], 'status': 'ready', 'id': id};
+      jobs[index]!.remove('previousRecording');
     } finally {
       client.close(force: true);
     }
@@ -1208,10 +1295,14 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
             final response = await requestJson('POST', '/dogreader/jobs', {
               'title': chapter.title,
               'text': chapter.text,
+              'engine': jobs[index]?['engine'] ?? 'google',
               'voice': jobs[index]?['voice'] ?? 'en-US-Chirp3-HD-Achernar',
+              ...{for (final key in ['model_version', 'settings'])
+                if (jobs[index]?.containsKey(key) == true) key: jobs[index]![key]},
             });
             jobs[index] = {
               ...?jobs[index],
+              ...recordingMetadata(response),
               'status': response['status'],
               'id': response['id'],
             };
@@ -1223,15 +1314,21 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
             result = await requestJson('GET', '/dogreader/jobs/$id');
           } catch (e) {
             // Re-submit if the cloud job record is missing; the server caches completed audio.
-            if (!e.toString().contains('Unknown job')) rethrow;
+            if (!e.toString().contains('Unknown job') && !e.toString().contains('Job not found')) {
+              rethrow;
+            }
             final chapter = widget.book.chapters[index];
             final submitted = await requestJson('POST', '/dogreader/jobs', {
               'title': chapter.title,
               'text': chapter.text,
+              'engine': jobs[index]?['engine'] ?? 'google',
               'voice': jobs[index]?['voice'] ?? 'en-US-Chirp3-HD-Achernar',
+              ...{for (final key in ['model_version', 'settings'])
+                if (jobs[index]?.containsKey(key) == true) key: jobs[index]![key]},
             });
             jobs[index] = {
               ...?jobs[index],
+              ...recordingMetadata(submitted),
               'status': submitted['status'],
               'id': submitted['id'],
             };
@@ -1244,17 +1341,21 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
           final currentId = jobs[index]?['id'] as String? ?? id;
           jobs[index] = {
             ...?jobs[index],
+            ...recordingMetadata(result),
             'status': nextStatus,
             'id': currentId,
             'error': result['error'],
           };
           if (nextStatus == 'ready') await downloadAudio(index, currentId);
-          if (nextStatus == 'error')
+          if (nextStatus == 'error') {
             notice =
-                'Cloud narration failed for ${widget.book.chapters[index].title}. Check Cloud Run logs.';
+                '${widget.book.chapters[index].title}: ${result['error'] ?? 'Narration failed. Retry to resume saved chunks.'}';
+          }
         } catch (e) {
           // Preserve pending work for a later retry.
-          if (jobs[index]?['id'] == null) jobs[index] = {'status': 'waiting'};
+          if (jobs[index]?['id'] == null) {
+            jobs[index] = {...?jobs[index], 'status': 'waiting'};
+          }
           // A temporary socket failure should not masquerade as a failed job.
           // Keep the job queued and retry on the next refresh.
           if (e is SocketException ||
@@ -1284,6 +1385,8 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   @override
   void dispose() {
     timer?.cancel();
+    previewSequence++;
+    unawaited(audioHandler.stopPreview());
     super.dispose();
   }
 
@@ -1332,29 +1435,14 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
               ],
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: DropdownButtonFormField<String>(
-              value: narrator,
-              decoration: const InputDecoration(
-                labelText: 'Narrator',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.record_voice_over),
-              ),
-              items: narratorNames.entries
-                  .map(
-                    (entry) => DropdownMenuItem<String>(
-                      value: entry.key,
-                      child: Text(entry.value),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (value) {
-                if (value == null) return;
-                setState(() => narrator = value);
-                save();
-              },
-            ),
+          NarrationControls(
+            preference: NarrationPreference(narrationEngine, narrator),
+            onChanged: (value) {
+              setState(() { narrationEngine = value.engine; narrator = value.voice; });
+              save();
+            },
+            previewing: previewing,
+            onPreview: previewing ? stopPreview : previewVoice,
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -1387,20 +1475,29 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
               itemBuilder: (context, index) {
                 final chapter = widget.book.chapters[index];
                 final status = jobs[index]?['status'] as String?;
-                final voice = jobs[index]?['voice'] as String?;
-                final voiceLabel = voice == null
-                    ? null
-                    : narratorNames[voice] ?? voice;
-                return CheckboxListTile(
-                  secondary: status == 'ready'
-                      ? IconButton(
-                          tooltip: 'Play downloaded chapter',
-                          icon: const Icon(
-                            Icons.play_circle_fill,
-                            color: accent,
-                            size: 32,
-                          ),
-                          onPressed: () => playChapter(index),
+                final voiceLabel = jobs[index] == null ? null : recordingLabel(jobs[index]);
+                return Column(children: [CheckboxListTile(
+                  secondary: status == 'ready' || jobs[index]?['previousRecording'] is Map
+                      ? Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              tooltip: status == 'ready' ? 'Play downloaded chapter' : 'Play previous recording',
+                              icon: Icon(Icons.play_circle_fill, color: Theme.of(context).colorScheme.primary, size: 32),
+                              onPressed: () => playChapter(index),
+                            ),
+                            if (jobs[index]?['id'] is String)
+                              IconButton(
+                                tooltip: 'Repair audio from cloud',
+                                icon: const Icon(Icons.cloud_download_outlined),
+                                onPressed: busy ? null : () => repairChapterAudio(index),
+                              ),
+                            IconButton(
+                              tooltip: 'Delete chapter audio',
+                              icon: const Icon(Icons.delete_outline),
+                              onPressed: busy ? null : () => deleteChapterAudio(index),
+                            ),
+                          ],
                         )
                       : null,
                   value: selected.contains(index),
@@ -1417,7 +1514,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
                             : status == 'queued'
                             ? 'Queued in cloud'
                             : status == 'error'
-                            ? 'Cloud job failed — check server logs'
+                            ? ((jobs[index]?['error'] as String?) ?? 'Narration failed. Retry to resume.')
                             : status) +
                         (voiceLabel == null ? '' : ' • $voiceLabel'),
                   ),
@@ -1434,7 +1531,13 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
                             selected.remove(index);
                           }
                         }),
-                );
+                ),
+                  if (status == 'ready' || status == 'error')
+                    Align(alignment: Alignment.centerRight, child: TextButton(
+                      onPressed: busy ? null : () => regenerate(index),
+                      child: const Text('Regenerate narration'),
+                    )),
+                ]);
               },
             ),
           ),
@@ -1444,7 +1547,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
               onPressed: selected.isEmpty || busy ? null : generate,
               icon: const Icon(Icons.record_voice_over),
               label: Text(
-                'Generate ${selected.length} chapter${selected.length == 1 ? '' : 's'}',
+                'Generate narration (${selected.length})',
               ),
             ),
           ),
@@ -1482,6 +1585,8 @@ class _ReadingScreenState extends State<ReadingScreen> {
   double previousHeight = -1;
   double previousFont = -1;
   int currentPage = 0;
+  int _paginationGeneration = 0;
+  bool _paginating = false;
 
   @override
   void initState() {
@@ -1494,9 +1599,14 @@ class _ReadingScreenState extends State<ReadingScreen> {
   TextSpan styledPage(int start, int end) {
     final chapter = widget.book.chapters[chapterIndex];
     final text = chapter.text;
+    // Restrict style checks to ranges intersecting this page. Pagination
+    // invokes this method many times; scanning the whole chapter for every
+    // text segment makes long chapters disproportionately expensive.
+    final relevant = chapter.ranges
+        .where((r) => r.end > start && r.start < end)
+        .toList();
     final boundaries = <int>{start, end};
-    for (final r in chapter.ranges) {
-      if (r.end <= start || r.start >= end) continue;
+    for (final r in relevant) {
       boundaries.add(math.max(start, math.min(end, r.start)));
       boundaries.add(math.max(start, math.min(end, r.end)));
     }
@@ -1505,7 +1615,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
     for (int i = 0; i + 1 < cuts.length; i++) {
       final a = cuts[i], b = cuts[i + 1];
       if (a == b) continue;
-      final active = chapter.ranges.where((r) => r.start < b && r.end > a);
+      final active = relevant.where((r) => r.start < b && r.end > a);
       children.add(
         TextSpan(
           text: text.substring(a, b),
@@ -1521,25 +1631,47 @@ class _ReadingScreenState extends State<ReadingScreen> {
       );
     }
     return TextSpan(
-      style: TextStyle(fontSize: fontSize, height: 1.55, color: Colors.white),
+      style: TextStyle(fontSize: fontSize, height: 1.55, color: Theme.of(context).colorScheme.onSurface),
       children: children,
     );
   }
 
+  // Pagination is expensive for long EPUB chapters. Measure a small batch
+  // of pages per event-loop turn instead of blocking the UI isolate until
+  // the entire chapter has been laid out.
   void calculatePages(double width, double height) {
     if (width == previousWidth &&
         height == previousHeight &&
         fontSize == previousFont &&
-        pages.isNotEmpty)
+        (pages.isNotEmpty || _paginating)) {
       return;
+    }
     previousWidth = width;
     previousHeight = height;
     previousFont = fontSize;
-    final text = widget.book.chapters[chapterIndex].text;
-    final painter = TextPainter(
-      textDirection: TextDirection.ltr,
-      maxLines: null,
-    );
+    final generation = ++_paginationGeneration;
+    final targetChapter = chapterIndex;
+    final targetFont = fontSize;
+    _paginating = true;
+    pages = [];
+    starts = [];
+    // Do not call setState from LayoutBuilder; the scheduled job will
+    // publish its result after yielding to the event loop.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || generation != _paginationGeneration) return;
+      _paginateChapter(width, height, targetChapter, targetFont, generation);
+    });
+  }
+
+  Future<void> _paginateChapter(
+    double width,
+    double height,
+    int targetChapter,
+    double targetFont,
+    int generation,
+  ) async {
+    final text = widget.book.chapters[targetChapter].text;
+    final painter = TextPainter(textDirection: TextDirection.ltr);
     bool fits(int start, int end) {
       painter.text = styledPage(start, end);
       painter.layout(maxWidth: width);
@@ -1549,44 +1681,137 @@ class _ReadingScreenState extends State<ReadingScreen> {
     final nextPages = <String>[];
     final nextStarts = <int>[];
     int offset = 0;
-    while (offset < text.length) {
-      int low = offset + 1;
-      int high = text.length;
-      while (low < high) {
-        final mid = low + (high - low + 1) ~/ 2;
-        if (fits(offset, mid)) {
-          low = mid;
-        } else {
-          high = mid - 1;
+    try {
+      while (offset < text.length) {
+        if (!mounted ||
+            generation != _paginationGeneration ||
+            chapterIndex != targetChapter ||
+            fontSize != targetFont) {
+          return;
+        }
+        // Cap the binary-search range near a plausible page length.
+        // Expand only when necessary, avoiding repeated full-chapter
+        // layout on every page.
+        int low = offset + 1;
+        int high = math.min(text.length, offset + 1200);
+        while (high < text.length && fits(offset, high)) {
+          low = high;
+          high = math.min(text.length, offset + (high - offset) * 2);
+        }
+        while (low < high) {
+          final mid = low + (high - low + 1) ~/ 2;
+          if (fits(offset, mid)) {
+            low = mid;
+          } else {
+            high = mid - 1;
+          }
+        }
+        int pageEnd = low;
+        if (pageEnd < text.length) {
+          final whitespace = text.lastIndexOf(RegExp(r'\s'), pageEnd - 1);
+          if (whitespace > offset + (pageEnd - offset) ~/ 2) {
+            pageEnd = whitespace + 1;
+          }
+        }
+        if (pageEnd <= offset) pageEnd = math.min(offset + 1, text.length);
+        nextStarts.add(offset);
+        nextPages.add(text.substring(offset, pageEnd));
+        offset = pageEnd;
+        // Let navigation, media controls, and frames run between batches.
+        if (nextPages.length % 2 == 0) {
+          await Future<void>.delayed(const Duration(milliseconds: 1));
         }
       }
-      int end = low;
-      if (end < text.length) {
-        final whitespace = text.lastIndexOf(RegExp(r'\s'), end - 1);
-        if (whitespace > offset + (end - offset) ~/ 2) end = whitespace + 1;
+      if (nextPages.isEmpty) {
+        nextPages.add('');
+        nextStarts.add(0);
       }
-      if (end <= offset) end = math.min(offset + 1, text.length);
-      nextStarts.add(offset);
-      nextPages.add(text.substring(offset, end));
-      offset = end;
-    }
-    if (nextPages.isEmpty) {
-      nextPages.add('');
-      nextStarts.add(0);
-    }
-    pages = nextPages;
-    starts = nextStarts;
-    currentPage = math.max(
-      0,
-      starts.lastIndexWhere((value) => value <= currentOffset),
-    );
-    final oldController = controller;
-    controller = PageController(initialPage: currentPage, keepPage: false);
-    if (oldController != null) {
-      WidgetsBinding.instance.addPostFrameCallback(
-        (_) => oldController.dispose(),
+      if (!mounted || generation != _paginationGeneration ||
+          chapterIndex != targetChapter || fontSize != targetFont) {
+          return;
+        }
+      final nextPage = math.max(
+        0,
+        nextStarts.lastIndexWhere((value) => value <= currentOffset),
       );
+      final oldController = controller;
+      setState(() {
+        pages = nextPages;
+        starts = nextStarts;
+        currentPage = nextPage;
+        currentOffset = starts[currentPage];
+        controller = PageController(initialPage: currentPage, keepPage: false);
+        _paginating = false;
+      });
+      saveCurrent();
+      if (oldController != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          oldController.dispose();
+        });
+      }
+    } finally {
+      painter.dispose();
     }
+  }
+
+  // Keep navigation tied to the existing paginated text and saved offset.
+  void jumpToPage(int page) {
+    if (pages.isEmpty || controller == null) return;
+    final target = page.clamp(0, pages.length - 1);
+    currentPage = target;
+    currentOffset = starts[target];
+    saveCurrent();
+    controller!.jumpToPage(target);
+    if (mounted) setState(() {});
+  }
+
+  Future<void> showPageJump() async {
+    if (_paginating || pages.isEmpty) return;
+    final originalPage = currentPage;
+    var previewPage = currentPage.toDouble();
+    final selected = await showModalBottomSheet<int>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (sheetContext, updatePreview) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 20, 24, 28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('Jump to page',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 12),
+                Text('Page ${previewPage.round() + 1} of ${pages.length}'),
+                Slider(
+                  value: previewPage.clamp(0.0, (pages.length - 1).toDouble()),
+                  min: 0,
+                  max: math.max(1, pages.length - 1).toDouble(),
+                  onChanged: (value) => updatePreview(() {
+                    previewPage = value.clamp(0.0, (pages.length - 1).toDouble());
+                  }),
+                ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(sheetContext),
+                      child: const Text('Cancel'),
+                    ),
+                    FilledButton(
+                      onPressed: () => Navigator.pop(sheetContext, previewPage.round()),
+                      child: const Text('Go to page'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (!mounted || selected == null || currentPage != originalPage) return;
+    jumpToPage(selected);
   }
 
   void saveCurrent() {
@@ -1595,9 +1820,14 @@ class _ReadingScreenState extends State<ReadingScreen> {
 
   void changeChapter(int next) {
     if (next < 0 || next >= widget.book.chapters.length) return;
+    if (next > chapterIndex) {
+      widget.onSave(chapterIndex, widget.book.chapters[chapterIndex].text.length);
+    }
     setState(() {
       chapterIndex = next;
       currentOffset = 0;
+      ++_paginationGeneration;
+      _paginating = false;
       pages = [];
       previousWidth = -1;
     });
@@ -1621,6 +1851,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
 
   @override
   void dispose() {
+    ++_paginationGeneration;
     saveCurrent();
     controller?.dispose();
     super.dispose();
@@ -1638,16 +1869,31 @@ class _ReadingScreenState extends State<ReadingScreen> {
         ),
         actions: [
           IconButton(
-            tooltip: 'Test narration',
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => ChapterNarrationScreen(
-                  book: widget.book,
-                  chapterIndex: chapterIndex,
+            tooltip: 'Listen from this page',
+            onPressed: _paginating || pages.isEmpty ? null : () {
+              if (_paginating || pages.isEmpty) return;
+              // Capture the visible page's start offset, not a stale saved
+              // offset from before a page turn or a pagination change.
+              if (pages.isNotEmpty && currentPage >= 0 && currentPage < pages.length) {
+                currentOffset = starts[currentPage];
+              }
+              saveCurrent();
+              final textLength = widget.book.chapters[chapterIndex].text.length;
+              final fraction = textLength == 0
+                  ? 0.0
+                  : (currentOffset / textLength).clamp(0.0, 1.0);
+              final audioChapter = chapterIndex;
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => ChapterNarrationScreen(
+                    book: widget.book,
+                    chapterIndex: audioChapter,
+                    initialTextFraction: fraction,
+                  ),
                 ),
-              ),
-            ),
+              );
+            },
             icon: const Icon(Icons.headphones),
           ),
           IconButton(
@@ -1680,6 +1926,11 @@ class _ReadingScreenState extends State<ReadingScreen> {
             constraints.maxHeight - verticalPadding * 2 - footerHeight,
           );
           calculatePages(width, height);
+          if (_paginating || pages.isEmpty || controller == null) {
+            return const Center(
+              child: CircularProgressIndicator(),
+            );
+          }
           return Column(
             children: [
               Expanded(
@@ -1720,14 +1971,26 @@ class _ReadingScreenState extends State<ReadingScreen> {
               ),
               SizedBox(
                 height: footerHeight,
-                child: Center(
-                  child: Text(
-                    '${currentPage + 1} / ${pages.length}  •  ${chapter.title}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.white.withValues(alpha: 0.55),
+                child: InkWell(
+                  onTap: showPageJump,
+                  child: Center(
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.tune, size: 15, color: Theme.of(context).colorScheme.primary),
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(
+                            '${currentPage + 1} / ${pages.length}  •  Tap to jump',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Theme.of(context).colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
@@ -1743,10 +2006,14 @@ class _ReadingScreenState extends State<ReadingScreen> {
 class ChapterNarrationScreen extends StatefulWidget {
   final ImportedBook book;
   final int chapterIndex;
+  // Present only when arriving from the reader; normal player navigation
+  // continues to restore the last saved audio position.
+  final double? initialTextFraction;
   const ChapterNarrationScreen({
     super.key,
     required this.book,
     required this.chapterIndex,
+    this.initialTextFraction,
   });
 
   @override
@@ -1764,7 +2031,8 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
   Duration position = Duration.zero;
   Duration duration = Duration.zero;
   double speed = 1.0;
-  int lastSavedSecond = -1;
+
+  int _restoreGeneration = 0;
 
   String get chapterKey => '${widget.book.id}:${widget.chapterIndex}';
 
@@ -1814,10 +2082,6 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
       player.positionStream.listen((value) {
         if (!mounted) return;
         setState(() => position = value);
-        if (value.inSeconds != lastSavedSecond && value.inSeconds % 5 == 0) {
-          lastSavedSecond = value.inSeconds;
-          updateState({'positionMs': value.inMilliseconds});
-        }
       }),
     );
 
@@ -1838,7 +2102,6 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
               position = Duration.zero;
             });
           }
-          updateState({'positionMs': 0});
         }
       }),
     );
@@ -1847,6 +2110,9 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
   }
 
   Future<void> restore() async {
+    final generation = ++_restoreGeneration;
+    bool active() => mounted && generation == _restoreGeneration &&
+        (ModalRoute.of(context)?.isCurrent ?? true);
     try {
       final data = await readState();
       final entry = data[chapterKey];
@@ -1868,27 +2134,53 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
 
       if (path == null && await localFile.exists()) {
         path = localFile.path;
+        if (!active()) return;
         await updateState({'path': path, 'positionMs': 0});
       }
 
+      if (!active()) return;
       if (path != null) {
         audioPath = path;
-        await audioHandler.loadChapter(
-          path: path,
+        Future<void> load() => audioHandler.loadChapter(
+          path: path!,
           title: widget.book.chapters[widget.chapterIndex].title,
           author: widget.book.author,
           bookId: widget.book.id,
           chapterIndex: widget.chapterIndex,
+          chapterCount: widget.book.chapters.length,
           startPosition: Duration(milliseconds: savedPosition),
+          isCurrent: active,
         );
-        await refreshDuration();
-        // loadChapter preserves the position of an already-loaded chapter.
-        position = Duration(milliseconds: savedPosition);
+        var prepared = false;
+        Future<void> prepare() async {
+          await load();
+          prepared = true;
+        }
+        if (widget.initialTextFraction != null) {
+          // loadChapter deliberately preserves an already loaded chapter.
+          // Seeking is a separate step and always runs for reader navigation.
+          final completed = await seekNarrationFromText(
+            fraction: widget.initialTextFraction!, load: prepare,
+            pause: () => audioHandler.pause(origin: 'reader jump'),
+            seek: (target) => audioHandler.seek(target, origin: 'reader jump'),
+            duration: () => player.duration, position: () => player.position,
+            isCurrent: () => active() &&
+                (!prepared || audioHandler.mediaItem.value?.id == chapterKey),
+          );
+          if (!completed) return;
+        } else {
+          await load();
+          if (!active() || audioHandler.mediaItem.value?.id != chapterKey) return;
+          await refreshDuration();
+        }
+        if (!active() || audioHandler.mediaItem.value?.id != chapterKey) return;
+        duration = player.duration ?? Duration.zero;
+        position = player.position;
       }
     } catch (e) {
-      error = 'Could not load recording: $e';
+      if (active()) error = 'Could not load recording: $e';
     } finally {
-      if (mounted) setState(() => loading = false);
+      if (active()) setState(() => loading = false);
     }
   }
 
@@ -1931,7 +2223,9 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
       final target = File(
         '${folder.path}/${widget.book.id}_${widget.chapterIndex}.mp3',
       );
-      await player.stop();
+      if (!mounted) return;
+      await audioHandler.unloadChapter(widget.book.id, widget.chapterIndex);
+      if (!mounted) return;
       await File(picked.path!).copy(target.path);
       if (mounted) setState(() => duration = Duration.zero);
       await audioHandler.loadChapter(
@@ -1940,15 +2234,21 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
         author: widget.book.author,
         bookId: widget.book.id,
         chapterIndex: widget.chapterIndex,
+        chapterCount: widget.book.chapters.length,
+        forceReload: true,
+        isCurrent: () => mounted,
       );
+      if (!mounted) return;
       await refreshDuration();
-      await player.seek(Duration.zero);
+      if (!mounted || audioHandler.mediaItem.value?.id != chapterKey) return;
+      await audioHandler.seek(Duration.zero, origin: 'import audio');
       await updateState({'path': target.path, 'positionMs': 0});
-      if (mounted)
+      if (mounted) {
         setState(() {
           audioPath = target.path;
           position = Duration.zero;
         });
+      }
     } catch (e) {
       if (mounted) setState(() => error = 'Could not import MP3: $e');
     } finally {
@@ -1959,10 +2259,9 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
   Future<void> togglePlayback() async {
     try {
       if (playing) {
-        await player.pause();
-        await updateState({'positionMs': position.inMilliseconds});
+        await audioHandler.pause(origin: 'in-app');
       } else if (audioPath != null) {
-        await audioHandler.play();
+        await audioHandler.play(origin: 'in-app');
       }
     } catch (e) {
       if (mounted) setState(() => error = 'Playback error: $e');
@@ -1970,16 +2269,15 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
   }
 
   Future<void> seekTo(Duration value) async {
-    if (audioPath == null) return;
+    if (audioPath == null || loading) return;
     final maxMs = duration.inMilliseconds;
     final ms = value.inMilliseconds.clamp(
       0,
       maxMs > 0 ? maxMs : value.inMilliseconds,
     );
     final target = Duration(milliseconds: ms);
-    await player.seek(target);
+    await audioHandler.seek(target, origin: 'in-app seek');
     if (mounted) setState(() => position = target);
-    await updateState({'positionMs': target.inMilliseconds});
   }
 
   Future<void> changeSpeed() async {
@@ -2002,7 +2300,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
 
   @override
   void dispose() {
-    updateState({'positionMs': position.inMilliseconds});
+    ++_restoreGeneration;
     for (final sub in subscriptions) {
       sub.cancel();
     }
@@ -2017,7 +2315,18 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
         : 1.0;
     final currentMs = position.inMilliseconds.toDouble().clamp(0.0, maxMs);
     return Scaffold(
-      appBar: AppBar(title: const Text('Chapter narration')),
+      appBar: AppBar(
+        title: const Text('Chapter narration'),
+        actions: [
+          IconButton(
+            tooltip: 'Audio diagnostics',
+            icon: const Icon(Icons.bug_report_outlined),
+            onPressed: () => Navigator.push(context, MaterialPageRoute<void>(
+              builder: (_) => const AudioDiagnosticsScreen(),
+            )),
+          ),
+        ],
+      ),
       body: Center(
         child: SingleChildScrollView(
           child: Padding(
@@ -2025,7 +2334,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.headphones, size: 62, color: accent),
+                Icon(Icons.headphones, size: 62, color: Theme.of(context).colorScheme.primary),
                 const SizedBox(height: 14),
                 Text(
                   widget.book.title,
@@ -2064,7 +2373,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
                   Slider(
                     value: currentMs,
                     max: maxMs,
-                    onChanged: duration.inMilliseconds <= 0
+                    onChanged: loading || duration.inMilliseconds <= 0
                         ? null
                         : (v) => setState(
                             () => position = Duration(milliseconds: v.round()),
@@ -2095,7 +2404,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
                       ),
                       const SizedBox(width: 12),
                       FilledButton.icon(
-                        onPressed: togglePlayback,
+                        onPressed: loading ? null : togglePlayback,
                         icon: Icon(playing ? Icons.pause : Icons.play_arrow),
                         label: Text(playing ? 'Pause' : 'Play'),
                       ),
@@ -2110,8 +2419,8 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
                   ),
                   const SizedBox(height: 14),
                   TextButton(
-                    onPressed: changeSpeed,
-                    child: Text('${speed}× speed'),
+                    onPressed: loading ? null : changeSpeed,
+                    child: Text('$speed× speed'),
                   ),
                   TextButton.icon(
                     onPressed: () => seekTo(Duration.zero),
@@ -2124,7 +2433,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
                     padding: const EdgeInsets.only(top: 18),
                     child: Text(
                       error!,
-                      style: const TextStyle(color: Colors.orangeAccent),
+                      style: TextStyle(color: Theme.of(context).colorScheme.error),
                     ),
                   ),
               ],
@@ -2136,55 +2445,55 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
   }
 }
 
-class _TextBlock {
-  final bool heading, scene;
-  const _TextBlock(this.heading, this.scene);
-}
 
-class _FeatureRow extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String subtitle;
 
-  const _FeatureRow(this.icon, this.title, this.subtitle);
+class AudioDiagnosticsScreen extends StatelessWidget {
+  const AudioDiagnosticsScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          padding: const EdgeInsets.all(11),
-          decoration: BoxDecoration(
-            color: panel,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Icon(icon, color: accent),
-        ),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 15,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                subtitle,
-                style: TextStyle(
-                  fontSize: 13,
-                  color: Colors.white.withValues(alpha: 0.6),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Audio diagnostics')),
+    body: ValueListenableBuilder<List<String>>(
+      valueListenable: audioHandler.diagnosticCommands,
+      builder: (context, commands, _) => StreamBuilder<PlaybackState>(
+        stream: audioHandler.playbackState,
+        builder: (context, snapshot) {
+          final player = audioHandler.player;
+          return SingleChildScrollView(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Build $dogreaderBuild • audio command diagnostics',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 16),
+                const Text('Before testing, note the command count. Open the notification '
+                    'or lock screen and press Pause or Play once. Return here without '
+                    'using the in-app playback buttons. Did the count increase?'),
+                const SizedBox(height: 16),
+                Text('Commands received: ${audioHandler.diagnosticCommandCount}'),
+                Text('Playing: ${player.playing}'),
+                Text('Playback requested: ${audioHandler.diagnosticWantsPlayback}'),
+                Text('Player state: ${player.processingState.name}'),
+                Text('Session playing: ${audioHandler.playbackState.value.playing}'),
+                Text('Session state: ${audioHandler.playbackState.value.processingState.name}'),
+                Text('Session error code: ${audioHandler.playbackState.value.errorCode ?? "none"}'),
+                SelectableText('Last error: ${audioHandler.diagnosticLastError ?? "none"}'),
+                SelectableText('Last session bridge error: ${audioHandler.diagnosticLastSessionError ?? "none"}'),
+                const SizedBox(height: 16),
+                const Text('Both in-app and external commands appear below. '
+                    'The count resets when the audio handler restarts. '
+                    'Take a screenshot before restarting the phone. '
+                    'Opening this screen does not issue playback commands.'),
+                const SizedBox(height: 16),
+                SelectableText('Handler started: ${audioHandler.diagnosticStarted.toIso8601String()}\n\n'
+                    '${commands.isEmpty ? "No commands received yet." : commands.join("\n\n")}'),
+              ],
+            ),
+          );
+        },
+      ),
+    ),
+  );
 }
+

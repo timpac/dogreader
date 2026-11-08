@@ -17,6 +17,16 @@ android {
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.example.audiobook_app"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // CI debug builds install alongside the existing Dogreader app.
+        // Production/local builds keep their original application ID.
+        if (project.findProperty("dogreaderTestBuild") == "true") {
+            applicationIdSuffix = ".test"
+            testApplicationId = "com.example.audiobook_app.test.runner"
+            manifestPlaceholders["dogreaderAppLabel"] = "Dogreader Test"
+        } else {
+            manifestPlaceholders["dogreaderAppLabel"] = "Dogreader"
+        }
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
@@ -29,7 +39,23 @@ android {
         versionName = flutter.versionName
     }
 
+    // CI uses the recovered Chromebook key to preserve Android update compatibility.
+    // Local builds retain their normal Android debug signing behavior.
+    signingConfigs {
+        create("originalDogreader") {
+            storeFile = file(System.getProperty("user.home") + "/.android/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
+        getByName("debug") {
+            if (project.findProperty("dogreaderOriginalUpdate") == "true") {
+                signingConfig = signingConfigs.getByName("originalDogreader")
+            }
+        }
         release {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
@@ -46,4 +72,9 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }

@@ -1,0 +1,97 @@
+name: Media ownership regression and Android verification
+on:
+  push:
+    branches: [fix/134-media-ownership]
+    paths: ['lib/**', 'test/**', 'android/**', 'tools/check_android_media_controls.py', 'pubspec.*', '.github/workflows/media-ownership.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  flutter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.47.7'
+          cache: false
+      - run: flutter pub get --enforce-lockfile
+      - run: flutter analyze
+      - run: flutter test --reporter expanded
+  native:
+    needs: flutter
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      ORG_GRADLE_PROJECT_dogreaderTestBuild: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/powershell /opt/hostedtoolcache/CodeQL
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.47.7'
+          cache: false
+      - run: flutter pub get --enforce-lockfile
+      - name: Build Build-133 baseline and candidate probes
+        run: |
+          cp lib/dogreader_audio_handler.dart /tmp/candidate-handler.dart
+          cp test/support/media_control_probe.dart /tmp/candidate-probe.dart
+          git show 69016ca19c86be1dafa53b65a7624094ebc73c61:lib/dogreader_audio_handler.dart > lib/dogreader_audio_handler.dart
+          sed -i '/await handler.initializeAudioSession();/d' test/support/media_control_probe.dart
+          flutter build apk --debug --target-platform android-x64 --target test/support/media_control_probe.dart --build-number 133
+          cp build/app/outputs/flutter-apk/app-debug.apk /tmp/baseline-probe.apk
+          cp /tmp/candidate-handler.dart lib/dogreader_audio_handler.dart
+          cp /tmp/candidate-probe.dart test/support/media_control_probe.dart
+          flutter build apk --debug --target-platform android-x64 --target test/support/media_control_probe.dart --build-number 134
+          cp build/app/outputs/flutter-apk/app-debug.apk /tmp/candidate-probe.apk
+      - name: Build instrumentation
+        working-directory: android
+        run: |
+          ./gradlew app:assembleDebugAndroidTest -Ptarget="$GITHUB_WORKSPACE/test/support/media_control_probe.dart" -Ptarget-platform=android-x64
+          cp ../build/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk /tmp/instrumentation.apk
+          ./gradlew --stop
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          script: |
+            python3 tools/check_android_media_controls.py --apk /tmp/baseline-probe.apk --instrumentation-apk /tmp/instrumentation.apk --report /tmp/baseline-native-report.json || echo 'Baseline failure retained in report; candidate must pass.'
+            python3 tools/check_android_media_controls.py --apk /tmp/candidate-probe.apk --instrumentation-apk /tmp/instrumentation.apk --report /tmp/candidate-native-report.json
+      - name: Retain reports in logs and job summary independent of artifact quota
+        if: always()
+        run: |
+          python3 - <<'PYREPORT'
+          import os
+          from pathlib import Path
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('Real Android MediaSession completion and native audio output activity. Physical System UI taps remain device verification.\n\n')
+              for report in sorted(Path('/tmp').glob('*-native-report.json')):
+                  data = report.read_text()
+                  print(f'NATIVE_REPORT {report.name} {data}', flush=True)
+                  summary.write(f'### {report.name}\n\n```json\n{data}\n```\n\n')
+          PYREPORT
+      - uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: media-ownership-native-reports
+          path: /tmp/*-native-report.json

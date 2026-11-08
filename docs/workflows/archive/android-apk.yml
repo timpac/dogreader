@@ -1,0 +1,320 @@
+name: Build Dogreader Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/github-apk-build
+      - feature/audio-media-controls
+      - dogreader-oct22-update
+      - fix/reader-stability-from-113
+      - release/114-plus-improvements
+      - feature/120-reader-page-jump
+      - feature/122-delete-chapter-audio
+      - feature/123-audio-recovery-controls
+      - feature/124-css-audio-seek
+      - build/129-theme-audio-combined
+      - feature/kokoro-narration-131
+      - fix/134-media-ownership
+    paths:
+      - 'lib/**'
+      - 'test/**'
+      - 'android/**'
+      - 'assets/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
+      - '.github/workflows/android-apk.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  dogreader-update:
+    # GitHub Releases and their assets require contents: write; no other scopes.
+    permissions:
+      contents: write
+      actions: read
+    concurrency:
+      group: ${{ github.ref_name == 'fix/134-media-ownership' && 'dogreader-media-134' || github.ref_name == 'feature/kokoro-narration-131' && 'dogreader-kokoro-131' || github.ref_name == 'build/129-theme-audio-combined' && 'dogreader-combined-129' || 'dogreader-draft-release-124' }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DOGREADER_KEYSTORE_B64: ${{ secrets.DOGREADER_KEYSTORE_B64 }}
+      # Same app and signing key; a higher code permits an in-place update from 124.
+      DOGREADER_BUILD_NUMBER: ${{ github.ref_name == 'fix/134-media-ownership' && '134' || github.ref_name == 'feature/kokoro-narration-131' && '131' || github.ref_name == 'build/129-theme-audio-combined' && '129' || '124' }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          # Build and validate the exact combined source.
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Require successful Android verification of identical playback source
+        if: github.ref_name == 'fix/134-media-ownership'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { execFileSync } = require('child_process');
+            const { owner, repo } = context.repo;
+            const runs = (await github.rest.actions.listWorkflowRuns({
+              owner, repo, workflow_id: 'media-ownership.yml',
+              branch: context.ref.replace('refs/heads/', ''), status: 'completed', per_page: 20
+            })).data.workflow_runs;
+            let verified;
+            for (const run of runs.filter(run => run.conclusion === 'success')) {
+              try {
+                execFileSync('git', ['merge-base', '--is-ancestor', run.head_sha, context.sha]);
+                execFileSync('git', ['diff', '--quiet', run.head_sha, context.sha, '--',
+                  'lib', 'android', 'test', 'pubspec.yaml', 'pubspec.lock',
+                  'tools/check_android_media_controls.py', '.github/workflows/media-ownership.yml']);
+                verified = run;
+                break;
+              } catch (_) {}
+            }
+            if (!verified) throw new Error('No successful native run verifies this exact playback/test source. Refusing APK publication.');
+            core.exportVariable('DOGREADER_NATIVE_RUN', verified.html_url);
+            core.notice(`Native playback source verified by ${verified.html_url} at ${verified.head_sha}`);
+
+      - name: Verify build 129 ancestry and preserved modules/tests
+        if: github.ref_name == 'feature/kokoro-narration-131'
+        run: python3 tools/check_build129.py
+
+      - name: Check signing secret
+        id: signing
+        run: |
+          if [ -n "$DOGREADER_KEYSTORE_B64" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Original signing key is missing; refusing to build."
+            exit 1
+          fi
+
+      - name: Free runner disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          sudo rm -rf /usr/local/share/powershell
+          sudo docker system prune -af || true
+          df -h /
+
+      - name: Install Java 17
+        if: steps.signing.outputs.available == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Flutter
+        if: steps.signing.outputs.available == 'true'
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.47.7'
+          cache: false
+
+      - name: Restore original Chromebook debug signing key
+        if: steps.signing.outputs.available == 'true'
+        run: |
+          mkdir -p "$HOME/.android"
+          printf '%s' "$DOGREADER_KEYSTORE_B64" | base64 --decode > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+          keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | tee /tmp/dogreader-keystore.txt
+          if ! grep -Fqi 'C5:CC:08:D9:75:7C:0E:92:89:3A:71:62:04:A2:6F:EB:61:57:F5:35:0A:00:DB:B0:B7:96:20:49:D6:D9:D1:77' /tmp/dogreader-keystore.txt; then
+            echo "::error::Wrong signing key restored."
+            exit 1
+          fi
+
+      - name: Resolve Flutter dependencies
+        if: steps.signing.outputs.available == 'true'
+        run: flutter pub get --enforce-lockfile
+
+      - name: Analyze Dart code
+        if: steps.signing.outputs.available == 'true'
+        run: flutter analyze
+
+      - name: Run regression tests
+        if: steps.signing.outputs.available == 'true'
+        run: flutter test --reporter expanded
+
+      - name: Build original-app update APK
+        if: steps.signing.outputs.available == 'true'
+        env:
+          ORG_GRADLE_PROJECT_dogreaderOriginalUpdate: 'true'
+        run: flutter build apk --debug --build-number "$DOGREADER_BUILD_NUMBER" --dart-define="DOGREADER_BUILD=$DOGREADER_BUILD_NUMBER"
+
+      - name: Verify update signing certificate
+        if: steps.signing.outputs.available == 'true'
+        run: |
+          APKSIGNER="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner"
+          set -o pipefail
+          "$APKSIGNER" verify --verbose --print-certs build/app/outputs/flutter-apk/app-debug.apk | tee /tmp/dogreader-apk-certificates.txt
+          if ! grep -Fqi 'c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177' /tmp/dogreader-apk-certificates.txt; then
+            echo "::error::Original Dogreader signing fingerprint mismatch; update APK will not be published."
+            exit 1
+          fi
+
+      - name: Verify APK identity and version
+        if: steps.signing.outputs.available == 'true'
+        run: |
+          AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
+          "$AAPT" dump badging build/app/outputs/flutter-apk/app-debug.apk > /tmp/dogreader-apk-badging.txt
+          head -1 /tmp/dogreader-apk-badging.txt
+          grep -Fq "package: name='com.example.audiobook_app' versionCode='$DOGREADER_BUILD_NUMBER'" /tmp/dogreader-apk-badging.txt
+          sha256sum build/app/outputs/flutter-apk/app-debug.apk
+
+      - name: Retain signed candidate before device checks
+        if: github.ref_name == 'feature/kokoro-narration-131'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: dogreader-131-signed-candidate-${{ github.sha }}
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Free build-only SDK space for the emulator
+        if: github.ref_name == 'feature/kokoro-narration-131'
+        run: |
+          (cd android && ./gradlew --stop)
+          rm -rf "$ANDROID_HOME/ndk" "$ANDROID_HOME/cmake" "$HOME/.gradle/caches"
+          df -h /
+
+      - name: Enable KVM for actual APK screen verification
+        if: github.ref_name == 'feature/kokoro-narration-131'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Verify actual book/chapter/reader/narration screens on Android
+        if: github.ref_name == 'feature/kokoro-narration-131'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disk-size: 2048M
+          ram-size: 2048M
+          emulator-boot-timeout: 300
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          script: python3 tools/verify_android_screens.py build/app/outputs/flutter-apk/app-debug.apk reports/screens
+
+      - name: Retain actual APK screenshots and verification report
+        if: always() && github.ref_name == 'feature/kokoro-narration-131'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dogreader-131-actual-screens
+          path: reports/screens/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload verified APK to private draft GitHub Release
+        id: draft_release
+        if: steps.signing.outputs.available == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const crypto = require('crypto');
+            const { owner, repo } = context.repo;
+            const source = 'build/app/outputs/flutter-apk/app-debug.apk';
+            const diagnostic = process.env.DOGREADER_BUILD_NUMBER === '134';
+            const kokoro = process.env.DOGREADER_BUILD_NUMBER === '131';
+            const themeSwitcher = process.env.DOGREADER_BUILD_NUMBER === '129';
+            const name = diagnostic ? 'Dogreader-134-media-controls.apk' : kokoro ? 'Dogreader-131-kokoro.apk' : themeSwitcher ? 'Dogreader-129-theme-audio.apk' : 'Dogreader-124.apk';
+            const title = diagnostic ? 'Dogreader 134 media controls' : kokoro ? 'Dogreader 131 Kokoro on build 129' : themeSwitcher ? 'Dogreader 129 themes and audio controls' : 'Dogreader 124';
+            const preferredTag = diagnostic ? 'dogreader-134-media-controls' : kokoro ? 'dogreader-131-kokoro' : themeSwitcher ? 'dogreader-129-theme-audio' : 'dogreader-124';
+            const data = fs.readFileSync(source);
+            const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+            const expected = digest(data);
+            const fail = message => { throw new Error(message); };
+            const releases = await github.paginate(github.rest.repos.listReleases, { owner, repo, per_page: 100 });
+            let release = releases.find(item => item.tag_name === preferredTag);
+            if (!release) {
+              const named = releases.filter(item => item.name === title);
+              if (named.length > 1) fail(`Multiple ${title} releases exist; refusing an ambiguous upload.`);
+              release = named[0];
+            }
+            const tag = release?.tag_name ?? preferredTag;
+            let tagCommit;
+            let tagRef;
+            try {
+              tagRef = (await github.rest.git.getRef({ owner, repo, ref: `tags/${tag}` })).data;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+            if (tagRef) {
+              let object = tagRef.object;
+              for (let depth = 0; object.type === 'tag' && depth < 8; depth++) {
+                object = (await github.rest.git.getTag({ owner, repo, tag_sha: object.sha })).data.object;
+              }
+              if (object.type !== 'commit' || object.sha !== context.sha) {
+                fail(`Tag ${tag} does not point to this workflow commit; it will not be moved or overwritten.`);
+              }
+              tagCommit = object.sha;
+            }
+            const assertDraft = item => {
+              if (!item.draft || item.name !== title || item.tag_name !== tag) {
+                fail('The existing release is public or has conflicting metadata; refusing to modify it.');
+              }
+              if (item.target_commitish !== context.sha && tagCommit !== context.sha) {
+                fail('The existing draft targets another commit; refusing to attach a different build.');
+              }
+            };
+            if (release) {
+              assertDraft(release);
+            } else {
+              release = (await github.rest.repos.createRelease({
+                owner, repo, tag_name: tag, target_commitish: context.sha, name: title,
+                draft: true, prerelease: false, make_latest: 'false',
+                body: `Build ${process.env.DOGREADER_BUILD_NUMBER}, original Dogreader signing identity.\n\nApp source: ${context.sha}\nWorkflow source: ${context.sha}\nWorkflow: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}\n\n${kokoro ? 'Based on build 129 at 26fd3ef70978c686a2ac09ca0bf655ac7add600e, with Kokoro changes only. Full analysis, all regression tests and actual signed APK book/chapter/reader/theme/narration screen checks passed on Android 13. Screenshots and report are in the Actions artifact. Backend generation remains approval-gated.' : themeSwitcher ? 'Combined build-128 theme switcher and build-126 media-control repairs. Full analysis and combined regression tests passed. APK signature and package/version checks passed.' : `Full analysis and all Flutter regression tests passed. Android MediaSession completion, native output while backgrounded/locked, focus, rapid-command and lifecycle checks: ${process.env.DOGREADER_NATIVE_RUN}. APK signature, package and version checks passed. Investigation: docs/BUILD_134_MEDIA_CONTROLS.md.`} Physical Pixel 8 Pro audible-output validation remains outstanding.`
+              })).data;
+              assertDraft(release);
+            }
+            // Never publish a release or replace any existing asset, including on reruns.
+            release = (await github.rest.repos.getRelease({ owner, repo, release_id: release.id })).data;
+            assertDraft(release);
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets, { owner, repo, release_id: release.id, per_page: 100 });
+            let asset = assets.find(item => item.name === name);
+            if (!asset) {
+              fs.copyFileSync(source, `build/app/outputs/flutter-apk/${name}`);
+              asset = (await github.rest.repos.uploadReleaseAsset({
+                owner, repo, release_id: release.id, name, data,
+                headers: { 'content-type': 'application/vnd.android.package-archive', 'content-length': data.length }
+              })).data;
+            }
+            if (asset.state !== 'uploaded' || asset.size !== data.length) {
+              fail(`Asset ${name} is incomplete or conflicts with this APK; no assets were overwritten.`);
+            }
+            const downloaded = await github.rest.repos.getReleaseAsset({
+              owner, repo, asset_id: asset.id, headers: { accept: 'application/octet-stream' }
+            });
+            const received = Buffer.from(downloaded.data);
+            if (digest(received) !== expected) {
+              fail(`Asset ${name} has different bytes; no assets were overwritten.`);
+            }
+            release = (await github.rest.repos.getRelease({ owner, repo, release_id: release.id })).data;
+            assertDraft(release);
+            if (diagnostic) {
+              release = (await github.rest.repos.updateRelease({
+                owner, repo, release_id: release.id, draft: false, make_latest: 'true'
+              })).data;
+            }
+            core.setOutput('release_url', release.html_url);
+            core.setOutput('release_id', release.id);
+            core.setOutput('asset_id', asset.id);
+            core.notice(`Verified draft APK ready: ${release.html_url} (asset ${asset.id}, SHA-256 ${expected})`);
+            await core.summary.addHeading('Verified draft APK ready')
+              .addLink(title, release.html_url)
+              .addTable([
+                [{ data: 'APK', header: true }, { data: 'Value', header: true }],
+                ['Filename', name], ['Version code', process.env.DOGREADER_BUILD_NUMBER], ['Package', 'com.example.audiobook_app'],
+                ['Source commit', context.sha], ['Asset ID', String(asset.id)], ['APK SHA-256', expected],
+                ['Release visibility', release.draft ? 'Draft' : 'Published after APK verification']
+              ]).write();
+
