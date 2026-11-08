@@ -53,12 +53,15 @@ Validation on the initial candidate: Flutter 3.47.7 analysis passed with no issu
 all 87 Flutter tests passed. The companion backend's full 122-test suite passed
 without skips. No APK or container build was run for this preparation.
 
-The supplied section-4 MP3 and EPUB are downloaded. The MP3 is 12,113.424 seconds
-(about 3 hours 22 minutes), so the pilot must use an excerpt within its approved
-30-minute cap. The spoken opening is still needed to match the app's section
-label to this EPUB's different chapter labels. The environment has no GCP
-identity or immutable server job record. No actual model alignment or production
-deployment has occurred.
+The supplied section-4 MP3 and EPUB are downloaded. Its opening matches a passage
+partway through EPUB chapter 6. The MP3 is 12,113.424 seconds (about 3 hours 22
+minutes); the real CPU pilot used only a 231.216-second excerpt. The corrected
+candidate aligns 623 words in 29.818 seconds at 1.477 GiB sampled peak RSS and
+remains unreviewed. A private standalone listening preview was prepared. The
+companion backend's ALIGNMENT_PILOT_RESULTS.md records measured results and
+projected costs before further processing. No full-section alignment, production
+deployment or APK build has occurred. The environment still has no GCP identity
+or immutable original server job record.
 
 This EPUB also exposed empty XHTML `<title/>` elements, which HTML parsing
 treated as an unclosed title and swallowed the chapter body. A minimal parser
