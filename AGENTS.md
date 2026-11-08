@@ -42,8 +42,11 @@ Priorities, in order:
 - Preserve other in-progress work; check for overlapping PRs and likely conflicts.
 - Use GitHub Actions for Android APK builds; do not ask the user to build locally.
 - Use clear, sequential build/release numbers consistent with the repository's current convention. Never assume a number without checking.
-- Verify that the APK artifact or release asset actually exists before announcing it as downloadable.
-- Provide the exact GitHub Actions artifact or release asset link, plus short install instructions when needed. A release page with no APK is not a successful delivery.
+- APK delivery is part of completing every requested numbered Android build, not an optional follow-up. Do not say a build is delivered just because CI passed.
+- Publish the APK as a downloadable asset attached to the matching numbered GitHub Release, using the repository's established release workflow. Verify the release exists, the APK asset is attached, nonempty, and corresponds to the intended build/version.
+- The owner installs builds on a Pixel phone and has repeatedly encountered broken direct artifact/download links. **Do not send raw GitHub Actions artifact URLs, temporary signed URLs, API URLs, or unverified direct APK links as the primary delivery method.**
+- Instead, provide the stable GitHub Release page URL for the exact numbered build, after confirming its APK asset is present. Tell the owner to open that release and tap the APK under **Assets**. If a proven alternative delivery route is explicitly requested, verify it first.
+- If release publication is unavailable, report **APK not yet delivered** and explain the blocker; do not substitute an empty release page or a link that merely looks plausible.
 - Keep README and screenshots accurate when a user-facing feature or workflow changes.
 
 ## Communication
