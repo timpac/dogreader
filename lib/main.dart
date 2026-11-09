@@ -23,6 +23,7 @@ export 'reader_content.dart' show ReaderChapter, StyledRange;
 import 'narration_seek.dart';
 import 'narration_files.dart';
 import 'narration_options.dart';
+import 'narration_alignment.dart';
 
 late final DogreaderAudioHandler audioHandler;
 
@@ -667,7 +668,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => NarrationQueueScreen(book: book),
+                builder: (_) => NarrationQueueScreen(book: book,
+                    onSave: (chapter, offset) => saveProgress(book.id, chapter, offset)),
               ),
             ),
           ),
@@ -729,7 +731,7 @@ class ChapterListScreen extends StatelessWidget {
             onPressed: () => Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => NarrationQueueScreen(book: book),
+                builder: (_) => NarrationQueueScreen(book: book, onSave: onSave),
               ),
             ),
           ),
@@ -743,7 +745,7 @@ class ChapterListScreen extends StatelessWidget {
               onPressed: () => Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) => NarrationQueueScreen(book: book),
+                  builder: (_) => NarrationQueueScreen(book: book, onSave: onSave),
                 ),
               ),
               icon: const Icon(Icons.headphones),
@@ -832,7 +834,8 @@ class ChapterListScreen extends StatelessWidget {
 
 class NarrationQueueScreen extends StatefulWidget {
   final ImportedBook book;
-  const NarrationQueueScreen({super.key, required this.book});
+  final SavePosition onSave;
+  const NarrationQueueScreen({super.key, required this.book, required this.onSave});
   @override
   State<NarrationQueueScreen> createState() => _NarrationQueueScreenState();
 }
@@ -1092,7 +1095,8 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       context,
       MaterialPageRoute(
         builder: (_) =>
-            ChapterNarrationScreen(book: widget.book, chapterIndex: index),
+            ChapterNarrationScreen(book: widget.book, chapterIndex: index,
+                onSave: widget.onSave),
       ),
     );
   }
@@ -1257,11 +1261,13 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
           ) as Map<String, dynamic>;
         } catch (_) {}
       }
-      data['${widget.book.id}:$index'] = {'path': target.path, 'positionMs': 0,
+      data['${widget.book.id}:$index'] = {'path': target.path, 'positionMs': 0, 'jobId': id,
         ...recordingMetadata(jobs[index] ?? {})};
       await stateFile.writeAsString(jsonEncode(data));
       jobs[index] = {...?jobs[index], 'status': 'ready', 'id': id};
       jobs[index]!.remove('previousRecording');
+      unawaited(loadNarrationAlignment(root: root, bookId: widget.book.id,
+          chapterIndex: index, audio: target, text: widget.book.chapters[index].text));
     } finally {
       client.close(force: true);
     }
@@ -1562,12 +1568,14 @@ class ReadingScreen extends StatefulWidget {
   final int chapterIndex;
   final int initialOffset;
   final SavePosition onSave;
+  final NarrationPassage? narrationPassage;
   const ReadingScreen({
     super.key,
     required this.book,
     required this.chapterIndex,
     required this.initialOffset,
     required this.onSave,
+    this.narrationPassage,
   });
 
   @override
@@ -1587,16 +1595,26 @@ class _ReadingScreenState extends State<ReadingScreen> {
   int currentPage = 0;
   int _paginationGeneration = 0;
   bool _paginating = false;
+  NarrationPassage? _highlight;
+  Timer? _highlightTimer;
+
+  void startHighlight() {
+    if (_highlight == null || _highlightTimer != null) return;
+    _highlightTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _highlight = null);
+    });
+  }
 
   @override
   void initState() {
     super.initState();
     chapterIndex = widget.chapterIndex;
     currentOffset = widget.initialOffset;
+    _highlight = widget.narrationPassage;
     widget.onSave(chapterIndex, currentOffset);
   }
 
-  TextSpan styledPage(int start, int end) {
+  TextSpan styledPage(int start, int end, {bool highlight = true}) {
     final chapter = widget.book.chapters[chapterIndex];
     final text = chapter.text;
     // Restrict style checks to ranges intersecting this page. Pagination
@@ -1606,6 +1624,11 @@ class _ReadingScreenState extends State<ReadingScreen> {
         .where((r) => r.end > start && r.start < end)
         .toList();
     final boundaries = <int>{start, end};
+    final destination = highlight ? _highlight : null;
+    if (destination != null && destination.paragraphEnd > start && destination.paragraphStart < end) {
+      boundaries.add(destination.paragraphStart.clamp(start, end));
+      boundaries.add(destination.paragraphEnd.clamp(start, end));
+    }
     for (final r in relevant) {
       boundaries.add(math.max(start, math.min(end, r.start)));
       boundaries.add(math.max(start, math.min(end, r.end)));
@@ -1620,6 +1643,8 @@ class _ReadingScreenState extends State<ReadingScreen> {
         TextSpan(
           text: text.substring(a, b),
           style: TextStyle(
+            backgroundColor: destination != null && a < destination.paragraphEnd && b > destination.paragraphStart
+                ? Theme.of(context).colorScheme.primaryContainer : null,
             fontStyle: active.any((r) => r.italic)
                 ? FontStyle.italic
                 : FontStyle.normal,
@@ -1673,13 +1698,37 @@ class _ReadingScreenState extends State<ReadingScreen> {
     final text = widget.book.chapters[targetChapter].text;
     final painter = TextPainter(textDirection: TextDirection.ltr);
     bool fits(int start, int end) {
-      painter.text = styledPage(start, end);
+      painter.text = styledPage(start, end, highlight: false);
       painter.layout(maxWidth: width);
       return painter.height <= height;
     }
 
     final nextPages = <String>[];
     final nextStarts = <int>[];
+    final anchor = currentOffset;
+    var published = false;
+    void publish({required bool complete}) {
+      final first = !published;
+      final oldController = first ? controller : null;
+      setState(() {
+        pages = List.of(nextPages);
+        starts = List.of(nextStarts);
+        if (first) {
+          currentPage = math.max(0, starts.lastIndexWhere((v) => v <= anchor));
+          currentOffset = starts[currentPage];
+          controller = PageController(initialPage: currentPage, keepPage: false);
+        }
+        _paginating = !complete;
+      });
+      published = true;
+      if (first) {
+        saveCurrent();
+        startHighlight();
+      }
+      if (oldController != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => oldController.dispose());
+      }
+    }
     int offset = 0;
     try {
       while (offset < text.length) {
@@ -1717,6 +1766,9 @@ class _ReadingScreenState extends State<ReadingScreen> {
         nextStarts.add(offset);
         nextPages.add(text.substring(offset, pageEnd));
         offset = pageEnd;
+        if ((!published && offset > anchor) || (published && nextPages.length % 8 == 0)) {
+          publish(complete: false);
+        }
         // Let navigation, media controls, and frames run between batches.
         if (nextPages.length % 2 == 0) {
           await Future<void>.delayed(const Duration(milliseconds: 1));
@@ -1730,25 +1782,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
           chapterIndex != targetChapter || fontSize != targetFont) {
           return;
         }
-      final nextPage = math.max(
-        0,
-        nextStarts.lastIndexWhere((value) => value <= currentOffset),
-      );
-      final oldController = controller;
-      setState(() {
-        pages = nextPages;
-        starts = nextStarts;
-        currentPage = nextPage;
-        currentOffset = starts[currentPage];
-        controller = PageController(initialPage: currentPage, keepPage: false);
-        _paginating = false;
-      });
-      saveCurrent();
-      if (oldController != null) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          oldController.dispose();
-        });
-      }
+      publish(complete: true);
     } finally {
       painter.dispose();
     }
@@ -1824,6 +1858,9 @@ class _ReadingScreenState extends State<ReadingScreen> {
       widget.onSave(chapterIndex, widget.book.chapters[chapterIndex].text.length);
     }
     setState(() {
+      _highlightTimer?.cancel();
+      _highlightTimer = null;
+      _highlight = null;
       chapterIndex = next;
       currentOffset = 0;
       ++_paginationGeneration;
@@ -1842,7 +1879,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
         duration: const Duration(milliseconds: 180),
         curve: Curves.easeOut,
       );
-    } else if (target >= pages.length) {
+    } else if (target >= pages.length && !_paginating) {
       changeChapter(chapterIndex + 1);
     } else if (target < 0 && chapterIndex > 0) {
       changeChapter(chapterIndex - 1);
@@ -1852,6 +1889,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
   @override
   void dispose() {
     ++_paginationGeneration;
+    _highlightTimer?.cancel();
     saveCurrent();
     controller?.dispose();
     super.dispose();
@@ -1870,7 +1908,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
         actions: [
           IconButton(
             tooltip: 'Listen from this page',
-            onPressed: _paginating || pages.isEmpty ? null : () {
+            onPressed: _paginating || pages.isEmpty ? null : () async {
               if (_paginating || pages.isEmpty) return;
               // Capture the visible page's start offset, not a stale saved
               // offset from before a page turn or a pagination change.
@@ -1883,16 +1921,31 @@ class _ReadingScreenState extends State<ReadingScreen> {
                   ? 0.0
                   : (currentOffset / textLength).clamp(0.0, 1.0);
               final audioChapter = chapterIndex;
-              Navigator.push(
+              final destination = await Navigator.push<NarrationReadTarget>(
                 context,
                 MaterialPageRoute(
                   builder: (_) => ChapterNarrationScreen(
                     book: widget.book,
                     chapterIndex: audioChapter,
                     initialTextFraction: fraction,
+                    onSave: widget.onSave,
+                    returnToReader: true,
                   ),
                 ),
               );
+              if (!mounted || destination == null) return;
+              _highlightTimer?.cancel();
+              _highlightTimer = null;
+              setState(() {
+                chapterIndex = destination.chapterIndex;
+                currentOffset = destination.passage.offset;
+                _highlight = destination.passage;
+                ++_paginationGeneration;
+                _paginating = false;
+                pages = [];
+                previousWidth = -1;
+              });
+              saveCurrent();
             },
             icon: const Icon(Icons.headphones),
           ),
@@ -1926,7 +1979,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
             constraints.maxHeight - verticalPadding * 2 - footerHeight,
           );
           calculatePages(width, height);
-          if (_paginating || pages.isEmpty || controller == null) {
+          if (pages.isEmpty || controller == null) {
             return const Center(
               child: CircularProgressIndicator(),
             );
@@ -1972,7 +2025,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
               SizedBox(
                 height: footerHeight,
                 child: InkWell(
-                  onTap: showPageJump,
+                  onTap: _paginating ? null : showPageJump,
                   child: Center(
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -1981,7 +2034,8 @@ class _ReadingScreenState extends State<ReadingScreen> {
                         const SizedBox(width: 8),
                         Flexible(
                           child: Text(
-                            '${currentPage + 1} / ${pages.length}  •  Tap to jump',
+                            _paginating ? '${currentPage + 1} / ${pages.length}+  •  Preparing pages…'
+                                : '${currentPage + 1} / ${pages.length}  •  Tap to jump',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
@@ -2003,17 +2057,27 @@ class _ReadingScreenState extends State<ReadingScreen> {
   }
 }
 
+class NarrationReadTarget {
+  final int chapterIndex;
+  final NarrationPassage passage;
+  const NarrationReadTarget(this.chapterIndex, this.passage);
+}
+
 class ChapterNarrationScreen extends StatefulWidget {
   final ImportedBook book;
   final int chapterIndex;
   // Present only when arriving from the reader; normal player navigation
   // continues to restore the last saved audio position.
   final double? initialTextFraction;
+  final SavePosition onSave;
+  final bool returnToReader;
   const ChapterNarrationScreen({
     super.key,
     required this.book,
     required this.chapterIndex,
     this.initialTextFraction,
+    required this.onSave,
+    this.returnToReader = false,
   });
 
   @override
@@ -2033,6 +2097,66 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
   double speed = 1.0;
 
   int _restoreGeneration = 0;
+  int _alignmentGeneration = 0;
+  NarrationAlignment? _alignment;
+  NarrationPlaybackLocation? _alignedSource;
+  bool _loadingAlignment = false;
+
+  Future<void> prepareReadingLocation() async {
+    final generation = ++_alignmentGeneration;
+    final source = audioHandler.readingLocation;
+    if (!mounted) return;
+    setState(() {
+      _alignment = null;
+      _alignedSource = null;
+      _loadingAlignment = true;
+    });
+    try {
+      if (source == null || source.bookId != widget.book.id ||
+          source.chapterIndex < 0 || source.chapterIndex >= widget.book.chapters.length) {
+        return;
+      }
+      final root = await getApplicationDocumentsDirectory();
+      final map = await loadNarrationAlignment(root: root, bookId: source.bookId,
+          chapterIndex: source.chapterIndex, audio: File(source.path),
+          text: widget.book.chapters[source.chapterIndex].text);
+      if (!mounted || generation != _alignmentGeneration ||
+          !audioHandler.isReadingLocationCurrent(source)) {
+        return;
+      }
+      final audioDuration = player.duration;
+      if (map != null && audioDuration != null && audioDuration > Duration.zero &&
+          (map.durationMs - audioDuration.inMilliseconds).abs() > 1000) {
+        return;
+      }
+      setState(() { _alignment = map; _alignedSource = source; });
+    } catch (_) {
+      // Optional synchronization metadata cannot interrupt playback.
+    } finally {
+      if (mounted && generation == _alignmentGeneration) setState(() => _loadingAlignment = false);
+    }
+  }
+
+  void readFromHere() {
+    final source = audioHandler.readingLocation;
+    final map = _alignment;
+    final aligned = _alignedSource;
+    if (source == null || source.bookId != widget.book.id ||
+        aligned == null || !audioHandler.isReadingLocationCurrent(aligned) || map == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content:
+          Text('Synchronization is not available for this recording yet.')));
+      unawaited(prepareReadingLocation());
+      return;
+    }
+    final passage = map.passageAt(source.position);
+    if (widget.returnToReader) {
+      Navigator.pop(context, NarrationReadTarget(source.chapterIndex, passage));
+    } else {
+      Navigator.push(context, MaterialPageRoute<void>(builder: (_) => ReadingScreen(
+          book: widget.book, chapterIndex: source.chapterIndex,
+          initialOffset: passage.offset, narrationPassage: passage, onSave: widget.onSave)));
+    }
+  }
 
   String get chapterKey => '${widget.book.id}:${widget.chapterIndex}';
 
@@ -2069,6 +2193,15 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
   @override
   void initState() {
     super.initState();
+
+    subscriptions.add(
+      audioHandler.mediaItem.listen((_) {
+        // A publication can precede the handler finishing chapter preparation.
+        Future<void>.delayed(const Duration(milliseconds: 100), () {
+          if (mounted && !loading) unawaited(prepareReadingLocation());
+        });
+      }),
+    );
 
     subscriptions.add(
       player.playerStateStream.listen((state) {
@@ -2176,11 +2309,16 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
         if (!active() || audioHandler.mediaItem.value?.id != chapterKey) return;
         duration = player.duration ?? Duration.zero;
         position = player.position;
+        playing = player.playing;
+        speed = player.speed;
       }
     } catch (e) {
       if (active()) error = 'Could not load recording: $e';
     } finally {
-      if (active()) setState(() => loading = false);
+      if (active()) {
+        setState(() => loading = false);
+        unawaited(prepareReadingLocation());
+      }
     }
   }
 
@@ -2227,6 +2365,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
       await audioHandler.unloadChapter(widget.book.id, widget.chapterIndex);
       if (!mounted) return;
       await File(picked.path!).copy(target.path);
+      await invalidateNarrationAlignment(target);
       if (mounted) setState(() => duration = Duration.zero);
       await audioHandler.loadChapter(
         path: target.path,
@@ -2242,7 +2381,8 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
       await refreshDuration();
       if (!mounted || audioHandler.mediaItem.value?.id != chapterKey) return;
       await audioHandler.seek(Duration.zero, origin: 'import audio');
-      await updateState({'path': target.path, 'positionMs': 0});
+      await updateState({'path': target.path, 'positionMs': 0, 'jobId': null});
+      unawaited(prepareReadingLocation());
       if (mounted) {
         setState(() {
           audioPath = target.path;
@@ -2301,6 +2441,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
   @override
   void dispose() {
     ++_restoreGeneration;
+    ++_alignmentGeneration;
     for (final sub in subscriptions) {
       sub.cancel();
     }
@@ -2310,6 +2451,10 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
   @override
   Widget build(BuildContext context) {
     final hasAudio = audioPath != null;
+    final active = audioHandler.readingLocation;
+    final displayedChapter = active != null && active.bookId == widget.book.id &&
+        active.chapterIndex >= 0 && active.chapterIndex < widget.book.chapters.length
+        ? active.chapterIndex : widget.chapterIndex;
     final maxMs = duration.inMilliseconds > 0
         ? duration.inMilliseconds.toDouble()
         : 1.0;
@@ -2346,7 +2491,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  widget.book.chapters[widget.chapterIndex].title,
+                  widget.book.chapters[displayedChapter].title,
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 20),
@@ -2369,6 +2514,12 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
                   ),
                 ),
                 if (hasAudio) ...[
+                  const SizedBox(height: 12),
+                  FilledButton.tonalIcon(
+                    onPressed: loading || _loadingAlignment ? null : readFromHere,
+                    icon: const Icon(Icons.menu_book),
+                    label: Text(_loadingAlignment ? 'Preparing synchronization…' : 'Read from here'),
+                  ),
                   const SizedBox(height: 24),
                   Slider(
                     value: currentMs,

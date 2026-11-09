@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'narration_alignment.dart';
 
 /// Replace a downloaded recording only after validating the complete response.
 Future<void> replaceNarrationFile(File target, Stream<List<int>> bytes,
@@ -18,6 +19,7 @@ Future<void> replaceNarrationFile(File target, Stream<List<int>> bytes,
       await target.rename(backup.path);
       try {
         await temp.rename(target.path);
+        await invalidateNarrationAlignment(target);
         await backup.delete();
       } catch (_) {
         if (await backup.exists()) await backup.rename(target.path);
@@ -25,6 +27,7 @@ Future<void> replaceNarrationFile(File target, Stream<List<int>> bytes,
       }
     } else {
       await temp.rename(target.path);
+      await invalidateNarrationAlignment(target);
     }
   } finally {
     if (await temp.exists()) await temp.delete();
@@ -42,6 +45,7 @@ Future<void> deleteNarrationFile({
   await pause();
   final file = File('${root.path}/narration/${bookId}_$index.mp3');
   if (await file.exists()) await file.delete();
+  await invalidateNarrationAlignment(file);
   final stateFile = File('${root.path}/narration_state.json');
   if (await stateFile.exists()) {
     final data = jsonDecode(await stateFile.readAsString());

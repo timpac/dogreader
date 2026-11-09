@@ -7,6 +7,12 @@ appearance settings. Reader page jumps, publisher scene spacing, read-to-audio
 seeking, chapter repair/download/deletion and narration engine/voice selection
 are retained from the complete build-135 source.
 
+The audio-to-text candidate adds **Read from here**, brief paragraph highlighting
+and offline timing-map support while retaining the shared audio player. Accurate
+navigation requires a matching word-alignment map from the separate backend;
+a full-recording candidate now awaits listening and source-version acceptance.
+See [synchronization status](docs/AUDIO_TEXT_SYNC.md).
+
 ## Development baseline
 
 Use **`dogreader-oct22-update`**, the repository's sole development/default

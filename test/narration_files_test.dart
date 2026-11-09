@@ -30,6 +30,8 @@ void main() {
   });
   test('validated recovery releases the old decoder before replacing bytes', () async {
     var released = false;
+    final sidecar = File('${target.path}.alignment.json');
+    await sidecar.writeAsString('old timing');
     await replaceNarrationFile(target, Stream.value(List.filled(2200, 2)), contentLength: 2200,
       beforeReplace: () async {
         expect(await target.readAsBytes(), List.filled(2000, 1));
@@ -38,11 +40,14 @@ void main() {
     expect(released, isTrue);
     expect(await target.readAsBytes(), List.filled(2200, 2));
     expect(await File('${target.path}.bak').exists(), isFalse);
+    expect(await sidecar.exists(), isFalse);
   });
   test('delete clears only this chapter audio and cloud job; reading progress survives', () async {
     final state = File('${root.path}/narration_state.json');
     await state.writeAsString(jsonEncode({'book:0': {'path': target.path, 'positionMs': 9000}, 'book:1': {'positionMs': 7000}}));
     final reading = File('${root.path}/reading_state.json');
+    final sidecar = File('${target.path}.alignment.json');
+    await sidecar.writeAsString('old timing');
     const saved = '{"positions":{"book":{"chapter":0,"offset":412}}}';
     await reading.writeAsString(saved);
     final jobs = <int, Map<String, dynamic>>{0: {'id': 'old-voice', 'status': 'ready'}, 1: {'id': 'keep'}};
@@ -53,6 +58,7 @@ void main() {
       jobs: jobs, selected: selected);
     expect(paused, isTrue);
     expect(await target.exists(), isFalse);
+    expect(await sidecar.exists(), isFalse);
     expect(jobs.containsKey(0), isFalse);
     expect(jobs[1]?['id'], 'keep');
     expect(selected, {1});

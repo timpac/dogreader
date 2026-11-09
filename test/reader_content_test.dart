@@ -2,6 +2,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:audiobook_app/reader_content.dart';
 
 void main() {
+  test('empty XHTML title preserves chapter text and styles', () {
+    for (final title in ['<title/>', '<title />', '<TITLE lang="en" />']) {
+      final chapter = parseReaderChapter('Chapter',
+          '<html><head>$title</head><body><h1>Chapter</h1>'
+          '<p>A <em>styled</em> paragraph.</p></body></html>');
+      expect(chapter.text, 'Chapter\nA styled paragraph.');
+      expect(chapter.ranges.any((r) => r.italic &&
+          chapter.text.substring(r.start, r.end) == 'styled'), isTrue);
+    }
+  });
   test('linked publisher CSS, imports and fractional spacing create blank scenes', () {
     final chapter = parseReaderChapter('Title', '''
       <link rel="stylesheet" href="../Styles/book%20style.css"/>

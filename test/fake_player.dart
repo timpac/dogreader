@@ -26,6 +26,8 @@ class FakePlayer implements AudioPlayer {
   int loads = 0;
   int stops = 0;
   int plays = 0;
+  int pauses = 0;
+  int seeks = 0;
   bool emitStateOnStop = true;
   bool holdPlayFuture = false;
   Object? pauseError;
@@ -69,6 +71,7 @@ class FakePlayer implements AudioPlayer {
   }
   @override
   Future<void> pause() async {
+    pauses++;
     if (pauseError != null) {
       position = Duration.zero;
       throw pauseError!;
@@ -99,6 +102,7 @@ class FakePlayer implements AudioPlayer {
   }
   @override
   Future<void> seek(Duration? target, {int? index}) async {
+    seeks++;
     if (!ignoreSeek) {
       position = target ?? Duration.zero;
       if (processingState == ProcessingState.completed) {
