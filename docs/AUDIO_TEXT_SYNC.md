@@ -49,19 +49,28 @@ playing/paused route changes, highlight expiry, early long-chapter display and
 the existing seek/session regressions. They do not establish acoustic accuracy
 or 30-minute Pixel background-playback acceptance.
 
-Validation on the initial candidate: Flutter 3.47.7 analysis passed with no issues and
-all 87 Flutter tests passed. The companion backend's full 122-test suite passed
-without skips. No APK or container build was run for this preparation.
+Current client validation is clean analysis and all **88 Flutter regressions**
+passing. The companion backend now passes **130 tests** without skips. No APK or
+container build was needed for source investigation.
 
-The supplied section-4 MP3 and EPUB are downloaded. Its opening matches a passage
-partway through EPUB chapter 6. The MP3 is 12,113.424 seconds (about 3 hours 22
-minutes); the real CPU pilot used only a 231.216-second excerpt. The corrected
-candidate aligns 623 words in 29.818 seconds at 1.477 GiB sampled peak RSS and
-remains unreviewed. A private standalone listening preview was prepared. The
-companion backend's ALIGNMENT_PILOT_RESULTS.md records measured results and
-projected costs before further processing. No full-section alignment, production
-deployment or APK build has occurred. The environment still has no GCP identity
-or immutable original server job record.
+The supplied Section 4 MP3 is 12,113.424 seconds (about 3 hours 22 minutes). Its
+opening matches a passage within EPUB chapter 6, but the supplied EPUB and original
+server text have lexical and structural differences. A generation-pinned,
+MP3-digest-matched source export now supplies the exact 201,718-character original
+narration text. All 55 chunks / 34,771 source words have been aligned locally
+within the approved four-batch budget, with no paid cloud/TTS calls. Saved outputs
+were converted into one complete **unreviewed** candidate, including an exact
+source paragraph at 30 minutes. The actual Dart parser agrees with six independently
+computed full-recording targets; it rejects the saved unreviewed candidate.
+
+These are structural and compatibility checks, not proof of acoustic accuracy or
+phone acceptance. A private listening preview now has five 20-second clips around
+30, 60, 120, 180 minutes and the end. Chromium checks verified decoding, visible
+paragraphs, continuing playback and highlight expiry. Human listening review,
+phone text/version identity and immutable checkpoint frame verification remain
+before activation. The backend's ALIGNMENT_PILOT_RESULTS.md records the measured
+runtime, costs and limits. No production map, backend rollout or APK release has
+occurred; build 135 remains unchanged.
 
 This EPUB also exposed empty XHTML `<title/>` elements, which HTML parsing
 treated as an unclosed title and swallowed the chapter body. A minimal parser
@@ -70,23 +79,9 @@ no text and changes no offsets in already-readable chapters. Extraction now
 produces chapter text, and a regression covers the empty-title variants and
 preserved styling.
 
-After that correction, analysis is clean and all 88 Flutter regressions pass.
-
-The owner subsequently approved the full-recording compute budget. A 14-segment
-batch exposed later alignment failures; a controlled single-job comparison
-reproduced them. Exact stored job text and checkpoint identities are now required
-before spending the remaining processing budget or publishing a full map. The
-backend provides a tested read-only Cloud Shell export helper. No APK release or
-production map is claimed by these partial results.
-
 The read-only Cloud Shell utility is mirrored at
 `tool/export_alignment_source.py` in this public app repository so the owner
-can download it without authenticating GitHub in Cloud Shell. It is byte-for-byte
-identical to the tested helper in the private backend candidate; keep both
-copies synchronized when updating the export protocol. It is outside the
-Flutter app and does not access storage until the owner runs it with their own
-existing gcloud sign-in. It exports only one digest-matched job and bounded
-checkpoint proofs, never credentials, and performs no cloud writes or inference.
-Complete that pilot and report measured accuracy/runtime/cost before a production
-alignment rollout or a claim that real books meet the synchronization objective.
-Build 135 remains the known-good release; no replacement APK is implied here.
+can download it without GitHub authentication. It is byte-for-byte identical to
+the backend helper; keep both copies synchronized when updating the export
+protocol. It exports only a digest-matched job and optional bounded checkpoint
+proofs, never credentials, and performs no cloud writes or inference.
