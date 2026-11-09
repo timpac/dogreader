@@ -10,6 +10,8 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import sys
+import tempfile
 import time
 import urllib.parse
 import urllib.request
@@ -42,7 +44,9 @@ class StorageReader:
 
 
 def export_source(reader, bucket, audio_sha256, max_pages=10, checkpoint_proofs=False,
-                  audio_size=None):
+                  audio_size=None, progress=None, save=None, resume_report=None):
+    progress = progress or (lambda message: None)
+    save = save or (lambda report: None)
     if not re.fullmatch('[0-9a-f]{64}', audio_sha256):
         raise ValueError('Expected the exact original MP3 SHA-256')
     base = 'https://storage.googleapis.com/storage/v1/b/' + urllib.parse.quote(bucket, safe='') + '/o'
@@ -50,7 +54,8 @@ def export_source(reader, bucket, audio_sha256, max_pages=10, checkpoint_proofs=
     legacy = []
     legacy_read_bytes = 0
     page = None
-    for _ in range(max_pages):
+    for page_index in range(max_pages):
+        progress(f'Checking recording metadata, page {page_index + 1}...')
         query = dict(prefix='audio/', maxResults=1000,
                      fields='nextPageToken,items(name,generation,size,metadata)')
         if page:
@@ -67,6 +72,7 @@ def export_source(reader, bucket, audio_sha256, max_pages=10, checkpoint_proofs=
     if page:
         raise ValueError('Bounded metadata scan exceeded 10000 objects; no export created')
     if not matches and audio_size is not None:
+        progress('Verifying the exact-size legacy recording...')
         if len(legacy) != 1 or not 0 < audio_size <= 128 * 1024 * 1024:
             raise ValueError('Legacy lookup requires one exact-size candidate within 128 MiB')
         item = legacy[0]
@@ -87,6 +93,7 @@ def export_source(reader, bucket, audio_sha256, max_pages=10, checkpoint_proofs=
     if match is None or not recording.get('generation'):
         raise ValueError('Invalid immutable recording identity')
     identity = match.group(1)
+    progress('Recording matched. Reading the original narration text...')
     job_url = base + '/' + urllib.parse.quote('jobs/' + identity + '.json', safe='')
     metadata = reader.get_json(job_url + '?fields=name,generation,size')
     if not metadata.get('generation'):
@@ -110,6 +117,20 @@ def export_source(reader, bucket, audio_sha256, max_pages=10, checkpoint_proofs=
                            chunks=recording.get('metadata', {}).get('chunks'),
                            digest_verified_by='pinned-object-bytes' if legacy_read_bytes else 'stored-metadata'),
                 source_generation=str(metadata['generation']), job=safe_job)
+    cached = {}
+    if (isinstance(resume_report, dict) and resume_report.get('bucket') == bucket and
+            resume_report.get('job_id') == identity and
+            resume_report.get('source_generation') == report['source_generation'] and
+            resume_report.get('audio', {}).get('generation') == report['audio']['generation'] and
+            resume_report.get('audio', {}).get('sha256') == audio_sha256):
+        cached = {item['name']: {key: item[key] for key in
+                      ('name', 'generation', 'size', 'audio_sha256', 'frames_sha256', 'frame_bytes', 'text_sha256')
+                      if key in item} for item in resume_report.get('checkpoints', [])
+                  if isinstance(item, dict) and isinstance(item.get('name'), str)}
+    if checkpoint_proofs or cached:
+        report.update(checkpoints=list(cached.values()), checkpoint_proofs_complete=False)
+    save(report)
+    progress('Source text saved. No credentials are included.')
     if checkpoint_proofs:
         # The standalone CLI hashes frames with the production framing rules.
         query = urllib.parse.urlencode(dict(prefix=f'chunks/{identity}/v1/', maxResults=1000,
@@ -119,17 +140,31 @@ def export_source(reader, bucket, audio_sha256, max_pages=10, checkpoint_proofs=
             raise ValueError('Checkpoint metadata scan exceeded its bound')
         total_bytes = legacy_read_bytes
         proofs = []
-        for item in sorted(checkpoints.get('items', []), key=lambda x: x['name']):
+        items = sorted(checkpoints.get('items', []), key=lambda x: x['name'])
+        for index, item in enumerate(items):
             if not re.fullmatch(f'chunks/{identity}/v1/[0-9]{{4}}\\.mp3', item['name']):
                 continue
             size = int(item['size'])
             total_bytes += size
             if not 0 < size <= 2 * 1024 * 1024 or total_bytes > 128 * 1024 * 1024:
                 raise ValueError('Checkpoint audio proof exceeds bounded reads')
+            metadata = item.get('metadata', {})
+            previous = cached.get(item['name'], {})
+            if (previous.get('generation') == str(item['generation']) and
+                    previous.get('size') == size and
+                    previous.get('audio_sha256') == metadata.get('audio_sha256') and
+                    previous.get('text_sha256') == metadata.get('text_sha256') and
+                    re.fullmatch('[0-9a-f]{64}', str(previous.get('frames_sha256', ''))) and
+                    isinstance(previous.get('frame_bytes'), int) and previous['frame_bytes'] > 0):
+                proofs.append(previous)
+                report['checkpoints'] = list(cached.values())
+                save(report)
+                progress(f'Checkpoint {index + 1}/{len(items)}: reusing verified digest.')
+                continue
+            progress(f'Verifying checkpoint {index + 1}/{len(items)}...')
             url = base + '/' + urllib.parse.quote(item['name'], safe='') + '?' + urllib.parse.urlencode(
                 dict(alt='media', generation=item['generation']))
             content = reader.get_bytes(url, limit=2 * 1024 * 1024)
-            metadata = item.get('metadata', {})
             digest = hashlib.sha256(content).hexdigest()
             if len(content) != size or digest != metadata.get('audio_sha256'):
                 raise ValueError('Checkpoint byte identity mismatch')
@@ -137,10 +172,29 @@ def export_source(reader, bucket, audio_sha256, max_pages=10, checkpoint_proofs=
             proofs.append(dict(name=item['name'], generation=str(item['generation']), size=size,
                 audio_sha256=digest, frames_sha256=hashlib.sha256(frame_bytes).hexdigest(),
                 frame_bytes=len(frame_bytes), text_sha256=metadata.get('text_sha256')))
+            cached[item['name']] = proofs[-1]
+            report['checkpoints'] = list(cached.values())
+            save(report)
         report['checkpoints'] = proofs
         count = str(recording.get('metadata', {}).get('chunks', ''))
         report['checkpoint_proofs_complete'] = count.isdigit() and len(proofs) == int(count)
+        save(report)
     return report
+
+
+def save_export(path, report):
+    """Keep the useful source and completed proofs even if later reads time out."""
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=path.parent,
+                prefix=path.name + '.', suffix='.tmp', delete=False) as stream:
+            temporary = Path(stream.name)
+            json.dump(report, stream, ensure_ascii=False, indent=2)
+        temporary.chmod(0o600)
+        temporary.replace(path)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
 
 
 def mp3_frames(content):
@@ -174,7 +228,7 @@ def mp3_frames(content):
     return bytes(frames)
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--bucket', required=True)
     parser.add_argument('--audio-sha256', required=True)
@@ -183,17 +237,41 @@ def main():
     parser.add_argument('--output', type=Path, default=Path('dogreader-alignment-source.json'))
     parser.add_argument('--checkpoint-proofs', action='store_true',
                         help='Read this job’s bounded checkpoints and export frame digests, not audio')
-    args = parser.parse_args()
-    if args.output.exists():
+    parser.add_argument('--resume', action='store_true',
+                        help='Resume a matching export, reusing generation-verified checkpoint digests')
+    args = parser.parse_args(argv)
+    previous = None
+    if args.output.exists() and not args.resume:
         raise ValueError('Refusing to overwrite an existing export')
-    token = subprocess.check_output(['gcloud', 'auth', 'print-access-token'], text=True).strip()
-    report = export_source(StorageReader(token), args.bucket, args.audio_sha256,
-                           checkpoint_proofs=args.checkpoint_proofs, audio_size=args.audio_size_bytes)
-    with args.output.open('x', encoding='utf-8') as stream:
-        json.dump(report, stream, ensure_ascii=False, indent=2)
-    args.output.chmod(0o600)
+    if args.output.exists():
+        previous = json.loads(args.output.read_text())
+        if (previous.get('schema') != 'dogreader-source-export-v1' or
+                previous.get('bucket') != args.bucket or
+                previous.get('audio', {}).get('sha256') != args.audio_sha256):
+            raise ValueError('Existing export belongs to another recording; choose a new output path')
+    def progress(message):
+        print('[source export] ' + message, file=sys.stderr, flush=True)
+    progress('Getting your existing gcloud sign-in. Approve Cloud Shell authorization if prompted...')
+    try:
+        token = subprocess.check_output(['gcloud', 'auth', 'print-access-token'],
+                                        text=True, timeout=90).strip()
+    except subprocess.TimeoutExpired:
+        raise TimeoutError('gcloud sign-in did not finish in 90 seconds; authorize Cloud Shell and retry') from None
+    progress('Authentication ready.')
+    try:
+        report = export_source(StorageReader(token), args.bucket, args.audio_sha256,
+            checkpoint_proofs=args.checkpoint_proofs, audio_size=args.audio_size_bytes,
+            progress=progress, save=lambda result: save_export(args.output, result), resume_report=previous)
+    except TimeoutError:
+        if not args.output.exists():
+            raise
+        report = json.loads(args.output.read_text())
+        if not isinstance(report.get('job', {}).get('text'), str):
+            raise
+        progress('Time limit reached. Source text and completed proofs are saved; '
+                 'you can send this JSON now. Use --resume for any remaining checkpoint proofs.')
     print(f'Created {args.output.name}: one job, {len(report["job"]["text"])} source characters. '
-          'No credentials exported and no cloud data changed.')
+          'No credentials exported and no cloud data changed.', flush=True)
 
 
 if __name__ == '__main__':
