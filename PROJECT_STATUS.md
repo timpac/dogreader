@@ -1,4 +1,40 @@
-# Build 131 delivered from build 129 (2026-11-01)
+# Build 136 published — 2026-11-10
+
+- Release: https://github.com/timpac/dogreader/releases/tag/v136
+- APK: https://github.com/timpac/dogreader/releases/download/v136/Dogreader-136.apk
+- Published source: `6ff767385bd6bfbc59eccd7ec842d74305ef0736`.
+- Successful Actions run: `42921560293`. Exactly one APK built and published;
+  package/version/signature verified, uploaded bytes downloaded and SHA-256
+  checked before publication. No expiring artifact link used.
+- APK SHA-256: `beaa1274bbaf6473e92b2fd72ab0ce3ef1e093f4c1028ded36ed9ccd3b0afbae`.
+- Package: `com.example.audiobook_app`; version code: **136**; original debug
+  signing certificate SHA-256:
+  `c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177`.
+- App source is identical to diagnostic implementation `c4cd870` on
+  `investigate/135-media-controls`. Build source adds delivery/docs only. Analysis,
+  50 selected Flutter tests and native journal checks passed in `42916527842`;
+  final identical-source Android compilation passed in `42918009026`. The
+  release workflow verified and reused that evidence rather than repeating it.
+- Delivery branch: `release/136-media-diagnostics`; later commits on it may be
+  documentation-only. The default branch and build-135 reference were not
+  modified or merged. Published v135 source remains
+  `cdf4227dc6a966b20e24f61179ac953b22689024`; APK digest remains
+  `48af8661b9287c225479a5dafb0a786b2c2fad4343f0b8d3b0bd432368351d1b`.
+- Latest user-confirmed installed reference is **135**. Installation of 136 and
+  physical-phone sharing, Bluetooth/session observation and prolonged use are
+  not yet confirmed. The intermittent controls failure's cause remains unknown.
+- **Next exact action:** install Dogreader-136.apk over 135 without uninstalling
+  or clearing data. If controls fail, press external Pause once, note whether
+  audio was already playing and stopped, then library/narration bug icon → Share
+  diagnostic log before force-stopping if possible. Logs survive restarts.
+- Keep build 135's lifecycle, native Pause boundary, intent/focus ownership and
+  preview/chapter behavior. No speculative playback fix was added. See
+  `docs/MEDIA_DIAGNOSTICS.md` for collection limits and `docs/release-136.md` for
+  release notes. User authorized this APK and release on 2026-11-10.
+
+---
+
+# Historical handoff: Build 131 delivered from build 129 (2026-11-01)
 
 - Runtime/APK source: `a60e87c232b8626672035c2730ff3f37f6a0e6c7`.
 - Build 129 at `26fd3ef70978c686a2ac09ca0bf655ac7add600e` is an ancestor;
@@ -121,29 +157,4 @@ Updated: 2026-10-24. This is a verified starting point, not a substitute for che
 
 ## Next exact action
 Validate the reader changes with Flutter analyzer and an APK build. Check scene markers and test page navigation, font-size changes, and rapid chapter switching. The existing workflow can be manually dispatched on this branch from GitHub Actions, but no workflow run has been started. Verify its signing check and build number before installing. Confirm source commit of run #13 if accessible.
-
-# Build 136 release preparation — 2026-11-10
-
-- User authorized a numbered diagnostic APK and GitHub release after the build
-  135 investigation. Build 135 remains the installed reference; installation of
-  build 136 is not yet confirmed.
-- Diagnostic implementation: `c4cd87075448790b324d243b71ae3f551f74a399` on
-  `investigate/135-media-controls`, descended from exact published build 135
-  `cdf4227dc6a966b20e24f61179ac953b22689024`.
-- Analysis, 50 focused Flutter tests and native journal checks passed in
-  `42916527842`; final identical-source Android compilation passed in
-  `42918009026`. These results are reused rather than repeating broad tests.
-- Delivery branch: `release/136-media-diagnostics`. Dedicated `build-136.yml`
-  builds one original-key debug APK through GitHub Actions, verifies original
-  certificate/package/version 136, retains a draft release APK, downloads and
-  verifies its SHA-256, then publishes `v136`. It does not merge branches or
-  change build 135. No temporary download link or Actions artifact is used.
-- At preparation time build 136 is not yet published. Read the release workflow
-  and live release metadata for its result. Next exact action: verify the build
-  run and numbered release, then install over 135 without uninstalling/clearing
-  data. If controls fail, use library bug icon → Share diagnostic log.
-- Root cause remains unconfirmed. See `docs/MEDIA_DIAGNOSTICS.md` for diagnostic
-  coverage/limits and `docs/release-136.md` for user-facing release notes.
-
----
 

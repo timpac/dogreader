@@ -78,9 +78,11 @@ the new persistence/privacy/backpressure tests and existing lifecycle, bridge,
 transport, ownership, native-boundary and seek regressions. It checks native
 journal rotation/restart/failure handling on the JVM and compiles the Android
 observer without packaging an APK. It has read-only GitHub permissions and no
-release/upload/deploy steps. Physical Android sharing, route/session observation,
-restart retention and prolonged use still require an explicitly authorized APK
-and device test. The older build-135 and release workflows are unchanged.
+release/upload/deploy steps. The separately authorized build-136 release workflow
+published the diagnostic APK in successful run `42921560293` at
+`6ff767385bd6bfbc59eccd7ec842d74305ef0736`. Physical Android sharing,
+route/session observation, restart retention and prolonged use still need device
+validation. The older build-135 and release workflows are unchanged.
 
 Analysis, all 50 selected Flutter tests and the native journal JVM checks passed
 in run `42916527842` at `c2a56e0`. Workflow/native-classpath-only follow-ups reuse
