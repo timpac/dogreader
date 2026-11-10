@@ -1,0 +1,51 @@
+name: Media diagnostics focused checks
+
+on:
+  push:
+    branches: [investigate/135-media-controls]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  focused:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Require build 135 baseline
+        run: git merge-base --is-ancestor cdf4227dc6a966b20e24f61179ac953b22689024 HEAD
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.47.7'
+          cache: true
+      - name: Resolve locked dependencies once
+        run: flutter pub get --enforce-lockfile
+      - run: flutter analyze --no-pub
+      - name: Focused diagnostic and transport regressions
+        run: >-
+          flutter test --no-pub --reporter expanded
+          test/media_diagnostics_test.dart test/session_lifecycle_test.dart
+          test/session_bridge_test.dart test/transport_intent_test.dart
+          test/system_media_controls_test.dart test/playback_ownership_test.dart
+          test/native_boundary_test.dart test/seek_cancellation_test.dart
+      - name: Native journal bounds and restart checks
+        run: |
+          mkdir -p /tmp/diagnostic-journal-check
+          javac -d /tmp/diagnostic-journal-check android/app/src/main/java/com/example/audiobook_app/DiagnosticJournal.java tools/DiagnosticJournalCheck.java
+          java -cp /tmp/diagnostic-journal-check DiagnosticJournalCheck
+      - name: Compile Android observer without packaging an APK
+        run: |
+          FLUTTER_SDK_DIR="$(dirname "$(dirname "$(readlink -f "$(command -v flutter)")")")"
+          printf 'flutter.sdk=%s\nsdk.dir=%s\n' "$FLUTTER_SDK_DIR" "$ANDROID_HOME" > android/local.properties
+          cd android
+          ./gradlew :app:compileDebugKotlin :app:compileDebugJavaWithJavac
