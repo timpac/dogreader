@@ -1,0 +1,158 @@
+name: Build and publish Dogreader 136 diagnostics
+
+on:
+  push:
+    branches: [release/136-media-diagnostics]
+    paths: ['.github/workflows/build-136.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: dogreader-release-136
+  cancel-in-progress: false
+
+jobs:
+  apk:
+    if: github.ref == 'refs/heads/release/136-media-diagnostics'
+    permissions:
+      contents: write
+      actions: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Require identical verified diagnostic source
+        run: |
+          git merge-base --is-ancestor cdf4227dc6a966b20e24f61179ac953b22689024 HEAD
+          git diff --exit-code c4cd87075448790b324d243b71ae3f551f74a399 HEAD -- lib android assets test tools pubspec.yaml pubspec.lock
+          git diff --exit-code c2a56e0e93444357fe6bb4efedc4ff77e0169142 HEAD -- lib assets test tools pubspec.yaml pubspec.lock
+      - name: Reuse verified checks and protect existing releases
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const run = (await github.rest.actions.getWorkflowRun({owner, repo, run_id: 42918009026})).data;
+            if (run.head_sha !== 'c4cd87075448790b324d243b71ae3f551f74a399' || run.conclusion !== 'success') {
+              throw new Error('Verified Android compilation is missing');
+            }
+            const tested = (await github.rest.actions.getWorkflowRun({owner, repo, run_id: 42916527842})).data;
+            if (tested.head_sha !== 'c2a56e0e93444357fe6bb4efedc4ff77e0169142') throw new Error('Flutter validation source mismatch');
+            const response = await github.rest.actions.downloadJobLogsForWorkflowRun({owner, repo, job_id: 130180296474});
+            const logs = typeof response.data === 'string' ? response.data : Buffer.from(response.data).toString('utf8');
+            for (const marker of ['No issues found!', '+50: All tests passed!', 'Diagnostic journal rotation, restart, bounds and I/O checks passed']) {
+              if (!logs.includes(marker)) throw new Error(`Missing validation evidence: ${marker}`);
+            }
+            const releases = await github.paginate(github.rest.repos.listReleases, {owner, repo, per_page: 100});
+            if (releases.some(r => r.tag_name === 'v136')) throw new Error('Build 136 already exists; recover its retained APK instead of rebuilding');
+            try {
+              await github.rest.git.getRef({owner, repo, ref: 'tags/v136'});
+              throw new Error('Tag v136 already exists');
+            } catch (error) { if (error.status !== 404) throw error; }
+            const baseline = releases.find(r => r.tag_name === 'v135');
+            const asset = baseline?.assets.find(a => a.name === 'Dogreader-135.apk');
+            if (!baseline || baseline.draft || baseline.target_commitish !== 'cdf4227dc6a966b20e24f61179ac953b22689024' ||
+                asset?.digest !== 'sha256:48af8661b9287c225479a5dafb0a786b2c2fad4343f0b8d3b0bd432368351d1b') {
+              throw new Error('Published build 135 baseline changed');
+            }
+      - name: Free unused runner disk space
+        run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/powershell
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            /opt/hostedtoolcache/flutter
+            ~/.pub-cache
+          key: dogreader-diagnostics-${{ runner.os }}-flutter-3.47.7-${{ hashFiles('pubspec.lock') }}
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.47.7'
+          cache: false
+      - name: Restore and check original signing identity
+        env:
+          DOGREADER_KEYSTORE_B64: ${{ secrets.DOGREADER_KEYSTORE_B64 }}
+        run: |
+          test -n "$DOGREADER_KEYSTORE_B64"
+          mkdir -p "$HOME/.android"
+          printf '%s' "$DOGREADER_KEYSTORE_B64" | base64 --decode > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+          keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey > /tmp/certificate.txt
+          grep -Fqi 'C5:CC:08:D9:75:7C:0E:92:89:3A:71:62:04:A2:6F:EB:61:57:F5:35:0A:00:DB:B0:B7:96:20:49:D6:D9:D1:77' /tmp/certificate.txt
+      - name: Resolve locked dependencies
+        run: flutter pub get --enforce-lockfile > /tmp/dependencies.log 2>&1 || { tail -60 /tmp/dependencies.log; exit 1; }
+      - name: Build original-app update 136 once
+        env:
+          ORG_GRADLE_PROJECT_dogreaderOriginalUpdate: 'true'
+        run: flutter build apk --debug --no-pub --build-number 136 --dart-define=DOGREADER_BUILD=136 > /tmp/build.log 2>&1 || { tail -100 /tmp/build.log; exit 1; }
+      - name: Verify APK identity and calculate digest
+        run: |
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          APK=build/app/outputs/flutter-apk/app-debug.apk
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" > /tmp/apk-certificates.txt
+          grep -Fqi 'c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177' /tmp/apk-certificates.txt
+          "$BUILD_TOOLS/aapt" dump badging "$APK" > /tmp/apk-identity.txt
+          grep -Fq "package: name='com.example.audiobook_app' versionCode='136'" /tmp/apk-identity.txt
+          mkdir -p dist
+          cp "$APK" dist/Dogreader-136.apk
+          sha256sum dist/Dogreader-136.apk >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain draft APK, verify uploaded bytes, then publish numbered release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const crypto = require('crypto');
+            const { owner, repo } = context.repo;
+            const name = 'Dogreader-136.apk';
+            const data = fs.readFileSync(`dist/${name}`);
+            const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+            const sha256 = digest(data);
+            const certificate = 'c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177';
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const body = fs.readFileSync('docs/release-136.md', 'utf8') +
+              `\n\nBuild source: ${context.sha}\nActions run: ${runUrl}\nAPK SHA-256: ${sha256}\nSigning certificate SHA-256: ${certificate}\n`;
+            const existing = await github.paginate(github.rest.repos.listReleases, {owner, repo, per_page: 100});
+            if (existing.some(r => r.tag_name === 'v136')) throw new Error('Release appeared during build; refusing to overwrite it');
+            let release = (await github.rest.repos.createRelease({
+              owner, repo, tag_name: 'v136', target_commitish: context.sha,
+              name: 'Dogreader Build 136 — persistent media diagnostics', body,
+              draft: true, prerelease: false, make_latest: 'false'
+            })).data;
+            const asset = (await github.rest.repos.uploadReleaseAsset({
+              owner, repo, release_id: release.id, name, data,
+              headers: {'content-type': 'application/vnd.android.package-archive', 'content-length': data.length}
+            })).data;
+            if (asset.state !== 'uploaded' || asset.size !== data.length ||
+                (asset.digest && asset.digest !== `sha256:${sha256}`)) throw new Error('Uploaded APK metadata mismatch');
+            const downloaded = await github.rest.repos.getReleaseAsset({
+              owner, repo, asset_id: asset.id, headers: {accept: 'application/octet-stream'}
+            });
+            if (digest(Buffer.from(downloaded.data)) !== sha256) throw new Error('Downloaded release APK hash mismatch');
+            release = (await github.rest.repos.getRelease({owner, repo, release_id: release.id})).data;
+            if (!release.draft || release.target_commitish !== context.sha || release.assets.length !== 1) {
+              throw new Error('Draft identity changed; refusing to publish');
+            }
+            release = (await github.rest.repos.updateRelease({
+              owner, repo, release_id: release.id, draft: false, make_latest: 'true'
+            })).data;
+            if (release.draft || release.tag_name !== 'v136') throw new Error('Release publication failed');
+            const ref = (await github.rest.git.getRef({owner, repo, ref: 'tags/v136'})).data;
+            if (ref.object.type !== 'commit' || ref.object.sha !== context.sha) throw new Error('Release tag source mismatch');
+            const baseline = (await github.rest.repos.getReleaseByTag({owner, repo, tag: 'v135'})).data;
+            if (baseline.target_commitish !== 'cdf4227dc6a966b20e24f61179ac953b22689024' ||
+                baseline.assets.find(a => a.name === 'Dogreader-135.apk')?.digest !==
+                'sha256:48af8661b9287c225479a5dafb0a786b2c2fad4343f0b8d3b0bd432368351d1b') {
+              throw new Error('Build 135 baseline verification failed');
+            }
+            await core.summary.addHeading('Published build 136')
+              .addLink('GitHub release', release.html_url)
+              .addRaw(`\n\nAPK: ${name}\n\nSource: ${context.sha}\n\nSHA-256: ${sha256}\n\nOriginal signing certificate: ${certificate}\n\nOne APK built; uploaded bytes downloaded and hash-verified before publication.\n`).write();
+            core.notice(`Published ${release.html_url} SHA-256 ${sha256}`);

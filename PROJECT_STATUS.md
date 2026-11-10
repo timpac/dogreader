@@ -122,3 +122,28 @@ Updated: 2026-10-24. This is a verified starting point, not a substitute for che
 ## Next exact action
 Validate the reader changes with Flutter analyzer and an APK build. Check scene markers and test page navigation, font-size changes, and rapid chapter switching. The existing workflow can be manually dispatched on this branch from GitHub Actions, but no workflow run has been started. Verify its signing check and build number before installing. Confirm source commit of run #13 if accessible.
 
+# Build 136 release preparation — 2026-11-10
+
+- User authorized a numbered diagnostic APK and GitHub release after the build
+  135 investigation. Build 135 remains the installed reference; installation of
+  build 136 is not yet confirmed.
+- Diagnostic implementation: `c4cd87075448790b324d243b71ae3f551f74a399` on
+  `investigate/135-media-controls`, descended from exact published build 135
+  `cdf4227dc6a966b20e24f61179ac953b22689024`.
+- Analysis, 50 focused Flutter tests and native journal checks passed in
+  `42916527842`; final identical-source Android compilation passed in
+  `42918009026`. These results are reused rather than repeating broad tests.
+- Delivery branch: `release/136-media-diagnostics`. Dedicated `build-136.yml`
+  builds one original-key debug APK through GitHub Actions, verifies original
+  certificate/package/version 136, retains a draft release APK, downloads and
+  verifies its SHA-256, then publishes `v136`. It does not merge branches or
+  change build 135. No temporary download link or Actions artifact is used.
+- At preparation time build 136 is not yet published. Read the release workflow
+  and live release metadata for its result. Next exact action: verify the build
+  run and numbered release, then install over 135 without uninstalling/clearing
+  data. If controls fail, use library bug icon → Share diagnostic log.
+- Root cause remains unconfirmed. See `docs/MEDIA_DIAGNOSTICS.md` for diagnostic
+  coverage/limits and `docs/release-136.md` for user-facing release notes.
+
+---
+
