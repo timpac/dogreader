@@ -75,6 +75,9 @@ flutter {
 }
 
 dependencies {
+    // The read-only diagnostic observer uses the same AndroidX Media API that
+    // audio_service 0.18.19 already supplies at runtime. No version upgrade.
+    implementation("androidx.media:media:1.7.0")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }

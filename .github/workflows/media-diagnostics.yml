@@ -19,10 +19,10 @@ jobs:
           fetch-depth: 0
       - name: Require build 135 baseline
         run: git merge-base --is-ancestor cdf4227dc6a966b20e24f61179ac953b22689024 HEAD
-      - name: Detect source changes
+      - name: Detect Flutter and journal source changes
         id: changes
         run: |
-          if git diff --quiet HEAD^ HEAD -- lib test android tools pubspec.yaml pubspec.lock; then
+          if git diff --quiet HEAD^ HEAD -- lib test tools android/app/src/main/java/com/example/audiobook_app/DiagnosticJournal.java pubspec.yaml pubspec.lock; then
             echo 'source=false' >> "$GITHUB_OUTPUT"
           else
             echo 'source=true' >> "$GITHUB_OUTPUT"

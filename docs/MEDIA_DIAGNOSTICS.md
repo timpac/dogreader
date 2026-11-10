@@ -4,9 +4,13 @@ Baseline: `cdf4227dc6a966b20e24f61179ac953b22689024`, published `v135`.
 Branch: `investigate/135-media-controls`. This work adds diagnostics only. The
 build 135 retained-session mapping, native Pause/release boundary, playback
 intent, focus policy, preview ownership and chapter navigation are preserved.
-No dependency or progress-file format changes. No automatic startup restoration
+No dependency runtime version or progress-file format changes. No automatic startup restoration
 or audible resume has been added. Headset Next/Previous remain no-ops, now logged
 as unsupported so they can be distinguished from lost commands.
+
+The app declares AndroidX Media 1.7.0 directly to compile its read-only controller
+observer. This is the same version already supplied by audio_service 0.18.19;
+that plugin's implementation dependency is hidden from the app compile classpath.
 
 ## Capture and retrieval
 
@@ -77,3 +81,8 @@ observer without packaging an APK. It has read-only GitHub permissions and no
 release/upload/deploy steps. Physical Android sharing, route/session observation,
 restart retention and prolonged use still require an explicitly authorized APK
 and device test. The older build-135 and release workflows are unchanged.
+
+Analysis, all 50 selected Flutter tests and the native journal JVM checks passed
+in run `42916527842` at `c2a56e0`. Workflow/native-classpath-only follow-ups reuse
+those results when the Flutter and journal sources are identical. Native
+compilation is checked on every run. No APK or release is produced by this workflow.
