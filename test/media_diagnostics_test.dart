@@ -77,6 +77,7 @@ void main() {
     log.record(MediaDiagnosticEvent.processStarted);
     await log.flush();
     expect(log.ioFailures, 1);
+    expect(log.dropped, 1);
     expect(await log.export(), contains('ioFailures=1'));
     await blocker.delete();
     log.record(MediaDiagnosticEvent.handlerCreated);
@@ -96,6 +97,11 @@ void main() {
         bookId: 'private-book', chapterIndex: 0, chapterCount: 1,
       );
       await handler.play(origin: 'in-app');
+      final chapter = handler.mediaItem.value?.id;
+      await handler.skipToNext();
+      await handler.skipToPrevious();
+      expect(handler.mediaItem.value?.id, chapter);
+      expect(handler.player.playing, isTrue);
       await handler.pause();
       final exported = await log.export();
       final records = exported.split('\n').where((line) => line.startsWith('{'))
@@ -104,6 +110,7 @@ void main() {
       final phases = records.where((r) => r['id'] == pause['id']).map((r) => r['event']).toList();
       expect(phases, ['commandReceived', 'commandExecuting', 'commandResult']);
       expect(exported, contains('completed (native Pause/Stop acknowledged)'));
+      expect(records.where((r) => r['phase'] == 'unsupported'), hasLength(2));
       expect(exported, isNot(contains('Private title')));
       expect(exported, isNot(contains('private-book')));
     } finally {

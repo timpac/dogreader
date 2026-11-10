@@ -763,6 +763,9 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
         _broadcastPlaybackState();
         await _savePosition(player.position);
         _result(id, 'completed');
+      } catch (_) {
+        _result(id, 'failed');
+        rethrow;
       } finally {
         _seeking = false;
       }
@@ -796,9 +799,14 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
   Future<void> setSpeed(double speed) => _serial(() async {
     final id = _logCommand('speed');
     _executing(id);
-    await player.setSpeed(speed);
-    _broadcastPlaybackState();
-    _result(id, 'completed');
+    try {
+      await player.setSpeed(speed);
+      _broadcastPlaybackState();
+      _result(id, 'completed');
+    } catch (_) {
+      _result(id, 'failed');
+      rethrow;
+    }
   });
 
   Future<void> _advanceToNextChapter() async {

@@ -179,14 +179,16 @@ public final class NativeMediaDiagnostics {
     }
 
     private void recordRoutes(AudioManager audio) {
-        int[] types = Arrays.stream(audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS))
-                .mapToInt(AudioDeviceInfo::getType).distinct().sorted().toArray();
-        String key = Arrays.toString(types);
-        if (key.equals(lastRoutes)) return;
-        lastRoutes = key;
-        event("output_devices_changed", "count", types.length);
-        // Available output types, not proof of the route actually playing.
-        for (int type : types) event("available_output_type", "type", type);
+        try {
+            int[] types = Arrays.stream(audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS))
+                    .mapToInt(AudioDeviceInfo::getType).distinct().sorted().toArray();
+            String key = Arrays.toString(types);
+            if (key.equals(lastRoutes)) return;
+            lastRoutes = key;
+            event("output_devices_changed", "count", types.length);
+            // Available output types, not proof of the route actually playing.
+            for (int type : types) event("available_output_type", "type", type);
+        } catch (Exception ignored) { event("route_snapshot_unavailable"); }
     }
 
     public interface ExportCallback { void complete(File file, String error); }

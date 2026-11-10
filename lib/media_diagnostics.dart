@@ -30,16 +30,15 @@ enum MediaDiagnosticEvent {
 /// titles, paths, URLs or device identities are accepted.
 class MediaDiagnostics {
   MediaDiagnostics({
-    required Future<Directory> Function() directory,
+    required this.directory,
     this.maxBytes = 256 * 1024,
     this.maxPending = 128,
-  }) : _directory = directory,
-       process = '$pid-${DateTime.now().microsecondsSinceEpoch}' {
+  }) : process = '$pid-${DateTime.now().microsecondsSinceEpoch}' {
     assert(maxBytes >= 1024);
     assert(maxPending > 0);
   }
 
-  final Future<Directory> Function() _directory;
+  final Future<Directory> Function() directory;
   final int maxBytes;
   final int maxPending;
   final String process;
@@ -103,25 +102,28 @@ class MediaDiagnostics {
   }
 
   Future<void> _drain() async {
+    var inFlight = 0;
     try {
-      final root = _root ??= await _directory();
+      final root = _root ??= await directory();
       await root.create(recursive: true);
       final current = File('${root.path}/dart.jsonl');
       final previous = File('${root.path}/dart.previous.jsonl');
       while (_pending.isNotEmpty) {
         final line = _pending.removeFirst();
+        inFlight = 1;
         final bytes = utf8.encode(line);
         if (await current.exists() && await current.length() + bytes.length > maxBytes) {
           if (await previous.exists()) await previous.delete();
           await current.rename(previous.path);
         }
         await current.writeAsBytes(bytes, mode: FileMode.append);
+        inFlight = 0;
       }
     } catch (_) {
       // Storage problems must never escape into audio callbacks or cause retries
       // in a tight loop. A future event can retry; dropped counts remain visible.
       ioFailures++;
-      dropped += _pending.length + 1;
+      dropped += _pending.length + inFlight;
       _pending.clear();
     } finally {
       _draining = null;
@@ -142,7 +144,7 @@ class MediaDiagnostics {
       'An abrupt kill can omit the last queued events.\n',
     );
     try {
-      final root = _root ?? await _directory();
+      final root = _root ?? await directory();
       for (final name in ['dart.previous.jsonl', 'dart.jsonl']) {
         final file = File('${root.path}/$name');
         if (await file.exists()) {
