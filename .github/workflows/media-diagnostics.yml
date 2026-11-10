@@ -19,22 +19,46 @@ jobs:
           fetch-depth: 0
       - name: Require build 135 baseline
         run: git merge-base --is-ancestor cdf4227dc6a966b20e24f61179ac953b22689024 HEAD
+      - name: Detect source changes
+        id: changes
+        run: |
+          if git diff --quiet HEAD^ HEAD -- lib test android tools pubspec.yaml pubspec.lock; then
+            echo 'source=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'source=true' >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+      - uses: actions/cache/restore@v4
+        id: toolcache
+        with:
+          path: |
+            /opt/hostedtoolcache/flutter
+            ~/.pub-cache
+          key: dogreader-diagnostics-${{ runner.os }}-flutter-3.47.7-${{ hashFiles('pubspec.lock') }}
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
           flutter-version: '3.47.7'
-          cache: true
+          cache: false
       - name: Resolve locked dependencies once
         run: flutter pub get --enforce-lockfile
+      - uses: actions/cache/save@v4
+        if: steps.toolcache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            /opt/hostedtoolcache/flutter
+            ~/.pub-cache
+          key: ${{ steps.toolcache.outputs.cache-primary-key }}
       - name: Analyze
+        if: steps.changes.outputs.source == 'true'
         id: analyze
         continue-on-error: true
         run: flutter analyze --no-pub
       - name: Focused diagnostic and transport regressions
+        if: steps.changes.outputs.source == 'true'
         id: tests
         continue-on-error: true
         run: >-
@@ -44,6 +68,7 @@ jobs:
           test/system_media_controls_test.dart test/playback_ownership_test.dart
           test/native_boundary_test.dart test/seek_cancellation_test.dart
       - name: Native journal bounds and restart checks
+        if: steps.changes.outputs.source == 'true'
         id: journal
         continue-on-error: true
         run: |
@@ -55,11 +80,16 @@ jobs:
         continue-on-error: true
         run: |
           FLUTTER_SDK_DIR="$(dirname "$(dirname "$(readlink -f "$(command -v flutter)")")")"
+          flutter create --platforms=android --no-pub --project-name diagnostic_wrapper /tmp/dogreader-wrapper > /tmp/wrapper.log
+          cp /tmp/dogreader-wrapper/android/gradlew android/gradlew
+          cp /tmp/dogreader-wrapper/android/gradle/wrapper/gradle-wrapper.jar android/gradle/wrapper/gradle-wrapper.jar
+          chmod +x android/gradlew
           printf 'flutter.sdk=%s\nsdk.dir=%s\n' "$FLUTTER_SDK_DIR" "$ANDROID_HOME" > android/local.properties
           cd android
           ./gradlew :app:compileDebugKotlin :app:compileDebugJavaWithJavac
       - name: Require every focused check to pass
         if: >-
-          steps.analyze.outcome != 'success' || steps.tests.outcome != 'success' ||
-          steps.journal.outcome != 'success' || steps.native.outcome != 'success'
+          (steps.changes.outputs.source == 'true' &&
+          (steps.analyze.outcome != 'success' || steps.tests.outcome != 'success' ||
+          steps.journal.outcome != 'success')) || steps.native.outcome != 'success'
         run: exit 1
