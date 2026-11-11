@@ -100,13 +100,13 @@ jobs:
       - name: Reuse reviewed feed regression evidence and verify protected code
         run: |
           set -euo pipefail
-          git merge-base --is-ancestor ac13d88ffd491d11ee1072b16c5d5587974e9ff1 HEAD
-          git diff --exit-code ac13d88ffd491d11ee1072b16c5d5587974e9ff1 HEAD -- lib android pubspec.yaml pubspec.lock test tools
+          git merge-base --is-ancestor e8f1fe2816973aaa26df37373431a46e6a210c30 HEAD
+          git diff --exit-code e8f1fe2816973aaa26df37373431a46e6a210c30 HEAD -- lib android pubspec.yaml pubspec.lock test tools
           git diff --exit-code 7ce8b93a1b06a4535c2336fb1d10953c61fffbb4 HEAD -- lib/main.dart lib/app_identity.dart lib/article_summary.dart lib/dogreader_audio_handler.dart lib/narration_dictionary.dart lib/narration_files.dart lib/narration_seek.dart android
-          echo 'Reused 17 passing focused feed-failure/RSS cases from reviewed commit ac13d88ffd491d11ee1072b16c5d5587974e9ff1; tested application/test/tool source is unchanged.' > /tmp/tests.log
+          echo 'Reused 19 passing focused HTTPS/feed cases from reviewed commit e8f1fe2816973aaa26df37373431a46e6a210c30; tested application/test/tool source is unchanged.' > /tmp/tests.log
       - name: Experimental paid-operation and playback regressions
         run: |
-          flutter test --no-pub --reporter expanded --dart-define=DOGREADER_EXPERIMENTAL=true --dart-define=DOGREADER_ENABLE_ARTICLE_SUMMARIES=true test/experimental_policy_test.dart test/experimental_queue_consent_test.dart test/session_lifecycle_test.dart test/system_media_controls_test.dart > /tmp/experimental-tests.log 2>&1 || { tail -100 /tmp/experimental-tests.log; exit 1; }
+          flutter test --no-pub --reporter expanded --dart-define=DOGREADER_EXPERIMENTAL=true --dart-define=DOGREADER_ENABLE_ARTICLE_SUMMARIES=true test/experimental_policy_test.dart test/experimental_queue_consent_test.dart test/article_https_test.dart test/session_lifecycle_test.dart test/system_media_controls_test.dart > /tmp/experimental-tests.log 2>&1 || { tail -100 /tmp/experimental-tests.log; exit 1; }
           flutter test --no-pub --reporter expanded --dart-define=DOGREADER_EXPERIMENTAL=true --dart-define=DOGREADER_ENABLE_ARTICLE_SUMMARIES=false --plain-name 'Substack shell falls back to its exact RSS entry and full encoded content' test/article_rss_test.dart > /tmp/rss-smoke.log 2>&1 || { tail -100 /tmp/rss-smoke.log; exit 1; }
           python3 -m unittest discover -s tools -p 'test_verify_experimental_apk.py'
       - name: Build Dog Reader 2.0 once
@@ -165,7 +165,7 @@ jobs:
             const apk = fs.readFileSync(`dist/${name}`);
             const sha256 = digest(apk);
             const run = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
-            const body = `Source: ${source}\nBuild: ${number}\nActions: ${run}\nAPK SHA-256: ${sha256}\nPackage: com.example.audiobook_app.experimental\nSigning certificate SHA-256: c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177\n\nIncludes pronunciation dictionary, HTML article import, public RSS/Atom fallback and article cleanup. Feed requests now revalidate caches and retain HTTP/XML failure causes. Phone import success remains unverified. Whole-book execution is out of scope and remains inaccessible. Live ACT acceptance and physical dual-app tests remain outstanding. Dog Reader 2.0 experimental app: installs separately from original Dogreader. Independent library, recordings, preferences and positions. One explicitly approved chapter or preview request at a time; batch/whole-book generation and AI summaries disabled. No backend deployment. APK manifest comparison verifies co-installation identities; physical dual-app/media-control acceptance remains separate.`;
+            const body = `Source: ${source}\nBuild: ${number}\nActions: ${run}\nAPK SHA-256: ${sha256}\nPackage: com.example.audiobook_app.experimental\nSigning certificate SHA-256: c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177\n\nIncludes pronunciation dictionary, HTML article import, public RSS/Atom fallback and article cleanup. Corrects the HTTPS connection bug behind HTTP 400 by using TLS with validated DNS pinning and hostname/certificate checks. Feed requests also revalidate caches and retain HTTP/XML failure causes. Phone acceptance remains outstanding. Whole-book execution is out of scope and remains inaccessible. Live ACT acceptance and physical dual-app tests remain outstanding. Dog Reader 2.0 experimental app: installs separately from original Dogreader. Independent library, recordings, preferences and positions. One explicitly approved chapter or preview request at a time; batch/whole-book generation and AI summaries disabled. No backend deployment. APK manifest comparison verifies co-installation identities; physical dual-app/media-control acceptance remains separate.`;
             const release = (await github.rest.repos.createRelease({
               owner, repo, tag_name: tag, target_commitish: source,
               name: `Dog Reader 2.0 — Experimental build ${number}`, body, draft: true, prerelease: true, make_latest: 'false'
