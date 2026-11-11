@@ -210,9 +210,25 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
           Text(article.title, style: Theme.of(context).textTheme.headlineSmall),
           const SizedBox(height: 12),
           if (article.author != null) Text('By ${article.author}'),
+          if (article.publication != null) Text(article.publication!),
           if (article.published != null)
             Text('Published: ${article.published}'),
           SelectableText(article.sourceUrl),
+          if (article.originalUrl != null &&
+              article.originalUrl != article.sourceUrl)
+            SelectableText('Imported URL: ${article.originalUrl}'),
+          if (article.blocks.any((b) => b.spans.any((s) => s.url != null)))
+            ExpansionTile(
+              title: const Text('Article links'),
+              children: [
+                for (final block in article.blocks)
+                  for (final span in block.spans.where((s) => s.url != null))
+                    ListTile(
+                      title: Text(block.text.substring(span.start, span.end)),
+                      subtitle: SelectableText(span.url!),
+                    ),
+              ],
+            ),
           const SizedBox(height: 12),
           if (article.depth != null) ...[
             Text(
