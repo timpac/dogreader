@@ -1,0 +1,11 @@
+diff --git a/main.py b/main.py
+--- a/main.py
++++ b/main.py
+@@ -101,3 +101,7 @@
++from article_summaries import register as register_article_summaries
++register_article_summaries(app, authorized, auth_error, bucket, PROJECT, REGION)
++
++
+ def task_authorized():
+     header = request.headers.get('Authorization', '')
+     if not header.startswith('Bearer ') or not BASE_URL:
