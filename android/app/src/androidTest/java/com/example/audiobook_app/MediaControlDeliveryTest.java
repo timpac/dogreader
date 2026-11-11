@@ -266,9 +266,17 @@ public class MediaControlDeliveryTest {
 
     private void awaitService(boolean present) {
         long deadline = SystemClock.uptimeMillis() + 15000;
-        while ((AudioService.instance != null) != present && SystemClock.uptimeMillis() < deadline)
+        while ((service() != null) != present && SystemClock.uptimeMillis() < deadline)
             SystemClock.sleep(100);
-        assertEquals("Framework service lifecycle did not complete", present, AudioService.instance != null);
+        assertEquals("Framework service lifecycle did not complete", present, service() != null);
+    }
+
+    private AudioService service() {
+        try {
+            java.lang.reflect.Field instance = AudioService.class.getDeclaredField("instance");
+            instance.setAccessible(true);
+            return (AudioService) instance.get(null);
+        } catch (Exception error) { throw new AssertionError(error); }
     }
 
     @Test public void serviceRecreationRetainsCommandDelivery() throws Exception {
