@@ -22,6 +22,24 @@ class ArticleAccessException extends ArticleImportException {
   const ArticleAccessException(super.message);
 }
 
+/// The address was resolved and validated by the caller. Preserve its DNS host
+/// for TLS SNI/certificate checks while connecting to its already-pinned IP.
+Future<ConnectionTask<Socket>> connectValidatedArticleAddress(
+  Uri uri,
+  InternetAddress address, {
+  SecurityContext? context,
+}) {
+  if (uri.scheme == 'https') {
+    if (address.host.toLowerCase() != uri.host.toLowerCase()) {
+      throw const ArticleAccessException(
+        'The validated TLS address does not match the article hostname.',
+      );
+    }
+    return SecureSocket.startConnect(address, uri.port, context: context);
+  }
+  return Socket.startConnect(address, uri.port);
+}
+
 enum SummaryDepth {
   brief('Brief', 'Main points'),
   standard('Standard', 'Meaningful detail'),
@@ -767,7 +785,7 @@ class ArticleFetcher {
           'Only direct public article connections are supported.',
         );
       }
-      return Socket.startConnect(address, uri.port);
+      return connectValidatedArticleAddress(uri, address);
     };
     var remainingBytes = 8 * 1024 * 1024;
     Future<({String body, Uri url})> read(
