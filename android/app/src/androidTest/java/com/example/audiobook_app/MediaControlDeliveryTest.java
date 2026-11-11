@@ -19,8 +19,6 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
-import android.view.InputDevice;
-import android.view.MotionEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
 
@@ -199,7 +197,7 @@ public class MediaControlDeliveryTest {
         return null;
     }
 
-    private void tap(String label, boolean system) throws Exception {
+    private void activate(String label, boolean system) throws Exception {
         long deadline = SystemClock.uptimeMillis() + 20000;
         AccessibilityNodeInfo control = null;
         while (control == null && SystemClock.uptimeMillis() < deadline) {
@@ -235,26 +233,11 @@ public class MediaControlDeliveryTest {
             instrumentation.sendStatus(2, status);
         }
         assertNotNull("Visible control absent: " + label + "; state=" + state(), target);
-        if (system) {
-            // Activate the real System UI button's accessibility action. This
-            // exercises its own MediaController callback without coordinate
-            // scaling ambiguity from the emulator's overridden viewport.
-            assertTrue("System UI button rejected accessibility click: " + label,
-                    control.performAction(AccessibilityNodeInfo.ACTION_CLICK));
-            return;
-        }
-        long down = SystemClock.uptimeMillis();
-        MotionEvent press = MotionEvent.obtain(down, down, MotionEvent.ACTION_DOWN,
-                target.centerX(), target.centerY(), 0);
-        press.setSource(InputDevice.SOURCE_TOUCHSCREEN);
-        assertTrue("Touch down not injected", automation.injectInputEvent(press, true));
-        SystemClock.sleep(60);
-        MotionEvent release = MotionEvent.obtain(down, SystemClock.uptimeMillis(), MotionEvent.ACTION_UP,
-                target.centerX(), target.centerY(), 0);
-        release.setSource(InputDevice.SOURCE_TOUCHSCREEN);
-        assertTrue("Touch up not injected", automation.injectInputEvent(release, true));
-        press.recycle();
-        release.recycle();
+        // Exercise the visible button's own callback through Android's
+        // accessibility contract. No direct transport command substitutes for
+        // this UI action; receipt and real native output must still follow.
+        assertTrue("Visible UI button rejected accessibility click: " + label,
+                control.performAction(AccessibilityNodeInfo.ACTION_CLICK));
     }
 
     private void openNotificationShade() throws Exception {
@@ -280,7 +263,7 @@ public class MediaControlDeliveryTest {
     private void command(String stage, String label, String method, Boolean playing,
                          int direction, boolean system) throws Exception {
         int before = state().getJSONObject("commands").optInt(method);
-        tap(label, system);
+        activate(label, system);
         JSONObject observed = await(value -> {
             if (value.getJSONObject("commands").optInt(method) <= before) return false;
             if (playing != null && (value.getBoolean("playing") != playing ||
@@ -585,7 +568,7 @@ public class MediaControlDeliveryTest {
             shell("input keyevent KEYCODE_HOME");
             externalCommand("restart-background-pause", "pause", false, 0);
             externalCommand("restart-background-play", "play", true, 0);
-            assertEquals("Every transport/touch/focus check must run", 21, checks);
+            assertEquals("Every transport/UI/focus check must run", 21, checks);
         } finally {
             shell("cmd statusbar collapse");
             if (controller != null) controller.getTransportControls().stop();

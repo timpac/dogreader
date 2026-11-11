@@ -3,8 +3,10 @@
 Audit date: 2026-11-11. Base: `eca7c65412c1c174557224b1522b7dbabfa559c7`.
 Repair is isolated on `fix/audio-controls-142`, with no changes to other branches.
 The device journal supports a native listener ownership defect across service
-recreation with a surviving Flutter engine. Analysis and the full Flutter regression suite have passed. Native verification
-is pending in the Actions run linked by the PR.
+recreation with a surviving Flutter engine. The native baseline reproduces listener loss; the repaired service recreation,
+source/position retention, media-key and 11-minute locked-pause checks pass.
+System UI button activation through accessibility is pending. Physical touch
+acceptance remains separate.
 
 ## Build 136 evidence
 
@@ -53,9 +55,24 @@ not the production app. The baseline restores exactly upstream's two listener
 ownership statements. It must receive native Play with listener=false and no
 Dart receipt. The repaired probe must deliver it to the original handler, resume
 the retained source near its saved position, and pause real native audio output.
-Additional checks cover actual System UI touches, media-key routing, rapid cycles
+Additional checks cover actual System UI button actions, media-key routing, rapid cycles
 and an 11-minute paused/locked interval. Physical Bluetooth and prolonged API 37
 Pixel acceptance remain separate from Android 13 emulator evidence.
+
+## Verification evidence
+
+| Check | Result / Actions run |
+| --- | --- |
+| Analysis and full Flutter regression suite | Passed in [43111278083](https://github.com/timpac/dogreader/actions/runs/43111278083). |
+| Upstream listener lifetime | Reproduced native Play reception with listener=false and no Dart delivery in the same run. |
+| Repaired recreation and long pause | All five stages passed in [43113144187](https://github.com/timpac/dogreader/actions/runs/43113144187), including the original handler/source/position, media-key Play/Pause and resume after 11 minutes locked. That run subsequently failed its separate UI touch case. |
+| System UI controls | Pending. Tests activate visible real buttons through Android accessibility and require Dart receipt and native output changes. Coordinate-injection attempts exposed emulator clipping/launcher issues. Physical touch acceptance remains separate. |
+| Diagnostic persistence | Local JVM rotation, restart, bounds and I/O checks passed. |
+| Physical Pixel / Bluetooth | Outstanding; emulator media keys do not establish Bluetooth hardware acceptance. |
+
+Later runs compare runtime files against the passing source before reusing
+results. The full Flutter suite and timed pause are not repeated for changes to
+the UI test driver or emulator display setup.
 
 ## References inspected
 
