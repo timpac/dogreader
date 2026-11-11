@@ -38,6 +38,11 @@ def check_identity(apk, package):
 def run(apk, instrumentation_apk, case):
     if adb('shell', 'getprop', 'ro.kernel.qemu').strip() != '1':
         raise AssertionError('This check is restricted to an emulator, not a user phone.')
+    # The runner's generic 320x640 display clips Android 13's media carousel
+    # below Quick Settings. Use a normal portrait phone viewport so actual
+    # System UI controls can be seen and touched; do not bypass their UI.
+    adb('shell', 'wm', 'size', '1080x2400')
+    adb('shell', 'wm', 'density', '420')
     check_identity(apk, PACKAGE)
     check_identity(instrumentation_apk, TEST_PACKAGE)
     adb('install', '-r', '-t', str(apk))

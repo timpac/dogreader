@@ -54,13 +54,15 @@ jobs:
           channel: stable
           flutter-version: '3.47.7'
           cache: false
-      - name: Reuse verified Dart regressions and upstream baseline for unchanged runtime
+      - name: Reuse verified runtime, lifecycle and extended-pause evidence
         run: |
           # Run 43111278083 passed analysis/full Flutter suite and reproduced the
-          # upstream listener-null defect. Only test harness/docs/workflow changed.
+          # upstream listener-null defect. Run 43113144187 passed repaired service
+          # recreation, source/position retention, media keys and an 11-minute pause.
+          # Only display/test harness/docs/workflow changes are permitted.
           git diff --exit-code 281ff123f2ded32e62c6b993977d32b0d109f303 -- lib test pubspec.yaml pubspec.lock third_party android/app/src/main android/app/build.gradle.kts analysis_options.yaml
           flutter pub get --enforce-lockfile > /tmp/dependencies.log 2>&1 || { tail -60 /tmp/dependencies.log; exit 1; }
-          echo 'Reused passing Flutter regressions and native baseline from run 43111278083; runtime/source equality verified.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Reused Flutter/baseline pass from run 43111278083 and five repaired lifecycle/pause stages from run 43113144187; runtime/source equality verified.' >> "$GITHUB_STEP_SUMMARY"
       - name: Build unchanged repaired probe and corrected instrumentation
         run: |
           flutter build apk --debug --no-pub --target-platform android-x64 --target test/support/media_control_probe.dart --build-number 142 > /tmp/probe-build.log 2>&1 || { tail -80 /tmp/probe-build.log; exit 1; }
@@ -82,7 +84,6 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
           script: |
-            python3 tools/check_android_media_controls.py --case recreation --apk /tmp/repaired-probe.apk --instrumentation-apk /tmp/instrumentation.apk --report /tmp/recreation-native-report.json
             python3 tools/check_android_media_controls.py --case controls --apk /tmp/repaired-probe.apk --instrumentation-apk /tmp/instrumentation.apk --report /tmp/controls-native-report.json
       - name: Retain bounded native reports in job summary
         if: always()

@@ -501,7 +501,7 @@ public class MediaControlDeliveryTest {
             }
             result("seek-pause-play-no-deadlock", state());
             shell("input keyevent KEYCODE_HOME");
-            shell("cmd statusbar expand-settings");
+            shell("cmd statusbar expand-notifications");
             command("shade-touch-pause", "Pause", "pause", false, 0, true);
             command("shade-touch-play", "Play", "play", true, 0, true);
             shell("cmd statusbar collapse");
