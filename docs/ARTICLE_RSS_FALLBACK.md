@@ -132,3 +132,22 @@ checks, matching, size/time limits and saved-text contracts are unchanged.
 Seventeen focused tests and static analysis pass. Revalidation is a freshness
 mitigation, not proof that caching caused the phone failure. Device acceptance
 needs a separately approved APK; this source patch does not update build 139.
+
+## HTTPS transport correction
+
+The build-140 phone result exposed HTTP 400 from the feed endpoint. The custom
+DNS-pinned connection factory returned a plain Socket even for HTTPS. Dart uses
+that custom socket directly; it does not add TLS automatically. Plain HTTP sent
+to port 443 explains the rejected requests.
+
+HTTPS now uses SecureSocket.startConnect with the validated DNS lookup address,
+retaining its original hostname for SNI/certificate verification and its pinned
+IP without a second lookup. HTTP stays unchanged. A hostname consistency guard
+prevents validating a different hostname. Production trust remains the system
+trust store; no certificate exceptions are allowed.
+
+A real loopback TLS regression failed with the old code and passes after the
+fix. Trusted correct-host TLS succeeds; wrong-host and untrusted certificates
+fail; plain HTTP still works. Nineteen focused HTTPS/feed tests and static
+analysis pass. These tests replace mocked transport assumptions with an actual
+TLS exchange; live phone acceptance is still required.
