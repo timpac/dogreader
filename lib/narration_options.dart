@@ -38,7 +38,7 @@ class NarrationPreference {
 }
 
 Map<String, dynamic> recordingMetadata(Map<String, dynamic> response) => {
-  for (final key in ['engine', 'voice', 'model_version', 'settings'])
+  for (final key in ['engine', 'voice', 'model_version', 'settings', 'narration_dictionary', 'narration_offsets'])
     if (response.containsKey(key)) key: response[key],
 };
 

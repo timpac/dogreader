@@ -12,7 +12,17 @@ class ReaderChapter {
   final String title;
   final String text;
   final List<StyledRange> ranges;
-  const ReaderChapter(this.title, this.text, this.ranges);
+  final List<StyledRange> narrationSeparators;
+  const ReaderChapter(this.title, this.text, this.ranges,
+      {this.narrationSeparators = const []});
+}
+
+/// Classify a whole source block without reparsing or changing its text. Article
+/// import can use the same policy while retaining its own block offsets.
+bool isDecorativeNarrationSeparator(String text, {bool semantic = false}) {
+  final compact = text.replaceAll(RegExp(r'\s'), '');
+  return RegExp(r'^(?:\*{3,}|[⁂⁎❦❧✦✧]+|[•·]{3,})$').hasMatch(compact) ||
+      (semantic && RegExp(r'^[*⁂⁎❦❧✦✧•·♦◇◆◊—–~#=\-]+$').hasMatch(compact));
 }
 
 // EPUB paths are archive paths, never network URLs. Resolve relative links
@@ -90,8 +100,10 @@ ReaderChapter parseReaderChapter(String title, String rawHtml,
   }
   final output = StringBuffer();
   final ranges = <StyledRange>[];
+  final separators = <StyledRange>[];
   final pending = StringBuffer();
   final pendingRanges = <StyledRange>[];
+  bool pendingSemanticSeparator = false;
   bool previousHeading = false;
   bool scenePending = false;
   bool hasBlock = false;
@@ -121,6 +133,12 @@ ReaderChapter parseReaderChapter(String title, String rawHtml,
       output.write(indent);
       final base = output.length;
       output.write(text);
+      // Only whole extracted blocks qualify. Inline punctuation, multiplication,
+      // footnote stars and emphasized prose remain audible. Keep reader text
+      // and every existing style/position offset exactly as before.
+      if (isDecorativeNarrationSeparator(text, semantic: pendingSemanticSeparator)) {
+        separators.add(StyledRange(base, base + text.length));
+      }
       for (final range in pendingRanges) {
         final a = offsets[range.start], b = offsets[range.end];
         if (b > a) {
@@ -133,13 +151,15 @@ ReaderChapter parseReaderChapter(String title, String rawHtml,
       scenePending = false;
     }
     pendingRanges.clear();
+    pendingSemanticSeparator = false;
     if (scene) scenePending = true;
   }
 
-  void walk(dom.Node node, {bool italic = false, bool bold = false, bool heading = false}) {
+  void walk(dom.Node node, {bool italic = false, bool bold = false, bool heading = false, bool decoration = false}) {
     if (node is dom.Text) {
       final start = pending.length;
       pending.write(node.text);
+      pendingSemanticSeparator |= decoration;
       if ((italic || bold) && pending.length > start) {
         pendingRanges.add(StyledRange(start, pending.length, italic: italic, bold: bold));
       }
@@ -160,11 +180,12 @@ ReaderChapter parseReaderChapter(String title, String rawHtml,
     final isBlock = {'p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'blockquote', 'pre', 'tr'}.contains(tag);
     if (isBlock && pending.isNotEmpty) flush();
     for (final child in node.nodes) {
-      walk(child, italic: italic || tag == 'i' || tag == 'em', bold: bold || tag == 'b' || tag == 'strong', heading: isHeading);
+      walk(child, italic: italic || tag == 'i' || tag == 'em', bold: bold || tag == 'b' || tag == 'strong', heading: isHeading, decoration: decoration || semantic);
     }
     if (isBlock) flush(heading: isHeading);
   }
   if (document.body != null) walk(document.body!);
   flush();
-  return ReaderChapter(title, output.toString(), ranges);
+  return ReaderChapter(title, output.toString(), ranges,
+      narrationSeparators: separators);
 }
