@@ -36,6 +36,10 @@ Object? _canonical(Object? value) {
 class WholeBookChapter {
   final int index;
   final String title;
+
+  /// Exact submitted speech text after the recording's frozen dictionary and
+  /// silence transformations. Reader text and UTF-16 offset maps stay separate;
+  /// never reapply today's dictionary during cost review, retry or recovery.
   final String text;
 
   /// Includes text, voice, engine, model and generation settings. This must be
@@ -141,8 +145,8 @@ class WholeBookPreflight {
   int get totalCharacters =>
       entries.fold(0, (sum, entry) => sum + entry.chapter.characters);
 
-  /// Upper bound for new work and explicitly retried failures. Checkpoint reuse
-  /// can lower retry costs; provider retries and cloud infrastructure cost extra.
+  /// Baseline estimate for new work and explicitly retried failures. Checkpoint
+  /// reuse can lower retry costs; provider retries and cloud costs can add to it.
   int get estimatedBillableCharacters => entries
       .where(
         (entry) =>

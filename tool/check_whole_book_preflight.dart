@@ -1,4 +1,5 @@
 import '../lib/whole_book_preflight.dart';
+import '../lib/whole_book_progress.dart';
 
 void main() {
   var checks = 0;
@@ -182,5 +183,88 @@ void main() {
   } on UnsupportedError {
     checks++;
   }
-  print('Whole-book preflight: $checks checks passed (no network or TTS).');
+  final progressPlan = plan(List.generate(7, (i) => chapter(i)), {});
+  final server = <int, Map<String, dynamic>>{
+    0: job('ready'),
+    1: job('ready'),
+    2: job('queued'),
+    3: job('generating'),
+    4: job('error'),
+    5: {...job('ready'), 'id': 'previous-recording'},
+  };
+  WholeBookProgress progress() => WholeBookProgress(
+    plan: progressPlan,
+    serverJobs: server,
+    verifiedDownloads: {0: 'verified-id', 5: 'previous-recording'},
+    downloadFailures: {1},
+  );
+  final beforeRestart = progress();
+  check(
+    beforeRestart.completed == 2 && beforeRestart.total == 7,
+    'Completed count includes cloud ready and downloaded exactly once',
+  );
+  check(
+    beforeRestart.count(WholeBookChapterPhase.queued) == 1 &&
+        beforeRestart.count(WholeBookChapterPhase.generating) == 1,
+    'Project active cloud states',
+  );
+  check(
+    beforeRestart.count(WholeBookChapterPhase.failed) == 1 &&
+        beforeRestart.failedDownloads == 1,
+    'Failed downloads remain ready, separate from TTS failure',
+  );
+  check(
+    beforeRestart.count(WholeBookChapterPhase.pending) == 2,
+    'Previous recording and unknown work do not inflate completion',
+  );
+  check(
+    progress().chapters.map((c) => c.phase).join() ==
+        beforeRestart.chapters.map((c) => c.phase).join(),
+    'Rebuild progress deterministically from retained inputs after restart',
+  );
+  check(
+    WholeBookProgress(
+          plan: progressPlan,
+          serverJobs: {},
+          verifiedDownloads: {0: 'verified-id'},
+        ).completed ==
+        1,
+    'Valid offline audio remains completed without cloud connectivity',
+  );
+  check(
+    WholeBookProgress(
+          plan: progressPlan,
+          serverJobs: {0: job('ready', voice: 'Puck')},
+        ).completed ==
+        0,
+    'Reject mismatched server narrator in progress',
+  );
+  check(
+    WholeBookProgress(plan: limits, serverJobs: {}).eligible == 0,
+    'Display ineligible chapters without claiming completion',
+  );
+  server[1] = job('generating');
+  check(
+    beforeRestart.count(WholeBookChapterPhase.ready) == 1,
+    'Published progress is immutable when server observations change',
+  );
+  check(
+    WholeBookProgress(plan: plan([], {}), serverJobs: {}).total == 0,
+    'Empty progress',
+  );
+  check(
+    plan([chapter(0, text: '')], {}).count(WholeBookDisposition.ineligible) ==
+        1,
+    'Entirely silenced transformed text is not submitted',
+  );
+  check(
+    plan([
+          chapter(0, text: List.filled(250001, 'x').join()),
+        ], {}).count(WholeBookDisposition.ineligible) ==
+        1,
+    'Limits apply after dictionary expansion',
+  );
+  print(
+    'Whole-book planning/progress: $checks checks passed (no network or TTS).',
+  );
 }
