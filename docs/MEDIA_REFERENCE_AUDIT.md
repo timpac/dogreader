@@ -3,7 +3,8 @@
 Audit date: 2026-11-11. Base: `eca7c65412c1c174557224b1522b7dbabfa559c7`.
 Repair is isolated on `fix/audio-controls-142`, with no changes to other branches.
 The device journal supports a native listener ownership defect across service
-recreation with a surviving Flutter engine. Native verification is pending.
+recreation with a surviving Flutter engine. Analysis and the full Flutter regression suite have passed. Native verification
+is pending in the Actions run linked by the PR.
 
 ## Build 136 evidence
 
@@ -117,14 +118,13 @@ rotation limits must accompany the conclusion.
 Build 136 adds persistent Dart command events and a native **controller observer**,
 not interception of native command callbacks. Its own documentation explicitly
 states that it does not establish native media-button ingress. A native playback
-state event is not a received command. The current branch does not include those
+state event is not a received command. The audited base did not include those
 persistent diagnostics; importing the entire build 136 branch would also remove
 newer dictionary/article work and restore historical workflows.
 
-The evidence review inspected the exported build 136 journal around the
-last successful external command and first failed attempt. Compare process IDs,
-session tokens, session destruction, bridge errors, focus, loading, and in-app
-commands. Absence of a Dart event alone cannot distinguish an Android routing
+The evidence review compared process IDs, session tokens, session destruction,
+bridge errors, focus, loading, and in-app commands around the last successful
+external command and subsequent reported failure. Absence of a Dart event alone cannot distinguish an Android routing
 failure from a lost Flutter callback.
 
 Any native ingress instrumentation must record at the existing session callback
@@ -135,8 +135,9 @@ identity and listener presence without logging titles, paths or credentials.
 
 Existing `session_lifecycle_test.dart` and `session_bridge_test.dart` cover retained
 session state and the Dart MethodChannel contract using fakes. They do not execute
-the native service destruction path. The current release workflow runs Flutter
-analysis/tests and builds the signed APK, but does not run Android instrumentation.
+the native service destruction path. The canonical release workflow runs Flutter
+analysis/tests and builds the signed APK. For this isolated repair, the branch
+version additionally requires native Android verification before the APK job.
 Runtime verification runs through GitHub Actions; local checks cover source provenance, Python syntax and workflow structure.
 
 Required acceptance remains: shade and lock-screen touches, real Bluetooth
@@ -154,4 +155,6 @@ currently **142**, and verifies original signing identity and package. The user
 has approved v142 if still unused at publication, requires isolated development
 without merging either active branch, and requires verification before release.
 Preserve existing assets/tags and recheck availability before any build dispatch.
-No release workflow has been dispatched.
+The isolated manual release workflow has been dispatched; publication is gated
+on native verification. Its branch-only delivery override will be removed from
+the final PR after delivery, preserving the canonical release workflow.

@@ -189,6 +189,29 @@ public class MediaControlDeliveryTest {
             target = bounds(label, system);
             if (target == null) SystemClock.sleep(100);
         }
+        if (target == null) {
+            StringBuilder tree = new StringBuilder("\nSYSTEM_UI_TREE\n");
+            for (AccessibilityNodeInfo root : roots()) {
+                List<AccessibilityNodeInfo> nodes = new ArrayList<>();
+                nodes.add(root);
+                for (int i = 0; i < nodes.size() && i < 250; i++) {
+                    AccessibilityNodeInfo node = nodes.get(i);
+                    Rect bounds = new Rect();
+                    node.getBoundsInScreen(bounds);
+                    if (node.isVisibleToUser()) tree.append(node.getPackageName()).append(' ')
+                            .append(node.getViewIdResourceName()).append(' ')
+                            .append(node.getText()).append(' ').append(node.getContentDescription())
+                            .append(' ').append(bounds).append('\n');
+                    for (int child = 0; child < node.getChildCount(); child++) {
+                        AccessibilityNodeInfo next = node.getChild(child);
+                        if (next != null) nodes.add(next);
+                    }
+                }
+            }
+            Bundle status = new Bundle();
+            status.putString("stream", tree.toString());
+            instrumentation.sendStatus(2, status);
+        }
         assertNotNull("Visible control absent: " + label + "; state=" + state(), target);
         long down = SystemClock.uptimeMillis();
         MotionEvent press = MotionEvent.obtain(down, down, MotionEvent.ACTION_DOWN,
@@ -434,7 +457,9 @@ public class MediaControlDeliveryTest {
         assertEquals("Only the isolated test package is allowed", PACKAGE, context.getPackageName());
         audio = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
         AccessibilityServiceInfo info = automation.getServiceInfo();
-        info.flags |= AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
+        info.flags |= AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+                | AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
+                | AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS;
         automation.setServiceInfo(info);
         Intent launch = new Intent().setComponent(new ComponentName(PACKAGE,
                 "com.example.audiobook_app.MainActivity")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -476,7 +501,7 @@ public class MediaControlDeliveryTest {
             }
             result("seek-pause-play-no-deadlock", state());
             shell("input keyevent KEYCODE_HOME");
-            shell("cmd statusbar expand-notifications");
+            shell("cmd statusbar expand-settings");
             command("shade-touch-pause", "Pause", "pause", false, 0, true);
             command("shade-touch-play", "Play", "play", true, 0, true);
             shell("cmd statusbar collapse");
