@@ -113,3 +113,22 @@ summary/dictionary-queue cases). The final changed-extraction batch passed all
 23 cases. Repository static analysis and whitespace checks are clean. The XML
 package was already locked at 6.6.1; only its direct-dependency classification
 changes, with no package version upgrade.
+
+## Feed-fetch failure follow-up
+
+For the reported `/p/escaping-the-outside-criticism-trap` URL, a single public
+check returned HTTP 200 HTML with no readable body and HTTP 200 RSS containing
+the exact entry. The released parser extracted 10,718 UTF-16 units offline.
+The phone's original failing feed response was not captured, so its exact
+transport/response cause remains unconfirmed.
+
+Feed requests now ask caches to revalidate (`Cache-Control: no-cache`) without
+extra requests. HTTP/XML failures retain their primary feed URL and safe cause
+instead of being relabeled as article absence. The recent-post-window explanation
+requires at least one successfully parsed feed. XML error excerpts and query
+strings are excluded from diagnostics. Access restrictions, private-address
+checks, matching, size/time limits and saved-text contracts are unchanged.
+
+Seventeen focused tests and static analysis pass. Revalidation is a freshness
+mitigation, not proof that caching caused the phone failure. Device acceptance
+needs a separately approved APK; this source patch does not update build 139.
