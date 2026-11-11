@@ -3,6 +3,7 @@
 This branch packages the integrated dictionary and article-import code as a
 separate Android application. It does not replace the original Dogreader app.
 See [installation isolation, cloud controls and release checks](docs/DOG_READER_2.md).
+Manual imports now also support [public RSS/Atom fallback](docs/ARTICLE_RSS_FALLBACK.md) when webpage extraction is incomplete.
 
 
 Dogreader is a Flutter Android EPUB reader with cloud-generated narration,
