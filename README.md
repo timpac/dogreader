@@ -7,6 +7,12 @@ appearance settings. Reader page jumps, publisher scene spacing, read-to-audio
 seeking, chapter repair/download/deletion and narration engine/voice selection
 are retained from the complete build-135 source.
 
+Finished cloud narration is discovered automatically when Dogreader opens or
+resumes and when returning to a chapter. The queue distinguishes server readiness,
+downloading and downloaded audio. **Retry Download** fetches the existing recording
+without generating narration or making a TTS request; repairs preserve listening
+positions. See [delivery recovery and verification](docs/NARRATION_DELIVERY.md).
+
 ## Narration Dictionary
 
 Open **Settings → Narration Dictionary**, or **Narration Dictionary** on a book's

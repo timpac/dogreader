@@ -1,6 +1,6 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
+import 'narration_storage.dart';
 
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
@@ -217,18 +217,11 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
       try {
         final root = await _documentsDirectory();
         final file = File('${root.path}/narration_state.json');
-        Map<String, dynamic> data = {};
-        if (await file.exists()) {
-          final decoded = jsonDecode(await file.readAsString());
-          if (decoded is Map<String, dynamic>) data = decoded;
-        }
-        final existing = data[key];
-        final chapter = existing is Map
-            ? Map<String, dynamic>.from(existing)
-            : <String, dynamic>{};
-        chapter['positionMs'] = milliseconds;
-        data[key] = chapter;
-        await file.writeAsString(jsonEncode(data));
+        await updateNarrationJson(file, (data) {
+          final chapter = Map<String, dynamic>.from((data[key] as Map?) ?? {});
+          chapter['positionMs'] = milliseconds;
+          data[key] = chapter;
+        });
       } catch (_) {
         /* Progress I/O cannot interrupt transport. */
       }
