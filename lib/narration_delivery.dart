@@ -216,6 +216,18 @@ class NarrationDelivery extends ChangeNotifier {
   bool downloading(String book, int index) =>
       _downloads.containsKey('$book:$index');
 
+  /// Source preparation waits for the audio/metadata transaction to settle.
+  /// Failed repairs leave the previous recording available to the player.
+  Future<void> waitForDownload(String book, int index) async {
+    final pending = _downloads['$book:$index'];
+    if (pending == null) return;
+    try {
+      await pending;
+    } catch (_) {
+      /* Existing recording may still play. */
+    }
+  }
+
   Future<void> retryDownload(String book, int index, {bool automatic = false}) {
     final key = '$book:$index';
     return _downloads[key] ??= _download(book, index, automatic: automatic)

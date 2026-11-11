@@ -2173,6 +2173,8 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
     bool active() => mounted && generation == _restoreGeneration &&
         (ModalRoute.of(context)?.isCurrent ?? true);
     try {
+      await narrationDelivery.waitForDownload(widget.book.id, widget.chapterIndex);
+      if (!active()) return;
       final root = await getApplicationDocumentsDirectory();
       final localFile = File(
         '${root.path}/narration/${widget.book.id}_${widget.chapterIndex}.mp3',

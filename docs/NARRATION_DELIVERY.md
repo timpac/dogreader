@@ -90,4 +90,9 @@ run passed all 11 tests after explicitly retaining playback availability on a
 failed repair. Flutter analysis was clean. Backend full regression passed 121
 tests; the final seven completion/HTTP failure tests also passed. These counts
 overlap; they are separate runs, not a sum of unique tests. All used local/fake
-services. CI image validation and physical-phone rollout are separate gates.
+services. Backend production-image CI also passed at `9f54045dedb1d38cf53ca0aeabfe528935ac0e1b`
+in [run 43118964884](https://github.com/timpac/dogreader-cloud/actions/runs/43118964884).
+Physical-phone rollout remains a separate gate.
+
+The final 22-test delivery run also verifies that chapter source preparation waits
+for an active audio/metadata transaction to settle before loading its file.

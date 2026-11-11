@@ -130,8 +130,15 @@ void main() {
     await arrived.future;
     final second = delivery.retryDownload('book', 0);
     final reconcile = delivery.reconcile();
+    var prepared = false;
+    final preparation = delivery
+        .waitForDownload('book', 0)
+        .then((_) => prepared = true);
+    await Future<void>.delayed(Duration.zero);
+    expect(prepared, isFalse);
     release.complete();
-    await Future.wait([first, second, reconcile]);
+    await Future.wait([first, second, reconcile, preparation]);
+    expect(prepared, isTrue);
     expect(requests, ['GET /dogreader/audio/existing']);
   });
 
