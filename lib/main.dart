@@ -26,6 +26,10 @@ import 'narration_options.dart';
 import 'narration_dictionary.dart';
 import 'narration_dictionary_screen.dart';
 import 'narration_preview.dart';
+import 'article_import.dart';
+import 'article_library.dart';
+import 'article_screen.dart';
+import 'article_share.dart';
 
 late final DogreaderAudioHandler audioHandler;
 
@@ -134,6 +138,9 @@ class LibraryScreen extends StatefulWidget {
 }
 
 class _LibraryScreenState extends State<LibraryScreen> {
+  late final ArticleLibrary articles;
+  final List<String> _sharedUrls = [];
+  bool _showingShare = false;
   int selectedTab = 0;
   bool importing = false;
   final List<ImportedBook> books = [];
@@ -168,7 +175,28 @@ class _LibraryScreenState extends State<LibraryScreen> {
     return _pendingStateWrite;
   }
 
-  void openBook(ImportedBook book) {
+  ImportedBook articleBook(ImportedArticle article) => ImportedBook(
+    article.depth == null ? article.title : '${article.title} — ${article.depth!.label} summary',
+    article.author ?? 'Unknown author', [article.chapter], article.id, null);
+
+  void openArticle(ImportedArticle article, bool narration) {
+    final book = articleBook(article);
+    if (narration) {
+      Navigator.push(context, MaterialPageRoute<void>(builder: (_) => NarrationQueueScreen(
+        book: book, onSave: (chapter, offset) => saveProgress(book.id, chapter, offset))));
+    } else {
+      openBook(book, articleText: true);
+    }
+  }
+
+  void articleDetails(ImportedArticle article) {
+    Navigator.push(context, MaterialPageRoute<void>(builder: (_) => ArticleDetailScreen(
+      article: article, library: articles, openArticle: openArticle)));
+  }
+
+  void openBook(ImportedBook book, {bool articleText = false}) {
+    final article = articles.articles.where((a) => a.id == book.id).firstOrNull;
+    if (!articleText && article != null) { articleDetails(article); return; }
     setState(() {
       lastOpened[book.id] = DateTime.now().microsecondsSinceEpoch;
       sortBooks();
@@ -196,6 +224,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   void openChapters(ImportedBook book) {
+    final article = articles.articles.where((a) => a.id == book.id).firstOrNull;
+    if (article != null) { articleDetails(article); return; }
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -212,7 +242,52 @@ class _LibraryScreenState extends State<LibraryScreen> {
   @override
   void initState() {
     super.initState();
+    articles = ArticleLibrary(getApplicationDocumentsDirectory());
+    articles.addListener(_articlesChanged);
+    articles.load().catchError((Object _) {});
     loadLibrary();
+    ArticleShare.listen(_receiveArticleShare).catchError((Object _) {});
+  }
+
+  void _articlesChanged() {
+    if (!mounted) return;
+    setState(() {
+      books.removeWhere((b) => b.id.startsWith('article_'));
+      books.addAll(articles.articles.map(articleBook));
+      sortBooks();
+    });
+  }
+
+  void _receiveArticleShare(String text) {
+    final url = sharedArticleUrl(text);
+    if (url == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('The shared text does not contain an article URL.')));
+      });
+      WidgetsBinding.instance.scheduleFrame();
+      return;
+    }
+    _sharedUrls.add(url);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _showNextShare());
+    WidgetsBinding.instance.scheduleFrame();
+  }
+
+  Future<void> _showNextShare() async {
+    if (!mounted || _showingShare || _sharedUrls.isEmpty) return;
+    _showingShare = true;
+    final url = _sharedUrls.removeAt(0);
+    await Navigator.push(context, MaterialPageRoute<void>(builder: (_) => ArticleImportScreen(
+      library: articles, openArticle: openArticle, initialUrl: url)));
+    _showingShare = false;
+    if (mounted) _showNextShare();
+  }
+
+  @override
+  void dispose() {
+    ArticleShare.stop();
+    articles.removeListener(_articlesChanged);
+    articles.dispose();
+    super.dispose();
   }
 
   Future<Directory> bookDirectory() async {
@@ -272,10 +347,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
           /* Ignore unreadable files. */
         }
       }
+      await articles.load();
       if (!mounted) return;
       setState(() {
         books.clear();
         books.addAll(restored);
+        books.addAll(articles.articles.map(articleBook));
         sortBooks();
       });
     } catch (_) {
@@ -631,6 +708,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
             ),
           ),
         if (books.isNotEmpty) const SizedBox(height: 10),
+        OutlinedButton.icon(
+          onPressed: () => Navigator.push(context, MaterialPageRoute<void>(
+            builder: (_) => ArticleImportScreen(library: articles, openArticle: openArticle))),
+          icon: const Icon(Icons.add_link),
+          label: const Text('Import a web article'),
+        ),
+        const SizedBox(height: 10),
         FilledButton.icon(
           onPressed: importing ? null : importBook,
           icon: importing
@@ -706,7 +790,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => NarrationQueueScreen(book: book),
+                builder: (_) => NarrationQueueScreen(book: book,
+                  onSave: (chapter, offset) => saveProgress(book.id, chapter, offset)),
               ),
             ),
           ),
@@ -768,7 +853,7 @@ class ChapterListScreen extends StatelessWidget {
             onPressed: () => Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => NarrationQueueScreen(book: book),
+                builder: (_) => NarrationQueueScreen(book: book, onSave: onSave),
               ),
             ),
           ),
@@ -782,7 +867,7 @@ class ChapterListScreen extends StatelessWidget {
               onPressed: () => Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) => NarrationQueueScreen(book: book),
+                  builder: (_) => NarrationQueueScreen(book: book, onSave: onSave),
                 ),
               ),
               icon: const Icon(Icons.headphones),
@@ -871,7 +956,8 @@ class ChapterListScreen extends StatelessWidget {
 
 class NarrationQueueScreen extends StatefulWidget {
   final ImportedBook book;
-  const NarrationQueueScreen({super.key, required this.book});
+  final SavePosition onSave;
+  const NarrationQueueScreen({super.key, required this.book, required this.onSave});
   @override
   State<NarrationQueueScreen> createState() => _NarrationQueueScreenState();
 }
@@ -1113,7 +1199,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       context,
       MaterialPageRoute(
         builder: (_) =>
-            ChapterNarrationScreen(book: widget.book, chapterIndex: index),
+            ChapterNarrationScreen(book: widget.book, chapterIndex: index, onSave: widget.onSave),
       ),
     );
   }
@@ -1912,6 +1998,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
                   builder: (_) => ChapterNarrationScreen(
                     book: widget.book,
                     chapterIndex: audioChapter,
+                    onSave: widget.onSave,
                     initialTextFraction: fraction,
                   ),
                 ),
@@ -2029,6 +2116,9 @@ class _ReadingScreenState extends State<ReadingScreen> {
 class ChapterNarrationScreen extends StatefulWidget {
   final ImportedBook book;
   final int chapterIndex;
+  // Carried for synchronization integration; listening alone never moves a
+  // saved reader offset or guesses one from the audio position.
+  final SavePosition onSave;
   // Present only when arriving from the reader; normal player navigation
   // continues to restore the last saved audio position.
   final double? initialTextFraction;
@@ -2036,6 +2126,7 @@ class ChapterNarrationScreen extends StatefulWidget {
     super.key,
     required this.book,
     required this.chapterIndex,
+    required this.onSave,
     this.initialTextFraction,
   });
 

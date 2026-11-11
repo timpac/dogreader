@@ -60,7 +60,7 @@ void main() {
         await narrationDictionary.load();
       });
       await tester.pumpWidget(
-        MaterialApp(home: NarrationQueueScreen(book: book)),
+        MaterialApp(home: NarrationQueueScreen(book: book, onSave: (_, _) {})),
       );
       final dynamic queue = tester.state(find.byType(NarrationQueueScreen));
       await tester.runAsync(() async {
@@ -154,6 +154,7 @@ void main() {
           home: ChapterNarrationScreen(
             book: book,
             chapterIndex: 0,
+            onSave: (_, _) {},
             initialTextFraction: originalFraction,
           ),
         ),

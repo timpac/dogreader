@@ -7,7 +7,8 @@ appearance settings. Reader page jumps, publisher scene spacing, read-to-audio
 seeking, chapter repair/download/deletion and narration engine/voice selection
 are retained from the complete build-135 source.
 
-## Narration Dictionary (feature branch)
+## Narration Dictionary
+
 
 Open **Settings → Narration Dictionary**, or **Narration Dictionary** on a book's
 Generate narration screen. Choose Global or This Book to add, edit, disable or
@@ -28,6 +29,19 @@ regenerate to apply**. Use the existing Regenerate narration confirmation to
 replace audio; the current download survives until its replacement downloads
 successfully. See [implementation and alignment notes](docs/NARRATION_DICTIONARY.md).
 This feature has no APK or backend deployment yet.
+
+## Article import and integration status
+
+Paste an article URL from the library or share a URL from Android. Saved articles
+and cached summaries use the existing reader and narration queue, with separate
+reading positions, audio and dictionary scopes. AI summary generation stays
+disabled pending separately approved backend integration and rollout.
+
+Whole-book planning helpers are included as inactive library code only. There is
+no new whole-book UI, submission or recovery workflow. PR #22's reverse
+synchronization routes remain deferred until reviewed timing maps can compose
+with frozen dictionary transformations. Existing text-to-audio seeking remains.
+See [integration status and backend handoff](docs/INTEGRATION_BUILD135.md).
 
 ## Development baseline
 
