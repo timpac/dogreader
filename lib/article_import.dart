@@ -797,6 +797,11 @@ class ArticleFetcher {
               ? 'application/rss+xml, application/atom+xml, application/xml, text/xml'
               : 'text/html, application/xhtml+xml',
         );
+        if (feed) {
+          // Ask intermediary caches to revalidate their recent-post snapshot.
+          // This adds no retry and never sends credentials or changes access.
+          req.headers.set(HttpHeaders.cacheControlHeader, 'no-cache');
+        }
         final response = await req.close();
         if ({301, 302, 303, 307, 308}.contains(response.statusCode)) {
           final location = response.headers.value(HttpHeaders.locationHeader);
@@ -828,7 +833,7 @@ class ArticleFetcher {
         }
         if (response.statusCode != 200) {
           throw ArticleImportException(
-            'The website returned HTTP ${response.statusCode}.',
+            'HTTP ${response.statusCode} from ${url.origin}${url.path}.',
           );
         }
         final type = response.headers.contentType;
@@ -895,6 +900,8 @@ class ArticleFetcher {
         /* Public but absent/incomplete HTML: inspect feeds. */
       }
       var matchedPreview = false;
+      var readableFeeds = 0;
+      final feedFailures = <String>[];
       for (final feed in discoverArticleFeeds(page, source)) {
         try {
           final result = await read(feed, feed: true);
@@ -906,16 +913,27 @@ class ArticleFetcher {
             pageUrl: source,
           );
           if (article != null) return article;
+          readableFeeds++;
         } on ArticleAccessException {
           rethrow;
         } on FeedPreviewException {
           matchedPreview = true;
         } on ArticleImportException catch (error) {
           if (!error.allowFeedFallback) rethrow;
-          /* Try the next bounded public feed candidate. */
+          feedFailures.add('${feed.origin}${feed.path}: ${error.message}');
         } on FormatException {
-          /* Malformed XML is not article content. */
+          // Do not expose parser excerpts, which can contain article text.
+          feedFailures.add(
+            '${feed.origin}${feed.path}: the response could not be parsed as RSS/Atom XML.',
+          );
         }
+      }
+      if (!matchedPreview && readableFeeds == 0 && feedFailures.isNotEmpty) {
+        throw ArticleImportException(
+          'The article page could not be extracted, and no usable RSS/Atom feed could be read. '
+          '${feedFailures.first} '
+          'This does not establish that the article is absent from the feed.',
+        );
       }
       throw ArticleImportException(
         matchedPreview
