@@ -5,8 +5,8 @@ Repair is isolated on `fix/audio-controls-142`, with no changes to other branche
 The device journal supports a native listener ownership defect across service
 recreation with a surviving Flutter engine. The native baseline reproduces listener loss; the repaired service recreation,
 source/position retention, media-key and 11-minute locked-pause checks pass.
-System UI button activation through accessibility is pending. Physical touch
-acceptance remains separate.
+All 21 System UI/transport/focus stages now pass in run 43121592787.
+Physical Pixel touch and Bluetooth acceptance remain separate.
 
 ## Build 136 evidence
 
@@ -66,7 +66,7 @@ Pixel acceptance remain separate from Android 13 emulator evidence.
 | Analysis and full Flutter regression suite | Passed in [43111278083](https://github.com/timpac/dogreader/actions/runs/43111278083). |
 | Upstream listener lifetime | Reproduced native Play reception with listener=false and no Dart delivery in the same run. |
 | Repaired recreation and long pause | All five stages passed in [43113144187](https://github.com/timpac/dogreader/actions/runs/43113144187), including the original handler/source/position, media-key Play/Pause and resume after 11 minutes locked. That run subsequently failed its separate UI touch case. |
-| System UI controls | Pending. Tests activate visible real buttons through Android accessibility and require Dart receipt and native output changes. Coordinate-injection attempts exposed emulator clipping/launcher issues. Physical touch acceptance remains separate. |
+| System UI controls | All 21 stages passed in [43121592787](https://github.com/timpac/dogreader/actions/runs/43121592787), including visible shade and locked-screen Play/Pause button activation through Android accessibility, native output, background transport, rapid cycles, focus/seek and Stop/restart. Physical touch acceptance remains separate. |
 | Diagnostic persistence | Local JVM rotation, restart, bounds and I/O checks passed. |
 | Physical Pixel / Bluetooth | Outstanding; emulator media keys do not establish Bluetooth hardware acceptance. |
 
@@ -112,7 +112,7 @@ The upstream native source has this possible sequence:
 
 The supplied journal now corroborates service/session turnover with a surviving
 handler and the activity reattachment timing. The native baseline/candidate test
-is required to establish the missing-listener mechanism independently.
+establishes the missing-listener mechanism independently.
 
 Further tracing confirms that both `onAttachedToEngine` and the native configure
 method install the listener only when creating a new `audioHandlerInterface`.
@@ -167,11 +167,28 @@ establish sustained Pixel acceptance.
 
 `v137` already exists at the audited application SHA and contains
 `Dogreader-137.apk` (171,476,299 bytes). Releases through `v141-dog-reader-2.0`
-also exist. The release workflow requires the next globally unused number,
-currently **142**, and verifies original signing identity and package. The user
+also exist. The release workflow required the next globally unused number,
+**142** when this build was dispatched, and verifies original signing identity and package. The user
 has approved v142 if still unused at publication, requires isolated development
 without merging either active branch, and requires verification before release.
 Preserve existing assets/tags and recheck availability before any build dispatch.
-The isolated manual release workflow has been dispatched; publication is gated
-on native verification. Its branch-only delivery override will be removed from
-the final PR after delivery, preserving the canonical release workflow.
+The isolated manual workflow passed native verification and published v142 in
+[run 43121592787](https://github.com/timpac/dogreader/actions/runs/43121592787).
+The temporary delivery override is removed from the final PR; the canonical
+release workflow is preserved byte-for-byte. Neither development branch is merged.
+
+Verified delivery:
+
+- [v142 Release](https://github.com/timpac/dogreader/releases/tag/v142).
+- Source/tag: `5ea8b4d810377f0c831d3afa61eb41e5e7089fe0`.
+- Asset: `Dogreader-142.apk`, 171,525,271 bytes.
+- APK SHA-256: `149742013b7dc8ca046687a01f9f1b3db1db4af5ee2c20cddeb2006186cdf5e8`.
+- Package: `com.example.audiobook_app`, versionCode 142; original certificate
+  `c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177`.
+- CI verifies the signed APK and downloaded Release bytes before publication.
+  Release metadata/digest, tag and BUILD.txt were independently rechecked.
+
+Install in place without uninstalling or clearing data. Recheck physical Pixel
+shade/lock-screen touches, real Bluetooth controls and sustained listening beyond
+the previous failure interval. The native defect is reproduced and repaired;
+prolonged physical-device acceptance is not established by these emulator checks.
