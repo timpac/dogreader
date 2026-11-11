@@ -14,6 +14,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:audio_service/audio_service.dart';
 
 import 'dogreader_audio_handler.dart';
+import 'media_diagnostics.dart';
+import 'native_media_diagnostics.dart';
 import 'app_theme.dart';
 import 'theme_preferences.dart';
 export 'app_theme.dart' show background, panel, accent;
@@ -36,8 +38,14 @@ late final DogreaderAudioHandler audioHandler;
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  final diagnostics = MediaDiagnostics(directory: () async {
+    final root = await getApplicationSupportDirectory();
+    return Directory('${root.path}/media_diagnostics');
+  });
+  diagnostics.record(MediaDiagnosticEvent.processStarted, {'build': dogreaderBuild});
+
   audioHandler = await AudioService.init(
-    builder: () => DogreaderAudioHandler(),
+    builder: () => DogreaderAudioHandler(diagnostics: diagnostics),
     config: const AudioServiceConfig(
       androidNotificationChannelId: 'com.example.audiobook_app.audio',
       androidNotificationChannelName: 'Dogreader narration',
@@ -47,6 +55,7 @@ Future<void> main() async {
   );
 
   await audioHandler.initializeAudioSession();
+  unawaited(NativeMediaDiagnostics.start(diagnostics));
 
   final appearance = ThemePreferences();
   await appearance.load();
@@ -546,6 +555,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
           ],
         ),
         actions: [
+          IconButton(
+            tooltip: 'Audio diagnostics',
+            icon: const Icon(Icons.bug_report_outlined),
+            onPressed: () => Navigator.push(context, MaterialPageRoute<void>(
+              builder: (_) => const AudioDiagnosticsScreen(),
+            )),
+          ),
           Center(
             child: Padding(
               padding: const EdgeInsets.only(right: 16),
@@ -2224,6 +2240,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
   }
 
   Future<void> restore() async {
+    audioHandler.recordDiagnostic(MediaDiagnosticEvent.restoreRequested);
     final generation = ++_restoreGeneration;
     bool active() => mounted && generation == _restoreGeneration &&
         (ModalRoute.of(context)?.isCurrent ?? true);
@@ -2295,6 +2312,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
     } catch (e) {
       if (active()) error = 'Could not load recording: $e';
     } finally {
+      audioHandler.recordDiagnostic(MediaDiagnosticEvent.restoreFinished);
       if (active()) setState(() => loading = false);
     }
   }
@@ -2568,7 +2586,28 @@ class AudioDiagnosticsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Audio diagnostics')),
+    appBar: AppBar(
+      title: const Text('Audio diagnostics'),
+      actions: [
+        IconButton(
+          tooltip: 'Share diagnostic log',
+          icon: const Icon(Icons.share),
+          onPressed: () async {
+            final diagnostics = audioHandler.diagnostics;
+            if (diagnostics == null) return;
+            try {
+              await NativeMediaDiagnostics.share(diagnostics);
+            } catch (_) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                  content: Text('Could not share diagnostics. Please try again.'),
+                ));
+              }
+            }
+          },
+        ),
+      ],
+    ),
     body: ValueListenableBuilder<List<String>>(
       valueListenable: audioHandler.diagnosticCommands,
       builder: (context, commands, _) => StreamBuilder<PlaybackState>(
@@ -2599,7 +2638,7 @@ class AudioDiagnosticsScreen extends StatelessWidget {
                 const SizedBox(height: 16),
                 const Text('Both in-app and external commands appear below. '
                     'The count resets when the audio handler restarts. '
-                    'Take a screenshot before restarting the phone. '
+                    'Share exports bounded logs from this and the previous process. '
                     'Opening this screen does not issue playback commands.'),
                 const SizedBox(height: 16),
                 SelectableText('Handler started: ${audioHandler.diagnosticStarted.toIso8601String()}\n\n'

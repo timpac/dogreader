@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_commit:
-        description: Reviewed full source SHA reachable from the default branch
+        description: Reviewed full source SHA on the isolated audio-controls branch
         required: true
         type: string
       build_number:
@@ -24,8 +24,88 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  native:
+    if: github.ref == 'refs/heads/fix/audio-controls-142' && github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      ORG_GRADLE_PROJECT_dogreaderTestBuild: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check isolated source
+        env:
+          SOURCE: ${{ inputs.release_commit }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE"
+          git merge-base --is-ancestor eca7c65412c1c174557224b1522b7dbabfa559c7 HEAD
+          git merge-base --is-ancestor HEAD origin/fix/audio-controls-142
+      - name: Free unused runner disk space
+        run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/powershell
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.47.7'
+          cache: false
+      - name: Locked dependencies, analysis and Flutter regressions
+        run: |
+          flutter pub get --enforce-lockfile > /tmp/dependencies.log 2>&1 || { tail -60 /tmp/dependencies.log; exit 1; }
+          flutter analyze --no-pub > /tmp/analysis.log 2>&1 || { tail -80 /tmp/analysis.log; exit 1; }
+          flutter test --no-pub --reporter expanded > /tmp/tests.log 2>&1 || { tail -100 /tmp/tests.log; exit 1; }
+      - name: Build upstream-lifetime baseline and repaired probes
+        run: |
+          NATIVE=third_party/audio_service/android/src/main/java/com/ryanheise/audioservice
+          cp "$NATIVE/AudioService.java" /tmp/repaired-service.java
+          cp "$NATIVE/AudioServicePlugin.java" /tmp/repaired-plugin.java
+          python3 tools/prepare_audio_service_baseline.py
+          flutter build apk --debug --no-pub --target-platform android-x64 --target test/support/media_control_probe.dart --build-number 142 > /tmp/probe-build.log 2>&1 || { tail -80 /tmp/probe-build.log; exit 1; }
+          cp build/app/outputs/flutter-apk/app-debug.apk /tmp/baseline-probe.apk
+          cp /tmp/repaired-service.java "$NATIVE/AudioService.java"
+          cp /tmp/repaired-plugin.java "$NATIVE/AudioServicePlugin.java"
+          flutter build apk --debug --no-pub --target-platform android-x64 --target test/support/media_control_probe.dart --build-number 142 > /tmp/probe-build.log 2>&1 || { tail -80 /tmp/probe-build.log; exit 1; }
+          cp build/app/outputs/flutter-apk/app-debug.apk /tmp/repaired-probe.apk
+          cd android
+          ./gradlew app:assembleDebugAndroidTest -Ptarget="$GITHUB_WORKSPACE/test/support/media_control_probe.dart" -Ptarget-platform=android-x64 > /tmp/instrumentation-build.log 2>&1 || { tail -80 /tmp/instrumentation-build.log; exit 1; }
+          cp ../build/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk /tmp/instrumentation.apk
+          ./gradlew --stop
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          script: |
+            python3 tools/check_android_media_controls.py --case baseline --apk /tmp/baseline-probe.apk --instrumentation-apk /tmp/instrumentation.apk --report /tmp/baseline-native-report.json
+            python3 tools/check_android_media_controls.py --case controls --apk /tmp/repaired-probe.apk --instrumentation-apk /tmp/instrumentation.apk --report /tmp/controls-native-report.json
+            python3 tools/check_android_media_controls.py --case recreation --apk /tmp/repaired-probe.apk --instrumentation-apk /tmp/instrumentation.apk --report /tmp/recreation-native-report.json
+      - name: Retain bounded native reports in job summary
+        if: always()
+        run: |
+          python3 - <<'PYREPORT'
+          import os
+          from pathlib import Path
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              for report in sorted(Path('/tmp').glob('*-native-report.json')):
+                  data = report.read_text()
+                  print(f'NATIVE_REPORT {report.name} {data}', flush=True)
+                  summary.write(f'### {report.name}\n\n```json\n{data}\n```\n\n')
+          PYREPORT
   apk:
-    if: github.ref == 'refs/heads/dogreader-oct22-update' && github.actor == github.repository_owner
+    needs: native
+    if: github.ref == 'refs/heads/fix/audio-controls-142' && github.actor == github.repository_owner
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -40,7 +120,7 @@ jobs:
           script: |
             const {owner, repo} = context.repo;
             const metadata = (await github.rest.repos.get({owner, repo})).data;
-            if (metadata.default_branch !== 'dogreader-oct22-update' || context.ref !== 'refs/heads/dogreader-oct22-update') throw new Error('Canonical branch mismatch');
+            if (metadata.default_branch !== 'dogreader-oct22-update' || context.ref !== 'refs/heads/fix/audio-controls-142') throw new Error('Canonical branch mismatch');
             if (Number(process.env.GITHUB_RUN_ATTEMPT) !== 1) throw new Error('Inspect retained assets before a new explicitly authorized dispatch; do not rerun');
             if (!/^[0-9a-f]{40}$/.test(process.env.RELEASE_COMMIT)) throw new Error('Full lowercase source SHA required');
             const number = process.env.BUILD_NUMBER;
@@ -70,7 +150,7 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
           git merge-base --is-ancestor cdf4227dc6a966b20e24f61179ac953b22689024 HEAD
-          git merge-base --is-ancestor HEAD origin/dogreader-oct22-update
+          git merge-base --is-ancestor HEAD origin/fix/audio-controls-142
       - name: Free unused runner disk space
         run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/powershell
       - uses: actions/setup-java@v4
@@ -94,10 +174,10 @@ jobs:
           grep -Fqi 'C5:CC:08:D9:75:7C:0E:92:89:3A:71:62:04:A2:6F:EB:61:57:F5:35:0A:00:DB:B0:B7:96:20:49:D6:D9:D1:77' /tmp/certificate.txt
       - name: Resolve locked dependencies
         run: flutter pub get --enforce-lockfile > /tmp/dependencies.log 2>&1 || { tail -60 /tmp/dependencies.log; exit 1; }
-      - name: Analyze
-        run: flutter analyze --no-pub > /tmp/analysis.log 2>&1 || { tail -80 /tmp/analysis.log; exit 1; }
-      - name: Run full Flutter regression suite
-        run: flutter test --no-pub --reporter expanded > /tmp/tests.log 2>&1 || { tail -100 /tmp/tests.log; exit 1; }
+      - name: Record prerequisite verification
+        run: |
+          printf 'Analysis and full Flutter suite passed in the native prerequisite for %s\n' "$RELEASE_COMMIT" > /tmp/analysis.log
+          printf 'Full Flutter regression suite passed in the native prerequisite\n' > /tmp/tests.log
       - name: Build the requested original-app update once
         env:
           ORG_GRADLE_PROJECT_dogreaderOriginalUpdate: 'true'
@@ -143,7 +223,7 @@ jobs:
             const apk = fs.readFileSync(`dist/${name}`);
             const sha256 = digest(apk);
             const run = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
-            const body = `Source: ${source}\nBuild: ${number}\nActions: ${run}\nAPK SHA-256: ${sha256}\nPackage: com.example.audiobook_app\nSigning certificate SHA-256: c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177\n\nInstall in place without uninstalling or clearing storage. Device validation is separate from CI checks.`;
+            const body = `Repairs audio_service native listener ownership across service recreation while its Flutter engine survives. Preserves the narration player, sources and saved positions. Includes separate native/Dart diagnostic events. Verified by the native prerequisite (upstream failure reproduction, repaired service recreation, System UI controls and extended paused resumption). Physical Pixel and Bluetooth acceptance remains outstanding.\n\nSource: ${source}\nBuild: ${number}\nActions: ${run}\nAPK SHA-256: ${sha256}\nPackage: com.example.audiobook_app\nSigning certificate SHA-256: c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177\n\nInstall in place without uninstalling or clearing storage. Device validation is separate from CI checks.`;
             const release = (await github.rest.repos.createRelease({
               owner, repo, tag_name: tag, target_commitish: source,
               name: `Dogreader ${number}`, body, draft: true, make_latest: 'false'

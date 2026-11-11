@@ -38,6 +38,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import com.ryanheise.audioservice.AudioService;
+import com.ryanheise.audioservice.AudioServicePlugin;
+import com.ryanheise.audioservice.MediaTransportDiagnostics;
+import io.flutter.embedding.engine.FlutterEngine;
+import java.lang.reflect.Method;
 
 import static org.junit.Assert.*;
 
@@ -248,6 +253,108 @@ public class MediaControlDeliveryTest {
         result(stage, observed);
     }
 
+    private void pluginBinding(FlutterEngine engine, String method) {
+        instrumentation.runOnMainSync(() -> {
+            try {
+                Object plugin = engine.getPlugins().get(AudioServicePlugin.class);
+                Method binding = AudioServicePlugin.class.getDeclaredMethod(method);
+                binding.setAccessible(true);
+                binding.invoke(plugin);
+            } catch (Exception error) { throw new AssertionError(error); }
+        });
+    }
+
+    private void awaitService(boolean present) {
+        long deadline = SystemClock.uptimeMillis() + 15000;
+        while ((AudioService.instance != null) != present && SystemClock.uptimeMillis() < deadline)
+            SystemClock.sleep(100);
+        assertEquals("Framework service lifecycle did not complete", present, AudioService.instance != null);
+    }
+
+    @Test public void serviceRecreationRetainsCommandDelivery() throws Exception {
+        assertEquals(PACKAGE, context.getPackageName());
+        audio = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+        instrumentation.startActivitySync(new Intent().setComponent(new ComponentName(PACKAGE,
+                "com.example.audiobook_app.MainActivity")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        await(value -> value.getBoolean("playing") && value.optLong("durationMs") > 200000);
+        ownController();
+        controller.getTransportControls().seekTo(60000);
+        await(value -> value.getLong("positionMs") >= 60000 && value.getLong("positionMs") < 65000);
+        controller.getTransportControls().pause();
+        JSONObject paused = await(value -> !value.getBoolean("playing") &&
+                value.getString("processing").equals("idle"));
+        long position = paused.getLong("positionMs");
+        long handlerStarted = paused.getLong("handlerStarted");
+        Object oldToken = controller.getSessionToken();
+        FlutterEngine[] engine = new FlutterEngine[1];
+        instrumentation.runOnMainSync(() -> engine[0] = AudioServicePlugin.getFlutterEngine(context));
+        controller.getTransportControls().stop();
+        await(value -> !value.getBoolean("playing") && value.getBoolean("stopped"));
+        // Reproduce the last-binding release while an Activity has already
+        // reattached. Only the private test harness releases that binding;
+        // Android itself destroys/recreates the actual service and session.
+        pluginBinding(engine[0], "disconnect");
+        awaitService(false);
+        FlutterEngine[] surviving = new FlutterEngine[1];
+        instrumentation.runOnMainSync(() -> surviving[0] = AudioServicePlugin.getFlutterEngine(context));
+        assertSame("The owning Flutter engine must survive", engine[0], surviving[0]);
+        pluginBinding(engine[0], "connect");
+        awaitService(true);
+        ownController();
+        assertNotEquals("Android must create a new session", oldToken, controller.getSessionToken());
+        int plays = state().getJSONObject("commands").optInt("play");
+        controller.getTransportControls().play();
+        boolean baseline = InstrumentationRegistry.getArguments().getString("expectListenerLoss", "false").equals("true");
+        if (baseline) {
+            SystemClock.sleep(1500);
+            JSONObject observed = state();
+            assertEquals(plays, observed.getJSONObject("commands").optInt("play"));
+            assertFalse(observed.getBoolean("playing"));
+            boolean dropped = false;
+            for (String line : MediaTransportDiagnostics.snapshot().split("\n")) {
+                if (!line.startsWith("{")) continue;
+                JSONObject entry = new JSONObject(line);
+                if (entry.optString("event").equals("native_command") &&
+                        entry.optString("command").equals("play") && !entry.getBoolean("listener")) dropped = true;
+            }
+            assertTrue("Baseline must receive native Play with a missing listener", dropped);
+            result("baseline-native-command-dropped", observed);
+            return;
+        }
+        JSONObject resumed = await(value -> value.getJSONObject("commands").optInt("play") > plays &&
+                value.getBoolean("playing") && nativeStateIs(PlaybackState.STATE_PLAYING));
+        assertEquals(handlerStarted, resumed.getLong("handlerStarted"));
+        assertTrue("Retained source must resume near its saved position", resumed.getLong("positionMs") >= position - 500 &&
+                resumed.getLong("positionMs") < position + 5000);
+        assertNativeOutput(true);
+        result("recreated-session-play", resumed);
+        externalCommand("recreated-session-pause", "pause", false, 0);
+        controller.dispatchMediaButtonEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN,
+                android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE));
+        controller.dispatchMediaButtonEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_UP,
+                android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE));
+        result("recreated-media-key-play", await(value -> value.getBoolean("playing")));
+        assertNativeOutput(true);
+        controller.dispatchMediaButtonEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN,
+                android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE));
+        controller.dispatchMediaButtonEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_UP,
+                android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE));
+        result("recreated-media-key-pause", await(value -> !value.getBoolean("playing")));
+        assertNativeOutput(false);
+        long pauseMs = Long.parseLong(InstrumentationRegistry.getArguments().getString("pauseMs", "1000"));
+        shell("input keyevent KEYCODE_HOME");
+        shell("input keyevent KEYCODE_SLEEP");
+        long deadline = SystemClock.uptimeMillis() + pauseMs;
+        while (SystemClock.uptimeMillis() < deadline) {
+            assertFalse("Extended Pause must remain silent", state().getBoolean("playing"));
+            SystemClock.sleep(1000);
+        }
+        externalCommand("extended-pause-resume", "play", true, 0);
+        controller.getTransportControls().stop();
+        shell("input keyevent KEYCODE_WAKEUP");
+        shell("wm dismiss-keyguard");
+    }
+
     private void assertNativeOutput(boolean playing) throws Exception {
         long deadline = SystemClock.uptimeMillis() + 5000;
         while (audio.isMusicActive() != playing && SystemClock.uptimeMillis() < deadline) {
@@ -361,6 +468,10 @@ public class MediaControlDeliveryTest {
             }
             result("seek-pause-play-no-deadlock", state());
             shell("input keyevent KEYCODE_HOME");
+            shell("cmd statusbar expand-notifications");
+            command("shade-touch-pause", "Pause", "pause", false, 0, true);
+            command("shade-touch-play", "Play", "play", true, 0, true);
+            shell("cmd statusbar collapse");
             externalCommand("background-session-pause", "pause", false, 0);
             externalCommand("background-session-play", "play", true, 0);
             externalCommand("background-rewind", "rewind", null, -1);
@@ -379,6 +490,8 @@ public class MediaControlDeliveryTest {
                 SystemClock.sleep(100);
             }
             assertTrue("Lock-screen check requires a locked emulator", keyguard.isKeyguardLocked());
+            command("lock-touch-pause", "Pause", "pause", false, 0, true);
+            command("lock-touch-play", "Play", "play", true, 0, true);
             externalCommand("lock-session-pause", "pause", false, 0);
             externalCommand("lock-session-play", "play", true, 0);
 
@@ -390,7 +503,7 @@ public class MediaControlDeliveryTest {
             shell("input keyevent KEYCODE_HOME");
             externalCommand("restart-background-pause", "pause", false, 0);
             externalCommand("restart-background-play", "play", true, 0);
-            assertEquals("Every transport/touch/focus check must run", 17, checks);
+            assertEquals("Every transport/touch/focus check must run", 21, checks);
         } finally {
             shell("cmd statusbar collapse");
             if (controller != null) controller.getTransportControls().stop();
