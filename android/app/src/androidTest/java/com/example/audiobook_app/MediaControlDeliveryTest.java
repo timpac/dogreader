@@ -4,6 +4,7 @@ import android.app.Instrumentation;
 import android.app.KeyguardManager;
 import android.app.UiAutomation;
 import android.accessibilityservice.AccessibilityServiceInfo;
+import android.accessibilityservice.AccessibilityService;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -240,24 +241,11 @@ public class MediaControlDeliveryTest {
                 control.performAction(AccessibilityNodeInfo.ACTION_CLICK));
     }
 
-    private void openNotificationShade() throws Exception {
-        shell("am start -W -a android.intent.action.MAIN -c android.intent.category.HOME");
-        long deadline = SystemClock.uptimeMillis() + 10000;
-        Rect display = null;
-        while (SystemClock.uptimeMillis() < deadline) {
-            AccessibilityNodeInfo root = automation.getRootInActiveWindow();
-            if (root != null && text(root.getPackageName()).contains("launcher")) {
-                display = new Rect();
-                root.getBoundsInScreen(display);
-                break;
-            }
-            SystemClock.sleep(100);
-        }
-        assertNotNull("Launcher must be visible before pulling down the shade", display);
-        // Match a user's pull-down, after Home has settled. An expand command
-        // issued during the launcher transition can be closed by that transition.
-        int x = display.width() / 4;
-        shell("input swipe " + x + " 3 " + x + " " + (display.height() * 3 / 4) + " 500");
+    private void openNotificationShade() {
+        // Use Android's accessibility global action rather than guessing gesture
+        // coordinates or racing a Home activity transition.
+        assertTrue("Android rejected opening notifications",
+                automation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS));
     }
 
     private void command(String stage, String label, String method, Boolean playing,
