@@ -1,5 +1,13 @@
 # Dogreader
 
+This feature branch adds **Import a web article** and Android **Share → Dogreader**,
+with local extraction, offline article storage, and reader/narration integration.
+Brief, Standard and Detailed AI summaries have client controls and a usage-review
+step; they require the proposed extension to the existing Cloud Run backend.
+That extension is prepared for coordination, not activated or deployed. See
+[article import implementation and integration notes](docs/ARTICLE_IMPORT.md).
+No APK has been built or published for this feature.
+
 Build 131 starts from build 129, commit
 `26fd3ef70978c686a2ac09ca0bf655ac7add600e`, and ports the Kokoro narration
 changes only. Build 130 used an older baseline and is superseded.
