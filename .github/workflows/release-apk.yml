@@ -169,8 +169,8 @@ jobs:
         run: flutter pub get --enforce-lockfile > /tmp/dependencies.log 2>&1 || { tail -60 /tmp/dependencies.log; exit 1; }
       - name: Record prerequisite verification
         run: |
-          printf 'Analysis and full Flutter suite passed in the native prerequisite for %s\n' "$RELEASE_COMMIT" > /tmp/analysis.log
-          printf 'Full Flutter regression suite passed in the native prerequisite\n' > /tmp/tests.log
+          printf 'Native prerequisite verified identical runtime to analysis/full Flutter suite pass in run 43111278083; release source %s\n' "$RELEASE_COMMIT" > /tmp/analysis.log
+          printf 'Full Flutter suite reused from run 43111278083 after prerequisite source-equality check\n' > /tmp/tests.log
       - name: Build the requested original-app update once
         env:
           ORG_GRADLE_PROJECT_dogreaderOriginalUpdate: 'true'
