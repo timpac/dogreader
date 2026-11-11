@@ -84,6 +84,35 @@ The separate open audio-to-text synchronization PR must compose any future
 spoken-text timing map with this original-to-spoken edit map; do not treat
 transformed offsets as EPUB offsets or reuse timestamps from another recording.
 
+### Coordination with Read from here (PR #22)
+
+The current [synchronization candidate](https://github.com/timpac/dogreader/pull/22)
+validates word maps against the displayed chapter's exact text digest and requires
+coverage of every lexical source span. A recording generated from transformed
+text has a different text digest when a pronunciation or silence rule changes
+its text. Its spoken-text alignment therefore cannot be passed directly to that
+validator. It must continue to report synchronization unavailable until the two
+coordinate spaces are supported; do not relax digest or review checks to make a
+map appear compatible.
+
+A future integration must bind the frozen original-to-spoken edit map to the
+exact original text, submitted text and recording/job identity, validate timing
+against the spoken text/audio, then translate timed word spans back to original
+reader spans. Pronunciations can change one word into several or several into
+one. Silence removes source spans entirely, so the current complete lexical
+coverage requirement needs an explicit representation for intentional silence.
+The fractional interpolation in this PR is only for the existing approximate
+reader-to-audio seek; it is not an inverse word map and supplies no timestamps
+for silenced text or paragraph-highlight accuracy.
+
+Both candidates touch `lib/main.dart`, `lib/reader_content.dart` and README.
+When combining them, preserve the sync candidate's `jobId`, optional sidecar
+validation/invalidation and reader-save callbacks alongside this PR's frozen
+dictionary/offset fields. Keep each map with its actual MP3 through regeneration,
+failure, recovery, deletion and import; never apply current dictionary settings
+to an older recording. Neither branch has been merged with the other or tested
+as a combined implementation. Compatibility work remains a separate merge gate.
+
 ## Verification
 
 Focused tests cover exact reader text/styles, structural and inline punctuation,
