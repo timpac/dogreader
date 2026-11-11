@@ -22,6 +22,8 @@ import 'reader_content.dart';
 export 'reader_content.dart' show ReaderChapter, StyledRange;
 import 'narration_seek.dart';
 import 'narration_files.dart';
+import 'narration_delivery.dart';
+import 'narration_storage.dart';
 import 'narration_options.dart';
 import 'narration_dictionary.dart';
 import 'narration_dictionary_screen.dart';
@@ -32,6 +34,10 @@ import 'article_screen.dart';
 import 'article_share.dart';
 
 late final DogreaderAudioHandler audioHandler;
+final narrationDelivery = NarrationDelivery(
+  documentsDirectory: getApplicationDocumentsDirectory,
+  beforeReplace: (book, index) => audioHandler.unloadChapter(book, index),
+);
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -137,7 +143,7 @@ class LibraryScreen extends StatefulWidget {
   State<LibraryScreen> createState() => _LibraryScreenState();
 }
 
-class _LibraryScreenState extends State<LibraryScreen> {
+class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserver {
   late final ArticleLibrary articles;
   final List<String> _sharedUrls = [];
   bool _showingShare = false;
@@ -242,11 +248,18 @@ class _LibraryScreenState extends State<LibraryScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    narrationDelivery.start();
     articles = ArticleLibrary(getApplicationDocumentsDirectory());
     articles.addListener(_articlesChanged);
     articles.load().catchError((Object _) {});
     loadLibrary();
     ArticleShare.listen(_receiveArticleShare).catchError((Object _) {});
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    narrationDelivery.setActive(state == AppLifecycleState.resumed);
   }
 
   void _articlesChanged() {
@@ -286,6 +299,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
   void dispose() {
     ArticleShare.stop();
     articles.removeListener(_articlesChanged);
+    WidgetsBinding.instance.removeObserver(this);
+    narrationDelivery.setActive(false);
     articles.dispose();
     super.dispose();
   }
@@ -981,6 +996,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   }
 
   Future<void> load() async {
+    await narrationDelivery.load();
     await narrationDictionary.load();
     try {
       final file = await queueFile;
@@ -1003,9 +1019,11 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         }
       }
     } catch (_) {}
+    narrationDelivery.attachBook(widget.book.id, jobs);
     final root = await getApplicationDocumentsDirectory();
     for (var index = 0; index < widget.book.chapters.length; index++) {
       final file = File('${root.path}/narration/${widget.book.id}_$index.mp3');
+      if (!narrationDelivery.downloading(widget.book.id, index)) await recoverNarrationFile(file);
       if (await file.exists() && await file.length() > 1000 &&
           !['waiting', 'queued', 'generating', 'error'].contains(jobs[index]?['status'])) {
         jobs[index] = {
@@ -1020,21 +1038,18 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   }
 
   Future<void> save() async {
-    final file = await queueFile;
-    Map<String, dynamic> data = {};
-    try {
-      if (await file.exists()) {
-        data = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-      }
-    } catch (_) {}
-    data['host'] = host;
-    data['token'] = token;
-    data['narrator'] = narrator;
-    data['engine'] = narrationEngine;
-    final books = Map<String, dynamic>.from((data['books'] as Map?) ?? {});
-    books[widget.book.id] = jobs.map((k, v) => MapEntry('$k', v));
-    data['books'] = books;
-    await file.writeAsString(jsonEncode(data));
+    narrationDelivery.host = host;
+    narrationDelivery.token = token;
+    narrationDelivery.attachBook(widget.book.id, jobs);
+    await narrationDelivery.save();
+    await updateNarrationJson(await queueFile, (data) {
+      data['narrator'] = narrator;
+      data['engine'] = narrationEngine;
+    });
+  }
+
+  void deliveryChanged() {
+    if (mounted) setState(() {});
   }
 
   Uri endpoint(String path) =>
@@ -1141,7 +1156,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   }
 
   Future<void> deleteChapterAudio(int index) async {
-    if (busy) return;
+    if (busy || narrationDelivery.downloading(widget.book.id, index)) return;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -1163,7 +1178,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         ],
       ),
     );
-    if (confirmed != true || !mounted || busy) return;
+    if (confirmed != true || !mounted || busy || narrationDelivery.downloading(widget.book.id, index)) return;
     setState(() => busy = true);
     try {
       final root = await getApplicationDocumentsDirectory();
@@ -1234,7 +1249,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   }
 
   Future<void> regenerate(int index) async {
-    if (busy) return;
+    if (busy || narrationDelivery.downloading(widget.book.id, index)) return;
     final preference = NarrationPreference(narrationEngine, narrator);
     final confirmed = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
       title: const Text('Regenerate narration?'),
@@ -1245,7 +1260,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Generate narration')),
       ],
     ));
-    if (confirmed != true || !mounted || busy) return;
+    if (confirmed != true || !mounted || busy || narrationDelivery.downloading(widget.book.id, index)) return;
     if (host.isEmpty || token.isEmpty) {
       setState(() => notice = 'Connect Dogreader Cloud first.');
       return;
@@ -1308,44 +1323,11 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   }
 
   Future<void> downloadAudio(int index, String id) async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
-    try {
-      final req = await client.getUrl(endpoint('/dogreader/audio/$id'));
-      req.headers.set('X-Dogreader-Token', token);
-      final response = await req.close();
-      if (response.statusCode != 200) {
-        throw Exception('Download failed: ${response.statusCode}');
-      }
-      final root = await getApplicationDocumentsDirectory();
-      final folder = Directory('${root.path}/narration');
-      await folder.create(recursive: true);
-      final target = File('${folder.path}/${widget.book.id}_$index.mp3');
-      await replaceNarrationFile(target, response,
-          contentLength: response.contentLength,
-          beforeReplace: () => audioHandler.unloadChapter(widget.book.id, index),
-          afterReplace: () async {
-            final stateFile = File('${root.path}/narration_state.json');
-            Map<String, dynamic> data = {};
-            if (await stateFile.exists()) {
-              try {
-                data = jsonDecode(await stateFile.readAsString()) as Map<String, dynamic>;
-              } catch (_) {}
-            }
-            data['${widget.book.id}:$index'] = {'path': target.path, 'positionMs': 0,
-              ...recordingMetadata(jobs[index] ?? {})};
-            final temporary = File('${stateFile.path}.tmp');
-            try {
-              await temporary.writeAsString(jsonEncode(data), flush: true);
-              await temporary.rename(stateFile.path);
-            } finally {
-              if (await temporary.exists()) await temporary.delete();
-            }
-          });
-      jobs[index] = {...?jobs[index], 'status': 'ready', 'id': id};
-      jobs[index]!.remove('previousRecording');
-    } finally {
-      client.close(force: true);
-    }
+    narrationDelivery.host = host;
+    narrationDelivery.token = token;
+    narrationDelivery.attachBook(widget.book.id, jobs);
+    jobs[index] = {...?jobs[index], 'id': id};
+    await narrationDelivery.retryDownload(widget.book.id, index);
   }
 
   Map<String, dynamic> chapterPayload(int index) {
@@ -1383,89 +1365,25 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     busy = true;
     try {
       for (final index in jobs.keys.toList()..sort()) {
-        final status = jobs[index]?['status'];
-        if (status == 'ready') {
-          final root = await getApplicationDocumentsDirectory();
-          final file = File(
-            '${root.path}/narration/${widget.book.id}_$index.mp3',
-          );
-          if (await file.exists()) continue;
-          final id = jobs[index]?['id'];
-          if (id is String) {
-            try {
-              await downloadAudio(index, id);
-            } catch (_) {
-              notice = 'Recording needs downloading. Check your connection and refresh.';
-            }
-          }
-          continue;
-        }
+        // Submission is only for explicitly queued new narration. Existing IDs
+        // are reconciled by the app-owned delivery service, never resubmitted.
+        if (jobs[index]?['status'] != 'waiting') continue;
         try {
-          if (status == 'waiting') {
-            final response = await requestJson('POST', '/dogreader/jobs', chapterPayload(index));
-            jobs[index] = {
-              ...?jobs[index],
-              ...recordingMetadata(response),
-              'status': response['status'],
-              'id': response['id'],
-            };
-          }
-          final id = jobs[index]?['id'];
-          if (id is! String) continue;
-          Map<String, dynamic> result;
-          try {
-            result = await requestJson('GET', '/dogreader/jobs/$id');
-          } catch (e) {
-            // Re-submit if the cloud job record is missing; the server caches completed audio.
-            if (!e.toString().contains('Unknown job') && !e.toString().contains('Job not found')) {
-              rethrow;
-            }
-            final submitted = await requestJson('POST', '/dogreader/jobs', chapterPayload(index));
-            jobs[index] = {
-              ...?jobs[index],
-              ...recordingMetadata(submitted),
-              'status': submitted['status'],
-              'id': submitted['id'],
-            };
-            result = await requestJson(
-              'GET',
-              '/dogreader/jobs/${submitted['id']}',
-            );
-          }
-          final nextStatus = result['status'] as String? ?? 'waiting';
-          final currentId = jobs[index]?['id'] as String? ?? id;
-          jobs[index] = {
-            ...?jobs[index],
-            ...recordingMetadata(result),
-            'status': nextStatus,
-            'id': currentId,
-            'error': result['error'],
-          };
-          if (nextStatus == 'ready') await downloadAudio(index, currentId);
-          if (nextStatus == 'error') {
-            notice =
-                '${widget.book.chapters[index].title}: ${result['error'] ?? 'Narration failed. Retry to resume saved chunks.'}';
-          }
+          final response = await requestJson('POST', '/dogreader/jobs', chapterPayload(index));
+          jobs[index] = {...?jobs[index], ...recordingMetadata(response),
+            'status': response['status'], 'id': response['id']};
+          await save(); // Persist identity before any download/network follow-up.
         } catch (e) {
-          // Preserve pending work for a later retry.
-          if (jobs[index]?['id'] == null) {
-            jobs[index] = {...?jobs[index],
-              'status': e is StateError ? 'error' : 'waiting',
-              if (e is StateError) 'error': e.message};
+          if (e is StateError) {
+            jobs[index] = {...?jobs[index], 'status': 'error', 'error': e.message};
           }
-          // A temporary socket failure should not masquerade as a failed job.
-          // Keep the job queued and retry on the next refresh.
-          if (e is SocketException ||
-              e is TimeoutException ||
-              e.toString().contains('SocketException')) {
-            notice =
-                'Connection temporarily unavailable. Will retry automatically.';
-          } else {
-            notice = 'Cloud request failed: $e';
-          }
+          notice = 'Submission interrupted. Saved work will be retried.';
+          await save();
         }
       }
-      await save();
+      narrationDelivery.host = host;
+      narrationDelivery.token = token;
+      await narrationDelivery.reconcile();
     } finally {
       busy = false;
       if (mounted) setState(() {});
@@ -1475,12 +1393,14 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   @override
   void initState() {
     super.initState();
+    narrationDelivery.addListener(deliveryChanged);
     load();
     timer = Timer.periodic(const Duration(seconds: 12), (_) => checkJobs());
   }
 
   @override
   void dispose() {
+    narrationDelivery.removeListener(deliveryChanged);
     timer?.cancel();
     previewSequence++;
     unawaited(audioHandler.stopPreview());
@@ -1583,27 +1503,29 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
               itemBuilder: (context, index) {
                 final chapter = widget.book.chapters[index];
                 final status = jobs[index]?['status'] as String?;
+                final delivery = jobs[index]?['delivery'];
+                final localReady = status == 'ready' && (delivery == null || delivery == 'downloaded');
                 final voiceLabel = jobs[index] == null ? null : recordingLabel(jobs[index]);
                 return Column(children: [CheckboxListTile(
-                  secondary: status == 'ready' || jobs[index]?['previousRecording'] is Map
+                  secondary: localReady || jobs[index]?['localAvailable'] == true || jobs[index]?['previousRecording'] is Map
                       ? Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             IconButton(
-                              tooltip: status == 'ready' ? 'Play downloaded chapter' : 'Play previous recording',
+                              tooltip: localReady ? 'Play downloaded chapter' : 'Play previous recording',
                               icon: Icon(Icons.play_circle_fill, color: Theme.of(context).colorScheme.primary, size: 32),
                               onPressed: () => playChapter(index),
                             ),
                             if (jobs[index]?['id'] is String)
                               IconButton(
-                                tooltip: 'Repair audio from cloud',
+                                tooltip: 'Retry Download',
                                 icon: const Icon(Icons.cloud_download_outlined),
-                                onPressed: busy ? null : () => repairChapterAudio(index),
+                                onPressed: busy || narrationDelivery.downloading(widget.book.id, index) ? null : () => repairChapterAudio(index),
                               ),
                             IconButton(
                               tooltip: 'Delete chapter audio',
                               icon: const Icon(Icons.delete_outline),
-                              onPressed: busy ? null : () => deleteChapterAudio(index),
+                              onPressed: busy || narrationDelivery.downloading(widget.book.id, index) ? null : () => deleteChapterAudio(index),
                             ),
                           ],
                         )
@@ -1611,10 +1533,14 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
                   value: selected.contains(index),
                   title: Text(chapter.title),
                   subtitle: Text(
-                    (status == null
+                    (delivery == 'downloading' ? 'Downloading…'
+                        : delivery == 'server_ready' ? 'Ready on server'
+                        : delivery == 'failed' && jobs[index]?['failureStage'] == 'download'
+                        ? 'Download failed • ${jobs[index]?["deliveryError"] ?? "Retry Download"}'
+                        : status == null
                             ? 'Not generated'
                             : status == 'ready'
-                            ? 'Ready to listen'
+                            ? 'Downloaded — ready to listen'
                             : status == 'waiting'
                             ? 'Waiting to submit'
                             : status == 'generating'
@@ -1641,9 +1567,16 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
                           }
                         }),
                 ),
+                  if (jobs[index]?['id'] is String && !localReady)
+                    Align(alignment: Alignment.centerRight, child: TextButton.icon(
+                      onPressed: busy || narrationDelivery.downloading(widget.book.id, index)
+                          ? null : () => repairChapterAudio(index),
+                      icon: const Icon(Icons.cloud_download_outlined),
+                      label: const Text('Retry Download'),
+                    )),
                   if (status == 'ready' || status == 'error')
                     Align(alignment: Alignment.centerRight, child: TextButton(
-                      onPressed: busy ? null : () => regenerate(index),
+                      onPressed: busy || narrationDelivery.downloading(widget.book.id, index) ? null : () => regenerate(index),
                       child: const Text('Regenerate narration'),
                     )),
                 ]);
@@ -1700,6 +1633,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
   @override
   void initState() {
     super.initState();
+    unawaited(narrationDelivery.reconcile());
     chapterIndex = widget.chapterIndex;
     currentOffset = widget.initialOffset;
     widget.onSave(chapterIndex, currentOffset);
@@ -1929,6 +1863,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
 
   void changeChapter(int next) {
     if (next < 0 || next >= widget.book.chapters.length) return;
+    unawaited(narrationDelivery.reconcile());
     if (next > chapterIndex) {
       widget.onSave(chapterIndex, widget.book.chapters[chapterIndex].text.length);
     }
@@ -2167,17 +2102,10 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
   }
 
   Future<void> updateState(Map<String, dynamic> values) async {
-    try {
-      final file = await stateFile;
-      final data = await readState();
-      final existing = data[chapterKey];
-      final chapterData = existing is Map
-          ? Map<String, dynamic>.from(existing)
-          : <String, dynamic>{};
-      chapterData.addAll(values);
-      data[chapterKey] = chapterData;
-      await file.writeAsString(jsonEncode(data));
-    } catch (_) {}
+    await updateNarrationJson(await stateFile, (data) {
+      final existing = Map<String, dynamic>.from((data[chapterKey] as Map?) ?? {});
+      data[chapterKey] = {...existing, ...values};
+    });
   }
 
   @override
@@ -2220,7 +2148,24 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
       }),
     );
 
+    narrationDelivery.addListener(deliveryChanged);
+    unawaited(narrationDelivery.reconcile());
     restore();
+  }
+
+  String? lastDelivery;
+  void deliveryChanged() {
+    if (!mounted) return;
+    final next = narrationDelivery.books[widget.book.id]?[widget.chapterIndex]?['delivery'] as String?;
+    final completed = next == 'downloaded' && lastDelivery != next;
+    lastDelivery = next;
+    if (completed && !loading && (ModalRoute.of(context)?.isCurrent ?? true) &&
+        (audioPath == null || audioHandler.mediaItem.value == null)) {
+      setState(() => loading = true);
+      unawaited(restore());
+    } else {
+      setState(() {});
+    }
   }
 
   Future<void> restore() async {
@@ -2228,28 +2173,33 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
     bool active() => mounted && generation == _restoreGeneration &&
         (ModalRoute.of(context)?.isCurrent ?? true);
     try {
-      final data = await readState();
-      final entry = data[chapterKey];
       final root = await getApplicationDocumentsDirectory();
       final localFile = File(
         '${root.path}/narration/${widget.book.id}_${widget.chapterIndex}.mp3',
       );
 
+      if (!narrationDelivery.downloading(widget.book.id, widget.chapterIndex)) {
+        await recoverNarrationFile(localFile);
+      }
+      final data = await readState();
+      final entry = data[chapterKey];
       String? path;
       int savedPosition = 0;
 
       if (entry is Map) {
         final storedPath = entry['path'];
-        if (storedPath is String && await File(storedPath).exists()) {
+        if (storedPath is String && !storedPath.endsWith('.part') && !storedPath.endsWith('.bak') &&
+            await File(storedPath).exists() && await File(storedPath).length() >= 1000) {
           path = storedPath;
           savedPosition = (entry['positionMs'] as num?)?.toInt() ?? 0;
         }
       }
 
-      if (path == null && await localFile.exists()) {
+      if (path == null && await localFile.exists() && await localFile.length() >= 1000) {
         path = localFile.path;
         if (!active()) return;
-        await updateState({'path': path, 'positionMs': 0});
+        savedPosition = entry is Map ? (entry['positionMs'] as num?)?.toInt() ?? 0 : 0;
+        await updateState({'path': path, 'positionMs': savedPosition});
       }
 
       if (!active()) return;
@@ -2416,6 +2366,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
 
   @override
   void dispose() {
+    narrationDelivery.removeListener(deliveryChanged);
     ++_restoreGeneration;
     for (final sub in subscriptions) {
       sub.cancel();
@@ -2469,8 +2420,21 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
                 if (loading) const CircularProgressIndicator(),
                 if (!loading && !hasAudio)
                   const Text(
-                    'No narration imported for this chapter yet.',
+                    'Narration is not downloaded yet. Finished cloud audio downloads automatically.',
                     textAlign: TextAlign.center,
+                  ),
+                if (!hasAudio && narrationDelivery.books[widget.book.id]?[widget.chapterIndex]?['id'] is String)
+                  TextButton.icon(
+                    onPressed: narrationDelivery.downloading(widget.book.id, widget.chapterIndex) ? null : () async {
+                      try {
+                        await narrationDelivery.retryDownload(widget.book.id, widget.chapterIndex);
+                      } catch (_) {
+                        if (mounted) setState(() => error = 'Download failed. Retry Download when connected.');
+                      }
+                    },
+                    icon: const Icon(Icons.cloud_download_outlined),
+                    label: Text(narrationDelivery.downloading(widget.book.id, widget.chapterIndex)
+                        ? 'Downloading…' : 'Retry Download'),
                   ),
                 const SizedBox(height: 16),
                 OutlinedButton.icon(
@@ -2587,6 +2551,7 @@ class AudioDiagnosticsScreen extends StatelessWidget {
                     'or lock screen and press Pause or Play once. Return here without '
                     'using the in-app playback buttons. Did the count increase?'),
                 const SizedBox(height: 16),
+                SelectableText('Narration delivery\n${narrationDelivery.diagnostics.join("\n")}'),
                 Text('Commands received: ${audioHandler.diagnosticCommandCount}'),
                 Text('Playing: ${player.playing}'),
                 Text('Playback requested: ${audioHandler.diagnosticWantsPlayback}'),

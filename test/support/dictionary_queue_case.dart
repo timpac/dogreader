@@ -74,6 +74,7 @@ void runDictionaryQueueCase({required bool articleInput}) {
         await audio.writeAsBytes(List.filled(1200, 7));
         await stateFile.writeAsString(oldState);
         await narrationDictionary.load();
+        await narrationDelivery.load();
       });
       await tester.pumpWidget(
         MaterialApp(
@@ -139,6 +140,7 @@ void runDictionaryQueueCase({required bool articleInput}) {
         server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
         server.listen((request) async {
           expect(request.uri.path, '/dogreader/audio/new');
+          request.response.headers.contentType = ContentType('audio', 'mpeg');
           request.response.contentLength = 1300;
           request.response.add(List.filled(1300, 9));
           await request.response.close();
