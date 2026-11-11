@@ -12,7 +12,7 @@ import 'article_import_test.dart' show fixture;
 import 'support/article_http.dart';
 
 class ScreenLibrary extends ArticleLibrary {
-  ScreenLibrary(super.documents);
+  ScreenLibrary(super.documents) : super(summariesEnabled: true);
   final reviewed = <SummaryDepth>[];
   final generated = <SummaryDepth>[];
   @override
@@ -53,6 +53,93 @@ void main() {
     );
   });
   tearDown(() async => root.delete(recursive: true));
+  test(
+    'summaries are disabled by default before settings or network access',
+    () async {
+      var createdClients = 0;
+      expect(articleSummariesEnabled, isFalse);
+      final library = ArticleLibrary(Future.value(root));
+      await HttpOverrides.runZoned(
+        () async {
+          for (final request in [
+            () =>
+                ArticleSummaryClient(root)
+                    .estimate(fixture(), SummaryDepth.brief),
+            () =>
+                ArticleSummaryClient(root)
+                    .summarize(fixture(), SummaryDepth.brief),
+            () => library.estimate(fixture(), SummaryDepth.brief),
+            () => library.summarize(fixture(), SummaryDepth.brief),
+          ]) {
+            await expectLater(
+              request(),
+              throwsA(
+                isA<ArticleImportException>().having(
+                  (e) => e.message,
+                  'message',
+                  articleSummariesDisabledMessage,
+                ),
+              ),
+            );
+          }
+        },
+        createHttpClient: (_) {
+          createdClients++;
+          throw StateError('Network must stay disabled');
+        },
+      );
+      expect(createdClients, 0);
+      library.dispose();
+    },
+  );
+  test(
+    'summary output stays exact and never changes source text, hash or offsets',
+    () async {
+      final original = fixture();
+      final sourceText = original.text;
+      final sourceHash = original.contentHash;
+      final offsets = original.blockOffsets;
+      final output = '\n\n  😀 e\u0301  ${original.text.substring(0, 200)}\n\n\n\nTail  ';
+      final client = ArticleHttpClient(
+        ArticleHttpResponse(200, jsonEncode({'summary': output})),
+      );
+      await HttpOverrides.runZoned(() async {
+        final summary = await ArticleSummaryClient(
+          root,
+          enabled: true,
+        ).summarize(original, SummaryDepth.brief);
+        expect(summary.text, output);
+        expect(summary.chapter.text, output);
+        expect(summary.originalContentHash, sourceHash);
+        expect(original.text, sourceText);
+        expect(original.contentHash, sourceHash);
+        expect(original.blockOffsets, offsets);
+      }, createHttpClient: (_) => client);
+    },
+  );
+  testWidgets('disabled summary controls cannot submit a request', (
+    tester,
+  ) async {
+    final library = ArticleLibrary(Future.value(root));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ArticleDetailScreen(
+          article: fixture(),
+          library: library,
+          openArticle: (_, _) {},
+        ),
+      ),
+    );
+    await tester.scrollUntilVisible(
+      find.text(articleSummariesDisabledMessage),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('Review AI usage'), findsNothing);
+    expect(find.text('Generate standard summary'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    library.dispose();
+  });
   test('uses existing cloud auth and exact text/depth; saves each depth and deduplicates', () async {
     for (final depth in SummaryDepth.values) {
       final original = fixture();
@@ -65,7 +152,10 @@ void main() {
           }),
         ),
       );
-      final library = ArticleLibrary(Future.value(root));
+      final library = ArticleLibrary(
+        Future.value(root),
+        summariesEnabled: true,
+      );
       await library.load();
       await HttpOverrides.runZoned(() async {
         final first = library.summarize(original, depth);
@@ -107,8 +197,10 @@ void main() {
         ArticleHttpResponse(200, '{"estimatedCostUsd":null}'),
       );
       await HttpOverrides.runZoned(() async {
-        final result = await ArticleSummaryClient(root)
-            .estimate(fixture(), SummaryDepth.brief);
+        final result = await ArticleSummaryClient(
+          root,
+          enabled: true,
+        ).estimate(fixture(), SummaryDepth.brief);
         expect(result['estimatedCostUsd'], isNull);
         expect(
           client.urls.single.path,
@@ -127,7 +219,10 @@ void main() {
       final client = ArticleHttpClient(response);
       await HttpOverrides.runZoned(() async {
         await expectLater(
-          ArticleSummaryClient(root).summarize(fixture(), SummaryDepth.brief),
+          ArticleSummaryClient(
+            root,
+            enabled: true,
+          ).summarize(fixture(), SummaryDepth.brief),
           throwsA(isA<ArticleImportException>()),
         );
       }, createHttpClient: (_) => client);

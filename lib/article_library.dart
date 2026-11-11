@@ -15,10 +15,14 @@ class ArticleImportJob {
 }
 
 class ArticleLibrary extends ChangeNotifier {
-  ArticleLibrary(this.documents, {ArticleFetcher? fetcher})
-    : fetcher = fetcher ?? ArticleFetcher();
+  ArticleLibrary(
+    this.documents, {
+    ArticleFetcher? fetcher,
+    this.summariesEnabled = articleSummariesEnabled,
+  }) : fetcher = fetcher ?? ArticleFetcher();
   final Future<Directory> documents;
   final ArticleFetcher fetcher;
+  final bool summariesEnabled;
   final List<ImportedArticle> articles = [];
   final List<ArticleImportJob> jobs = [];
   final Map<String, Future<ImportedArticle>> _summaries = {};
@@ -85,23 +89,45 @@ class ArticleLibrary extends ChangeNotifier {
   Future<void> get settled => _pending;
   ImportedArticle? savedSummary(ImportedArticle article, SummaryDepth depth) =>
       articles
-          .where((a) => a.originalId == article.id && a.depth == depth)
+          .where(
+            (a) =>
+                a.originalId == article.id &&
+                a.depth == depth &&
+                (a.originalContentHash == null ||
+                    a.originalContentHash == article.contentHash),
+          )
           .firstOrNull;
   Future<Map<String, dynamic>> estimate(
     ImportedArticle article,
     SummaryDepth depth,
-  ) async => ArticleSummaryClient(await documents).estimate(article, depth);
+  ) async {
+    if (!summariesEnabled) {
+      throw const ArticleImportException(articleSummariesDisabledMessage);
+    }
+    return ArticleSummaryClient(
+      await documents,
+      enabled: summariesEnabled,
+    ).estimate(article, depth);
+  }
+
   Future<ImportedArticle> summarize(
     ImportedArticle article,
     SummaryDepth depth,
   ) {
     final saved = savedSummary(article, depth);
     if (saved != null) return Future.value(saved);
+    if (!summariesEnabled) {
+      return Future.error(
+        const ArticleImportException(articleSummariesDisabledMessage),
+      );
+    }
     final key = '${article.id}:${article.contentHash}:${depth.name}';
     return _summaries.putIfAbsent(key, () async {
       try {
-        final result = await ArticleSummaryClient(await documents)
-            .summarize(article, depth);
+        final result = await ArticleSummaryClient(
+          await documents,
+          enabled: summariesEnabled,
+        ).summarize(article, depth);
         await (await store).save(result);
         articles.add(result);
         notifyListeners();

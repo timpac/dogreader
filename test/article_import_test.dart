@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:audiobook_app/article_import.dart';
@@ -51,6 +52,73 @@ class ControlledFetcher extends ArticleFetcher {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test('immutable Unicode blocks, UTF-16 offsets and legacy restore preserve exact text', () {
+    final input = [
+      const ArticleBlock(''),
+      const ArticleBlock('😀 e\u0301  ', heading: true),
+      const ArticleBlock('Tail\nline  '),
+    ];
+    final article = ImportedArticle(
+      title: 'Unicode',
+      sourceUrl: 'https://example.org/unicode',
+      blocks: input,
+    );
+    final original = article.text;
+    input.clear();
+    expect(article.text, original);
+    expect(() => article.blocks.clear(), throwsUnsupportedError);
+    expect(article.chapter.text, original);
+    expect(article.blockOffsets[1], (start: 2, end: 9));
+    expect(article.chapter.ranges.single.start, 2);
+    expect(article.chapter.ranges.single.end, 9);
+    for (var i = 0; i < article.blocks.length; i++) {
+      final range = article.blockOffsets[i];
+      expect(
+        original.substring(range.start, range.end),
+        article.blocks[i].text,
+      );
+    }
+    final json =
+        jsonDecode(jsonEncode(article.toJson())) as Map<String, dynamic>;
+    final legacy = Map<String, dynamic>.from(json)
+      ..remove('textSha256')
+      ..remove('textLengthUtf16');
+    expect(ImportedArticle.fromJson(legacy).text, original);
+    expect(ImportedArticle.fromJson(json).chapter.text, original);
+    (json['blocks'] as List)[1]['text'] = 'Changed';
+    expect(() => ImportedArticle.fromJson(json), throwsFormatException);
+  });
+  test('saving a changed original cannot overwrite text, metadata or reading state', () async {
+    final root = await Directory.systemTemp.createTemp('article-immutable-');
+    try {
+      final state = File('${root.path}/reading_state.json');
+      await state.writeAsString(
+        '{"positions":{"existing":{"chapter":0,"offset":7}}}',
+      );
+      final store = ArticleStore(Directory('${root.path}/articles'));
+      final original = fixture();
+      await store.save(original);
+      final file = File('${root.path}/articles/${original.id}.json');
+      final before = await file.readAsString();
+      final replacement = ImportedArticle(
+        title: 'Changed title',
+        sourceUrl: original.sourceUrl,
+        blocks: const [ArticleBlock('Changed text')],
+      );
+      await expectLater(
+        store.save(replacement),
+        throwsA(isA<ArticleImportException>()),
+      );
+      expect(await file.readAsString(), before);
+      expect((await store.load()).single.text, original.text);
+      expect(
+        await state.readAsString(),
+        '{"positions":{"existing":{"chapter":0,"offset":7}}}',
+      );
+    } finally {
+      await root.delete(recursive: true);
+    }
+  });
   test('extracts metadata, main paragraphs and headings without clutter', () {
     final article = fixture();
     expect(article.title, 'A careful trial');

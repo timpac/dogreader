@@ -97,31 +97,49 @@ class ArticleBlock {
 }
 
 class ImportedArticle {
-  const ImportedArticle({
+  ImportedArticle({
     required this.title,
     required this.sourceUrl,
-    required this.blocks,
+    required List<ArticleBlock> blocks,
     this.author,
     this.published,
     this.depth,
     this.originalId,
-    this.usage,
-  });
+    this.originalContentHash,
+    Map<String, dynamic>? usage,
+  }) : blocks = List.unmodifiable(blocks),
+       usage = usage == null ? null : Map.unmodifiable(usage);
   final String title, sourceUrl;
-  final String? author, published, originalId;
+  final String? author, published, originalId, originalContentHash;
   final List<ArticleBlock> blocks;
   final SummaryDepth? depth;
   final Map<String, dynamic>? usage;
   String get text => blocks.map((b) => b.text).join('\n\n');
   String get contentHash => articleDigest(text);
+
+  /// Half-open Dart UTF-16 ranges in the immutable reader/narration text.
+  List<({int start, int end})> get blockOffsets {
+    var offset = 0;
+    return List.unmodifiable(
+      blocks.map((block) {
+        final start = offset;
+        offset += block.text.length;
+        final range = (start: start, end: offset);
+        offset += 2; // Exactly the joiner's two newlines.
+        return range;
+      }),
+    );
+  }
+
   String get id => depth == null
       ? 'article_${articleDigest(sourceUrl)}'
       : '${originalId}_${depth!.name}_${contentHash.substring(0, 16)}';
   ReaderChapter get chapter {
     final output = StringBuffer();
     final ranges = <StyledRange>[];
-    for (final block in blocks) {
-      if (output.isNotEmpty) output.write('\n\n');
+    for (var index = 0; index < blocks.length; index++) {
+      final block = blocks[index];
+      if (index > 0) output.write('\n\n');
       final start = output.length;
       output.write(block.text);
       if (block.heading) {
@@ -144,25 +162,40 @@ class ImportedArticle {
     'blocks': blocks.map((b) => b.toJson()).toList(),
     'depth': depth?.name,
     'originalId': originalId,
+    'originalContentHash': originalContentHash,
+    'textSha256': contentHash,
+    'textLengthUtf16': text.length,
     'usage': usage,
   };
-  factory ImportedArticle.fromJson(Map<String, dynamic> value) =>
-      ImportedArticle(
-        title: value['title'] as String,
-        sourceUrl: value['sourceUrl'] as String,
-        author: value['author'] as String?,
-        published: value['published'] as String?,
-        blocks: (value['blocks'] as List)
-            .map(
-              (b) => ArticleBlock.fromJson(Map<String, dynamic>.from(b as Map)),
-            )
-            .toList(),
-        depth: value['depth'] == null
-            ? null
-            : SummaryDepth.values.byName(value['depth'] as String),
-        originalId: value['originalId'] as String?,
-        usage: (value['usage'] as Map?)?.cast<String, dynamic>(),
+  factory ImportedArticle.fromJson(Map<String, dynamic> value) {
+    final article = ImportedArticle(
+      title: value['title'] as String,
+      sourceUrl: value['sourceUrl'] as String,
+      author: value['author'] as String?,
+      published: value['published'] as String?,
+      blocks: (value['blocks'] as List)
+          .map(
+            (b) => ArticleBlock.fromJson(Map<String, dynamic>.from(b as Map)),
+          )
+          .toList(),
+      depth: value['depth'] == null
+          ? null
+          : SummaryDepth.values.byName(value['depth'] as String),
+      originalId: value['originalId'] as String?,
+      originalContentHash: value['originalContentHash'] as String?,
+      usage: (value['usage'] as Map?)?.cast<String, dynamic>(),
+    );
+    // Legacy version-1 files without these additive checks retain exact text.
+    if ((value.containsKey('textSha256') &&
+            value['textSha256'] != article.contentHash) ||
+        (value.containsKey('textLengthUtf16') &&
+            value['textLengthUtf16'] != article.text.length)) {
+      throw const FormatException(
+        'Saved article text identity does not match.',
       );
+    }
+    return article;
+  }
 }
 
 String _clean(String value) => value.replaceAll(RegExp(r'\s+'), ' ').trim();
@@ -473,6 +506,17 @@ class ArticleStore {
   Future<void> save(ImportedArticle article) async {
     await directory.create(recursive: true);
     final file = File('${directory.path}/${article.id}.json');
+    if (await file.exists()) {
+      final previous = ImportedArticle.fromJson(
+        jsonDecode(await file.readAsString()) as Map<String, dynamic>,
+      );
+      if (previous.text != article.text) {
+        throw const ArticleImportException(
+          'This saved article has different text. It was kept unchanged to preserve reading and narration positions.',
+        );
+      }
+      return; // An existing version is immutable, including its saved metadata.
+    }
     final temporary = File('${file.path}.tmp');
     await temporary.writeAsString(jsonEncode(article.toJson()), flush: true);
     await temporary.rename(file.path);

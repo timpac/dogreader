@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'article_import.dart';
 import 'article_library.dart';
+import 'article_summary.dart' show articleSummariesDisabledMessage;
 
 typedef OpenArticle = void Function(ImportedArticle article, bool narration);
 
@@ -79,15 +80,21 @@ class _ArticleImportScreenState extends State<ArticleImportScreen> {
           ),
           const SizedBox(height: 16),
           SegmentedButton<bool>(
-            segments: const [
-              ButtonSegment(value: false, label: Text('Read original')),
-              ButtonSegment(value: true, label: Text('AI summary')),
+            segments: [
+              const ButtonSegment(value: false, label: Text('Read original')),
+              ButtonSegment(
+                value: true,
+                label: const Text('AI summary'),
+                enabled: widget.library.summariesEnabled,
+              ),
             ],
             selected: {summary},
             onSelectionChanged: (value) =>
                 setState(() => summary = value.single),
           ),
           const SizedBox(height: 12),
+          if (!widget.library.summariesEnabled)
+            const Text(articleSummariesDisabledMessage),
           Text(
             summary
                 ? 'Save the original first, then choose summary depth and review usage before generating.'
@@ -271,6 +278,8 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                 onPressed: () => widget.openArticle(saved, true),
                 child: const Text('Narrate saved summary'),
               ),
+            ] else if (!widget.library.summariesEnabled) ...[
+              const Text(articleSummariesDisabledMessage),
             ] else ...[
               if (estimate != null) Text(cost(estimate)),
               FilledButton(

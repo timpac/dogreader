@@ -1,161 +1,183 @@
-# Article import and summaries
+# Article import integration handoff
 
-Feature branch: `feature/article-import-summary`, starting at the requested Build
-135 commit `cdf4227dc6a966b20e24f61179ac953b22689024`.
+Branch: `feature/article-import-summary`, descended from accepted Build 135
+`cdf4227dc6a966b20e24f61179ac953b22689024`. [Draft PR #24](https://github.com/timpac/dogreader/pull/24)
+records the current head and checks. No other feature branch or backend repository
+is modified. Build 135's audio-session lifecycle, signing/package identity,
+EPUB storage, library ordering and saved-position formats remain intact.
 
-## Status and coordination
+## Ready client functionality
 
-The Android/Flutter client implements URL import, Share receipt, extraction,
-offline persistence, summary-depth selection, usage review, summary caching, and
-reader/narration entry points. AI generation requires the coordinated backend
-extension described below. It is not available on the existing server merely by
-installing the client.
+Pasted URLs and Android Share prefill enter the same `ArticleLibrary.enqueue`
+pipeline. Sharing alone never fetches or generates paid work. The serial worker
+deduplicates normalized URLs, and final canonical identity deduplicates aliases.
+An extraction/save failure reports an error without stopping subsequent imports.
+Saved originals and summaries restore from local storage. Unfinished import jobs
+are in memory and must be resubmitted after process termination.
 
-Before edits, likely conflicts were reported in the task conversation:
+Extraction uses the existing HTML parser locally: main paragraphs/headings,
+optional author/date, title and source URL. It removes common navigation, ads,
+cookie notices and unrelated containers. It does not execute JavaScript,
+authenticate, use browser cookies or unlock paywalls. Unsupported layouts,
+gates, non-HTML/encoding errors, network failures and size/time limits are reported.
+Limits: five redirects, 2 MiB HTML, 30 seconds, 250,000 readable-text UTF-16 units.
 
-| File/interface | Task 2 changes | Coordination boundary |
+Original/summary narration uses the established library, job API and queue.
+Each is a separate one-chapter `ImportedBook`; no whole-book planner is added.
+
+## Exact text, identity and storage contract
+
+Whitespace is resolved once during HTML extraction. The saved readable text,
+not raw HTML or a later extraction, is the source of all subsequent coordinates.
+Blocks are immutable; their joiner is exactly two newlines. `text` and
+`chapter.text` are identical, including Unicode, empty blocks and spacing.
+`blockOffsets` are half-open UTF-16 ranges, matching Dart reader offsets;
+hashes use UTF-8 bytes. Summary responses are saved without trimming or
+paragraph rewriting and never replace the original.
+
+New article JSON adds `textSha256`, `textLengthUtf16` and, for summaries,
+`originalContentHash`. Version-1 files without these fields still restore
+without rewriting. Integrity mismatches are rejected; a damaged article does
+not hide the remaining library. Saving an existing ID cannot overwrite its text
+or metadata. Existing EPUBs/positions/queue formats are not migrated.
+
+Original IDs are `article_` plus SHA-256 of canonical/normalized source URL.
+Summary IDs include original ID, depth and output digest. Local data lives at
+`<documents>/articles/<id>.json`; audio remains
+`<documents>/narration/<bookId>_0.mp3`. Progress and queue keys use the separate
+book IDs, so original and summary cannot reuse each other's positions/audio.
+Summary caching checks source identity; old summaries remain readable offline.
+
+The existing TTS recording ID remains the first 32 hex characters of SHA-256
+over canonical engine/voice/model/settings JSON, one newline, and exact submitted
+TTS text, with existing legacy reuse. Summary request IDs are separate full
+SHA-256 values over prompt version, summary model, depth and readable source text.
+
+## Interfaces for the other tasks
+
+- Both `NarrationQueueScreen` and `ChapterNarrationScreen` now require
+  `SavePosition onSave`, matching synchronization PR #22. Every local route
+  supplies/forwards it. Library routes use
+  `(chapter, offset) => saveProgress(book.id, chapter, offset)`; reader routes
+  forward `widget.onSave`. Merely listening does not update reader positions.
+  The callback is carried for #22's explicit reader navigation action.
+- Pronunciation dictionary Task 1: `feature/narration-dictionary`, reviewed
+  commit `93aaa69`. Its agent/integrator must retain required callbacks and
+  freeze `narration_dictionary` plus `narration_offsets` per new recording.
+  Apply pronunciation/silence only to submitted TTS text, never stored article
+  text or summarizer input. Per-book rules see distinct original/summary IDs.
+  Articles directly construct `ReaderChapter`; Task 1 must accept/default
+  `narrationSeparators` and agree how article separators acquire UTF-16 metadata.
+  No dictionary implementation or persisted dictionary schema is copied here.
+- Entire-audiobook Task 3: independent whole-book preflight planner; branch/owner
+  unreported. It must pass `onSave` when opening narration routes, treat each
+  article version as one chapter, and keep summary charges separate from TTS
+  estimates. This branch does not change its planner or queue contract.
+- Synchronization client #22 / backend #7 remain separate, unmerged work. Keep
+  exact text/audio digests, reviewed maps and `<MP3>.alignment.json` invalidation.
+  When dictionary text differs, compose the recording's frozen spoken-to-reader
+  UTF-16 map; never weaken alignment validation or reuse original maps for summaries.
+- Remaining overlap is `lib/main.dart` imports/settings/library/narration hunks,
+  Task 1's reader metadata, and eventual backend `main.py` registration. These
+  branches have not been merged or tested together. This branch refreshes its
+  README from canonical baseline documentation without changing default history.
+
+## Disabled summary feature
+
+Production client requests are gated by the compile-time flag
+`DOGREADER_ENABLE_ARTICLE_SUMMARIES`, default **false**. The API client checks
+before reading settings or creating HTTP requests; UI generation is unavailable.
+Saved summaries still read/narrate offline. No alternate provider, model, paid
+fallback or runtime settings toggle exists. Tests opt in only with mocked HTTP.
+Do not enable the client flag until authenticated backend acceptance and explicit
+rollout approval. No APK is built here.
+
+## Backend proposal and verified provider contract
+
+Only `backend_proposal/` in this app branch contains server code. It must be
+reviewed/copied/registered on a separately coordinated companion branch; nothing
+is installed in the live service. Reuse existing Flask auth, ADC, bucket and
+Google dependencies; no new service or Cloud Tasks queue.
+
+Authenticated with existing `X-Dogreader-Token`:
+
+| POST route | Input | Output |
 | --- | --- | --- |
-| `lib/main.dart` library state/loading/import buttons | Small integration hunks calling new article modules | Merge with other tasks' library/reader UI changes manually |
-| `ImportedBook`, `ReaderChapter`, reading callbacks | Reused unchanged | No schema or callback change required |
-| `lib/reader_content.dart` | No changes | Existing reader styling/parsing remains owned by reader work |
-| Android manifest and `MainActivity.kt` | SEND text/plain filter and separate `dogreader/article_share` channel | Keep AudioServiceActivity inheritance, super calls and media lifecycle |
-| Narration queue, TTS handlers, audio filenames, job API | No interface changes | Existing text submission handles both article versions |
-| Cloud settings file | Read host/token only | Never write settings or change its schema |
-| Backend `main.py` | Proposed registration patch only, not applied | Backend owner must review the additive endpoints on a separate companion branch |
+| `/dogreader/article-summaries/estimate` | `text`, `depth` | approximate input tokens, output cap, nullable `estimatedCostUsd`; no provider call |
+| `/dogreader/article-summaries` | `text`, `depth`, client-supplied UTF-8 SHA-256 `contentHash` | `status`, `id`, exact `summary`, token `usage` and nullable `costUsd` |
 
-Tasks 1 and 3 branches/owners were requested but were unavailable during this
-implementation. No shared TTS, queue, or backend contract was independently
-changed. Use a separate `feature/article-import-summary` branch in
-`timpac/dogreader-cloud` for coordinated backend work. Do not merge or deploy it
-as part of another task implicitly.
+Depths: brief/standard/detailed, output caps 512/1024/2048 tokens.
+Input: 200–250,000 characters. Output: normal STOP, 100–50,000 characters and
+no longer than source. Errors: invalid input 400; auth 401; disabled/provider
+failure 503; processing/previously interrupted identity 409; invalid output 422.
+A durable GCS conditional claim under `article-summaries/<id>.json` prevents
+duplicate paid work. Stuck/failed claims require operator review; no automatic
+paid retry, expiry, continuation or new-provider fallback.
 
-## Using the client
+Documentation checked **2026-11-11**, without inference requests:
 
-Choose **Import a web article** in the library, paste a public HTTP(S) URL, and
-choose **Read original** or **AI summary**. Chrome's Android Share menu also
-offers Dogreader and pre-fills the URL. Sharing does not silently fetch a page or
-start paid work: tap **Import article**. Cold and warm intents use the same path.
+- The old `gemini-2.5-flash-lite` target is retired as of October 20, 2026;
+  it is now rejected. [Google model lifecycle](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/2-5-flash-lite).
+- Proposed candidate: exact GA ID `gemini-3.1-flash-lite`. Its documentation
+  supports GenerateContent, system instructions and `MINIMAL` thinking level;
+  listed locations are `global`, `us`, `eu`. The proposal requires an explicit
+  `DOGREADER_SUMMARY_REGION` in that set, rather than inheriting `us-central1`
+  from TTS. No region/model substitution occurs.
+  [Model and availability](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-1-flash-lite).
+- ADC REST uses `https://aiplatform.googleapis.com/v1/projects/PROJECT/locations/global/publishers/google/models/gemini-3.1-flash-lite:generateContent`
+  (location host for approved multi-region). Payload uses `systemInstruction`,
+  `contents`, `generationConfig.maxOutputTokens`, and
+  `thinkingConfig.thinkingLevel: MINIMAL`, not the retired model's
+  `thinkingBudget: 0`. Thought parts are excluded from readable output but counted
+  in known usage; text parts are concatenated without inserted characters.
+  No tools/browsing/grounding are enabled.
+  [API contract](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference).
+  Project access, endpoint behavior, factual quality and latency still need
+  separately approved backend acceptance; documentation/mocks are not live proof.
 
-Imports run sequentially; additional URLs can be submitted while one is running.
-The existing queue is specific to narration, so it remains unchanged. Article
-import ordering uses a separate lightweight in-memory worker. Saved content
-survives restart; unfinished import jobs must be submitted again after process
-termination.
+Before deployment, the backend owner must:
 
-Tap a saved article for its author, source URL, publication date (when supplied),
-reading and narration controls. The original is retained when a summary is
-requested or fails. The three slider positions select Brief, Standard or
-Detailed. **Review AI usage** obtains an estimate without invoking the AI
-provider. **Generate** submits the selected depth. Saved summaries can be read
-and narrated offline without another summary request. Narration retains its
-existing cloud settings and charging behavior.
+1. Integrate/register the proposal with existing `authorized`, `auth_error`,
+   bucket, project and region interfaces. Run real companion auth/API regressions,
+   including #7 timing/readiness behavior; preserve all existing TTS routes/jobs.
+2. Verify enabled Vertex AI API, model availability and billing in the approved
+   project. Minimum inference permission: `aiplatform.endpoints.predict`;
+   `roles/aiplatform.user` is a broader alternative, not a required admin grant.
+   Existing runtime ADC is used; no provider key in APK.
+   [Inference IAM](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/access-control).
+   GCS needs `storage.objects.get`, `storage.objects.create` and
+   `storage.objects.delete` for generation-conditional content replacement,
+   scoped to the existing summary prefix where practical; no listing is used.
+   [Storage permissions](https://cloud.google.com/storage/docs/access-control/iam-permissions).
+3. Explicitly configure server `DOGREADER_SUMMARIES_ENABLED=1`,
+   `DOGREADER_SUMMARY_MODEL=gemini-3.1-flash-lite` and
+   `DOGREADER_SUMMARY_REGION=global|us|eu`. Both feature flags remain off otherwise.
+4. Review timeout headroom: provider connection/read limits are 8/75 seconds;
+   client overall deadline is 100 seconds. Allow at least 120 seconds in Cloud Run
+   and process/worker configuration, then measure ADC, storage and cold-start
+   overhead. Requests read timeouts are not hard wall-clock deadlines; a client
+   timeout may leave a processing claim, which must be checked rather than rerun.
+5. Set verified `DOGREADER_SUMMARY_INPUT_USD_PER_MILLION` and
+   `DOGREADER_SUMMARY_OUTPUT_USD_PER_MILLION` or show unknown cost. Current published
+   standard global text rates for the candidate are $0.25 input / $1.50 output
+   per million tokens; non-global rates $0.275 / $1.65.
+   With 5,000 billable input tokens, illustrative costs at 512/1024/2048 billable
+   output tokens are $0.002018 / $0.002786 / $0.004322. Include reasoning in output
+   billing. Character-based estimates are approximate, not spend guarantees;
+   hosting/storage/taxes are extra. No rates are silently hardcoded at runtime.
+   [Google pricing](https://cloud.google.com/model-garden/pricing).
+6. Review private bucket retention/access and stuck-claim operations; obtain
+   explicit authorization for any IAM/API/billing changes, paid quality test,
+   deployment, and later client flag enablement. None is performed here.
 
-## Extraction and local data
+## Focused validation
 
-Extraction runs locally with the already-installed HTML parser. It scores main
-article containers and preserves text paragraphs, list items and heading ranges;
-it discards navigation, sidebars, scripts, forms, ads, cookie/consent elements,
-related links and common clutter. It does not execute JavaScript, send browser
-cookies, authenticate, or attempt to unlock paywalls. This is a bounded heuristic,
-not a universal website extractor. Some public pages need browser rendering or
-use unsupported layouts; Dogreader reports that limitation rather than saving
-the whole page as an article.
-
-HTTP errors, access gates, non-HTML responses, invalid TLS, unsupported encodings,
-timeouts, excessive redirects, oversized pages and insufficient article text have
-clear failure messages. Fetches allow at most five redirects, 2 MiB of decompressed
-HTML and 30 seconds. The reader/narration text limit is 250,000 characters.
-Public HTTP(S) URLs only; private/local destinations are rejected at validation
-and DNS checks. No article-site request receives the Dogreader cloud token.
-
-`<documents>/articles/*.json` stores versioned metadata and text blocks with atomic
-temporary-file replacement. EPUBs and existing persisted formats are untouched.
-IDs use canonical/normalized URL hashes. Known tracking parameters/fragments are
-removed; meaningful query parameters are retained. Repeated canonical URLs reuse
-the original. Summary IDs include original identity, depth and output digest,
-keeping audio and progress distinct from the original. Originals are immutable;
-there is no implicit article refresh that could invalidate saved narration.
-
-## Backend integration proposal — not activated
-
-`backend_proposal/article_summaries.py`, its tests, and `register.patch` are a
-reviewable extension for the **existing** Cloud Run service, not a new service.
-The shared backend entry point has not been modified. After coordination:
-
-1. Copy the module and tests into the companion feature branch and review/apply
-   `register.patch` against the current `main.py`.
-2. Run the companion API regression suite, including auth for both routes. The
-   module takes the existing `authorized`, `auth_error`, bucket, project and region.
-3. Review the configured model, pricing, Vertex AI availability, Cloud Run timeout
-   and Vertex AI permissions for the existing runtime service account. Enabling an
-   API, changing IAM/billing or deploying requires separate explicit approval.
-4. Only after that approval, deploy a new revision of the existing service. Keep
-   summaries disabled until configuration and permissions are verified.
-
-Proposed authenticated routes:
-
-| Route | Request | Response |
-| --- | --- | --- |
-| `POST /dogreader/article-summaries/estimate` | `text`, `depth` | Approximate token counts, output cap, nullable `estimatedCostUsd` |
-| `POST /dogreader/article-summaries` | `text`, `depth`, SHA-256 `contentHash` | `summary`, durable `id`, `usage` with nullable `costUsd` |
-
-The inspected backend has Google TTS/Kokoro but no general text-generation
-provider. The proposal uses Vertex AI through its existing Google authentication
-dependencies and Cloud Run service identity. There is no provider key in the APK,
-new key file, or additional backend service. No dependency changes are needed for
-the proposal; the existing backend includes google-auth and its requests transport.
-
-Configuration, all server-side:
-
-- `DOGREADER_SUMMARIES_ENABLED=1` (otherwise disabled).
-- `DOGREADER_SUMMARY_MODEL=gemini-2.5-flash-lite` (restricted allowlist).
-- Optional `DOGREADER_SUMMARY_REGION`; defaults to the service region.
-- Optional `DOGREADER_SUMMARY_INPUT_USD_PER_MILLION` and
-  `DOGREADER_SUMMARY_OUTPUT_USD_PER_MILLION`, using operator-verified current
-  regional/provider rates. No price is invented when these are absent.
-
-Estimates use an explicitly approximate characters/3 input count plus the selected
-output-token cap. They exclude hosting/storage/taxes and are not guaranteed bills.
-Known usage uses provider token counts and configured prices. Only text is sent
-to the model; no browsing, retrieval, tools, or outside context are enabled. The
-prompt preserves central argument, qualifications, attribution and uncertainty,
-and rejects instructions embedded in source text. Output must finish normally;
-blocked, truncated, short or oversized output is not saved as a ready summary.
-Factual quality still needs a small approved model evaluation; prompts and mocks
-cannot prove accuracy.
-
-GCS conditional creation claims each content/depth/model/prompt identity once.
-Concurrent requests reuse ready output or report processing. A timeout or
-interrupted paid request is **never automatically regenerated**, including after
-a server restart. Failed or stuck claims require operator review; there is no
-expiry that silently risks another charge. This intentionally trades automatic
-recovery for charge deduplication. Claims/results live under the existing bucket's
-`article-summaries/` prefix and contain private article-derived text; review the
-existing bucket's access and retention when enabling the feature.
-
-## Validation and remaining gates
-
-Use the feature tests with `flutter test --no-pub test/article_import_test.dart
-test/article_summary_test.dart` and the backend proposal's stdlib tests with
-`python -m unittest discover -s backend_proposal -v`. Tests use small fictional
-articles and mocked provider/HTTP responses, with no paid AI requests.
-
-Two downloaded small public pages were successfully extracted locally: HTTPBin's
-Moby-Dick HTML fixture (3,566 characters) and PEP 20 (1,375 characters). The helper
-`tools/article_extract_smoke.dart` can repeat extraction on downloaded HTML.
-A one-article network smoke check also used the actual `ArticleFetcher` for PEP
-20, then saved and reloaded its exact text/identity. Only the temporary test
-adapter selected the managed environment's proxy; production fetch code was used
-unchanged.
-
-Recorded checks: Flutter 3.47.7 / Dart 3.13.5 locked dependency resolution and
-clean static analysis; all 93 tests in the full Flutter suite passed. After the
-final idle-UI Share frame fix, its additional focused navigation test passed.
-All 11 backend proposal tests passed, Python compilation succeeded, and the
-registration patch applies cleanly to the inspected backend source. No live
-provider or backend endpoint was invoked.
-
-Real Pixel/Chrome Share delivery, native compilation, actual provider summary
-quality/usage, and real cloud narration of imported versions remain acceptance
-gates. No APK build/publication, backend deployment, paid model request, IAM
-change, or expensive end-to-end test is authorized by this implementation.
+Tests cover Share/paste pipeline deduplication, extraction errors, sequential
+imports, exact Unicode/UTF-16 preservation, legacy restore, immutable saved
+versions, disabled UI/API with zero HTTP clients, mocked summary usage and
+caching, and reader position/reflow. Backend proposal tests use only memory
+stores/fake generation. This integration pass passed 20 focused Flutter cases
+(19 initial cases plus the added Share/paste entry case), 14 backend proposal
+tests, and clean static analysis. Earlier broad regression
+evidence is retained; no emulator, APK, production backend, IAM or paid API work
+is part of this integration pass.

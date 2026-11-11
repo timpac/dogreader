@@ -2,17 +2,18 @@
 import hashlib
 import unittest
 
-from article_summaries import (SYSTEM, SummaryError, SummaryService, request_id,
-                               validate, BucketStore)
+from article_summaries import (SYSTEM, SUMMARY_MODEL, SummaryError, SummaryService, request_id,
+                               validate, vertex_payload)
 
 TEXT = ('A small pilot found a possible reduction in travel time. The authors '
         'warn that the sample is small and does not establish causation. ' * 8)
 SUMMARY = ('The authors argue for further controlled trials after a small pilot '
            'suggested shorter travel times. They caution that the sample is small '
            'and does not establish a causal effect.')
-ENV = {'DOGREADER_SUMMARIES_ENABLED': '1', 'DOGREADER_SUMMARY_MODEL': 'gemini-2.5-flash-lite',
-       'DOGREADER_SUMMARY_INPUT_USD_PER_MILLION': '0.1',
-       'DOGREADER_SUMMARY_OUTPUT_USD_PER_MILLION': '0.4'}
+ENV = {'DOGREADER_SUMMARIES_ENABLED': '1', 'DOGREADER_SUMMARY_MODEL': SUMMARY_MODEL,
+       'DOGREADER_SUMMARY_REGION': 'global',
+       'DOGREADER_SUMMARY_INPUT_USD_PER_MILLION': '0.25',
+       'DOGREADER_SUMMARY_OUTPUT_USD_PER_MILLION': '1.50'}
 
 
 class MemoryStore:
@@ -60,7 +61,8 @@ class SummariesTest(unittest.TestCase):
         self.assertIsNone(api.estimate({'text': TEXT, 'depth': 'brief'})['estimatedCostUsd'])
 
     def test_disabled_by_default_and_unapproved_model_rejected(self):
-        for env in ({}, dict(ENV, DOGREADER_SUMMARY_MODEL='client-chosen-expensive-model')):
+        for env in ({}, dict(ENV, DOGREADER_SUMMARY_MODEL='client-chosen-expensive-model'),
+                    dict(ENV, DOGREADER_SUMMARY_MODEL='gemini-2.5-flash-lite')):
             with self.assertRaises(SummaryError) as caught:
                 SummaryService(self.store, self.generate, env).estimate({'text': TEXT, 'depth': 'brief'})
             self.assertEqual(caught.exception.status, 503)
@@ -82,7 +84,14 @@ class SummariesTest(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(first['summary'], SUMMARY)
-        self.assertAlmostEqual(first['usage']['costUsd'], 0.00003)
+        self.assertAlmostEqual(first['usage']['costUsd'], 0.0001)
+
+    def test_region_must_be_explicit_and_supported_without_fallback(self):
+        for location in ('', 'us-central1'):
+            api = SummaryService(self.store, self.generate, dict(ENV, DOGREADER_SUMMARY_REGION=location))
+            with self.assertRaises(SummaryError):
+                api.summarize({'text': TEXT, 'depth': 'brief'})
+        self.assertEqual(self.calls, [])
 
     def test_identity_changes_with_text_depth_and_model(self):
         ids = [request_id(TEXT, 'brief', 'model'), request_id(TEXT + ' More.', 'brief', 'model'),
@@ -130,6 +139,25 @@ class SummariesTest(unittest.TestCase):
         for phrase in ('untrusted data', 'central argument', 'qualifications',
                        'Do not invent', 'outside facts', 'correlation into causation'):
             self.assertIn(phrase, SYSTEM)
+
+    def test_verified_model_payload_preserves_exact_source_and_disables_tools(self):
+        text = TEXT + '\n\n😀 e\u0301  \n'
+        payload = vertex_payload(text, 'brief', 512)
+        self.assertTrue(payload['contents'][0]['parts'][0]['text'].endswith(text))
+        config = payload['generationConfig']
+        self.assertEqual(config['thinkingConfig'], {'thinkingLevel': 'MINIMAL'})
+        self.assertNotIn('thinkingBudget', config['thinkingConfig'])
+        self.assertNotIn('tools', payload)
+        self.assertEqual(config['maxOutputTokens'], 512)
+
+    def test_split_provider_text_parts_are_not_rewritten(self):
+        response = self.generate(TEXT, 'brief', SUMMARY_MODEL, 512)
+        response['candidates'][0]['content']['parts'] = [
+            {'text': SUMMARY[:70]}, {'text': 'internal reasoning', 'thought': True},
+            {'text': SUMMARY[70:] + '\n\n  😀 e\u0301  '}]
+        api = SummaryService(self.store, lambda *args: response, ENV)
+        self.assertEqual(api.summarize({'text': TEXT, 'depth': 'brief'})['summary'],
+                         SUMMARY + '\n\n  😀 e\u0301  ')
 
 
 if __name__ == '__main__':

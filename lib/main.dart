@@ -151,7 +151,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
   void openArticle(ImportedArticle article, bool narration) {
     final book = articleBook(article);
     if (narration) {
-      Navigator.push(context, MaterialPageRoute<void>(builder: (_) => NarrationQueueScreen(book: book)));
+      Navigator.push(context, MaterialPageRoute<void>(builder: (_) => NarrationQueueScreen(
+        book: book, onSave: (chapter, offset) => saveProgress(book.id, chapter, offset))));
     } else {
       openBook(book, articleText: true);
     }
@@ -750,7 +751,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => NarrationQueueScreen(book: book),
+                builder: (_) => NarrationQueueScreen(book: book,
+                  onSave: (chapter, offset) => saveProgress(book.id, chapter, offset)),
               ),
             ),
           ),
@@ -812,7 +814,7 @@ class ChapterListScreen extends StatelessWidget {
             onPressed: () => Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => NarrationQueueScreen(book: book),
+                builder: (_) => NarrationQueueScreen(book: book, onSave: onSave),
               ),
             ),
           ),
@@ -826,7 +828,7 @@ class ChapterListScreen extends StatelessWidget {
               onPressed: () => Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) => NarrationQueueScreen(book: book),
+                  builder: (_) => NarrationQueueScreen(book: book, onSave: onSave),
                 ),
               ),
               icon: const Icon(Icons.headphones),
@@ -915,7 +917,8 @@ class ChapterListScreen extends StatelessWidget {
 
 class NarrationQueueScreen extends StatefulWidget {
   final ImportedBook book;
-  const NarrationQueueScreen({super.key, required this.book});
+  final SavePosition onSave;
+  const NarrationQueueScreen({super.key, required this.book, required this.onSave});
   @override
   State<NarrationQueueScreen> createState() => _NarrationQueueScreenState();
 }
@@ -1175,7 +1178,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       context,
       MaterialPageRoute(
         builder: (_) =>
-            ChapterNarrationScreen(book: widget.book, chapterIndex: index),
+            ChapterNarrationScreen(book: widget.book, chapterIndex: index, onSave: widget.onSave),
       ),
     );
   }
@@ -1972,6 +1975,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
                   builder: (_) => ChapterNarrationScreen(
                     book: widget.book,
                     chapterIndex: audioChapter,
+                    onSave: widget.onSave,
                     initialTextFraction: fraction,
                   ),
                 ),
@@ -2089,6 +2093,9 @@ class _ReadingScreenState extends State<ReadingScreen> {
 class ChapterNarrationScreen extends StatefulWidget {
   final ImportedBook book;
   final int chapterIndex;
+  // Carried for synchronization integration; listening alone never moves a
+  // saved reader offset or guesses one from the audio position.
+  final SavePosition onSave;
   // Present only when arriving from the reader; normal player navigation
   // continues to restore the last saved audio position.
   final double? initialTextFraction;
@@ -2096,6 +2103,7 @@ class ChapterNarrationScreen extends StatefulWidget {
     super.key,
     required this.book,
     required this.chapterIndex,
+    required this.onSave,
     this.initialTextFraction,
   });
 

@@ -1,92 +1,55 @@
 # Dogreader
 
-This feature branch adds **Import a web article** and Android **Share → Dogreader**,
-with local extraction, offline article storage, and reader/narration integration.
-Brief, Standard and Detailed AI summaries have client controls and a usage-review
-step; they require the proposed extension to the existing Cloud Run backend.
-That extension is prepared for coordination, not activated or deployed. See
-[article import implementation and integration notes](docs/ARTICLE_IMPORT.md).
-No APK has been built or published for this feature.
+Dogreader is a Flutter Android EPUB reader with cloud-generated narration,
+offline chapter audio, saved reading/listening positions, background and
+continuous playback, Android media controls, and Light / Dark / Follow system
+appearance settings. Reader page jumps, publisher scene spacing, read-to-audio
+seeking, chapter repair/download/deletion and narration engine/voice selection
+are retained from the complete build-135 source.
 
-Build 131 starts from build 129, commit
-`26fd3ef70978c686a2ac09ca0bf655ac7add600e`, and ports the Kokoro narration
-changes only. Build 130 used an older baseline and is superseded.
+## Development baseline
 
-The full build-129 ancestry, reader and EPUB styling, page jump, read-to-audio
-seeking, Light / Dark / Follow system themes, recording repair/deletion,
-background audio handler and continuous playback are retained. The existing
-reader/theme/audio modules, Android identity/signing files, dependencies and
-all existing regression test files are unchanged. CI checks these against the
-pinned baseline before building.
+Use **`dogreader-oct22-update`**, the repository's sole development/default
+branch. Create new task branches from its current remote tip. Historical feature,
+build, fix and delivery branches are retained for reference, not as development
+bases. Read [AGENTS.md](AGENTS.md) before making changes.
 
-## Narration
+The accepted app source is build **135**:
+`cdf4227dc6a966b20e24f61179ac953b22689024`. Consolidation preserves its ancestry
+and every application, Android/signing, asset, dependency, tool and regression
+file byte-for-byte. Only documentation and workflow organization change.
+The default branch also retains its former delivery commit and PR #20's history.
 
-Open a book's chapters and **Generate narration**. Choose **Google Chirp** or
-**Kokoro**, then a voice. Google retains Achernar, Charon, Kore, Puck and the
-existing Oliver (Cheap) option; backend voice availability is unchanged. Kokoro
-provides George, Fable, Daniel and Lewis. The preview button uses the cloud
-queue and cached samples. Engine and voice defaults persist across launches.
-Existing jobs keep their original engine, voice, model and settings during retries.
-Missing engine fields retain Google behavior. Each recording row identifies its
-stored engine/voice; imported audio without provenance remains labeled unknown.
+Build 135 prevents accidental terminal media-session idle during decoder
+recovery and chapter preparation. Preserve that lifecycle correction and the
+existing playback architecture. See [the investigation](docs/BUILD_135_MEDIA_SESSION.md).
 
-The original **Repair audio from cloud** and **Delete chapter audio** controls
-remain. Explicit **Regenerate narration** retains the previous local recording
-until the complete replacement downloads successfully. Failed generation never
-changes engines or voices. Existing local playback and seeking work offline.
-Credentials for synthesis stay on the server; the app retains its existing
-private API access token for the Dogreader endpoint.
+## Install the existing build
 
-Kokoro requires the matching [backend PR](https://github.com/timpac/dogreader-cloud/pull/5)
-and separately approved deployment/generation. This app release does not deploy
-or run cloud generation. No Kokoro generation measurements are claimed here.
+Open [GitHub Release v135](https://github.com/timpac/dogreader/releases/tag/v135)
+and tap **Dogreader-135.apk** under **Assets**. Install as an update; never
+uninstall or clear storage. Package: `com.example.audiobook_app`.
 
-## Build and verification
+APK SHA-256:
+`48af8661b9287c225479a5dafb0a786b2c2fad4343f0b8d3b0bd432368351d1b`.
+The release, tag, asset and signing identity are preserved; consolidation does
+not create a new APK or alter data on any phone.
 
-GitHub Actions runs strict full Flutter analysis, the full build-129 regression
-suite plus the new narration tests, then builds signed APK **131** with the
-original signing identity. Certificate, package, version and uploaded bytes are
-verified. `python3 tools/check_build129.py` checks baseline ancestry, 53 unchanged
-baseline files and unchanged book/reader/player screen code outside narration.
+## Verification and releases
 
-Before a release asset is uploaded, `tools/verify_android_screens.py` installs
-that exact APK on an isolated Android 13 emulator, opens a real two-chapter EPUB,
-checks the actual library/chapter/reader/page-jump/player/narration screens,
-Light/Dark/Follow system settings, persisted engine/voice and restart behavior.
-It uses local synthetic tone audio for real decoder playback/pause/seeking.
-It never submits a preview or generation job and has no cloud host/token.
-Actual APK screenshots, UI hierarchies and a verification report are retained
-as an Actions artifact for review before publication.
+[Build 135 run 42289882251](https://github.com/timpac/dogreader/actions/runs/42289882251)
+passed analysis, 81 regression tests, compilation, original signing/package/
+version verification and downloaded release-asset hash verification. Actions
+artifact storage failed; the verified Release asset is the delivery record.
+The owner reports build 135 appears to resolve the delayed external-control
+failure. Sustained Pixel/Bluetooth/lock-screen acceptance remains separate from
+automated evidence; no new physical-device result is claimed by consolidation.
 
-Physical phone checks remain for Pixel/Android-beta behavior, notification and
-lock-screen delivery, interruptions, installed-user data and in-place updates.
-Install as an update; do not uninstall or clear storage. Emulator checks do not
-establish actual Kokoro cloud generation or every physical-device behavior.
+Future APKs use the manual-only [release process](docs/RELEASING.md).
+Pushes and PRs do not automatically build, test, publish or deploy. Historical
+workflow definitions are archived outside the Actions workflow directory.
 
-## Build 131 delivery evidence
-
-APK source: `a60e87c232b8626672035c2730ff3f37f6a0e6c7`.
-APK SHA-256: `b50cc3734734769bbc99769ff61e82a769e594e7095be54792269c43ad25b692`.
-The signed candidate is unchanged; later commits correct only verification tools
-and documentation. Full strict analysis and all 48 tests passed in
-[Actions](https://github.com/timpac/dogreader/actions/runs/41331380907).
-
-Actual Android APK captures were visually reviewed:
-[library](docs/screenshots/build-131/library.png),
-[chapters](docs/screenshots/build-131/chapters.png),
-[reader](docs/screenshots/build-131/reader.png),
-[page jump](docs/screenshots/build-131/page-jump.png), and
-[player](docs/screenshots/build-131/player.png).
-They come from [the native run](https://github.com/timpac/dogreader/actions/runs/41333693025),
-using a real EPUB and local synthetic audio, not mocked screen widgets.
-
-The extended native script did **not** pass end to end: initial runner disk and
-install-time limits were corrected, and later runs encountered emulator System UI
-ANRs. The first native run reached the actual player, confirmed playback/pause,
-and stopped at a seek assertion that targeted the accessibility thumb rather than
-the track. That checker coordinate was corrected; native seek, complete dark-mode
-navigation, and restart verification remain unconfirmed. Existing reader/theme/
-audio source and all build-129 regression tests are unchanged and pass. No full
-native audio result or physical-phone validation is claimed. At the user's request
-to finish promptly, publication relies on the completed baseline, full test,
-signing and actual book/chapter/reader screen checks, with these limits explicit.
+The backend is maintained separately in `timpac/dogreader-cloud`. An app build
+does not deploy it. This consolidation changes no backend code or infrastructure;
+current queue operation and real production narration are not verified here.
+See [project status](PROJECT_STATUS.md) and [baseline evidence](docs/BASELINE_135.md).

@@ -4,15 +4,30 @@ import 'dart:io';
 
 import 'article_import.dart';
 
+// Enable only in a separately approved rollout after backend acceptance.
+const articleSummariesEnabled = bool.fromEnvironment(
+  'DOGREADER_ENABLE_ARTICLE_SUMMARIES',
+  defaultValue: false,
+);
+const articleSummariesDisabledMessage =
+    'AI summaries are disabled pending backend integration and rollout approval. The original remains available.';
+
 /// Uses user-configured narration credentials read-only. No provider key in APK.
 /// Additive backend contract is prepared in backend_proposal, pending coordination.
 class ArticleSummaryClient {
-  ArticleSummaryClient(this.documents);
+  ArticleSummaryClient(
+    this.documents, {
+    this.enabled = articleSummariesEnabled,
+  });
   final Directory documents;
+  final bool enabled;
   Future<Map<String, dynamic>> _request(
     String path,
     Map<String, dynamic> payload,
   ) async {
+    if (!enabled) {
+      throw const ArticleImportException(articleSummariesDisabledMessage);
+    }
     final settings = File('${documents.path}/dogreader_queue.json');
     if (!await settings.exists()) {
       throw const ArticleImportException(
@@ -68,7 +83,9 @@ class ArticleSummaryClient {
             );
           }
         }
-        final result = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+        final decoded = jsonDecode(utf8.decode(bytes));
+        if (decoded is! Map<String, dynamic>) throw const FormatException();
+        final result = decoded;
         if (response.statusCode >= 300) {
           throw ArticleImportException(
             result['error'] as String? ??
@@ -111,7 +128,8 @@ class ArticleSummaryClient {
       'depth': depth.name,
       'contentHash': article.contentHash,
     });
-    final text = result['summary'] as String? ?? '';
+    final value = result['summary'];
+    final text = value is String ? value : '';
     if (text.trim().length < 100 || text.length > 50000) {
       throw const ArticleImportException(
         'The server did not return a complete readable summary. The original article remains saved.',
@@ -124,13 +142,10 @@ class ArticleSummaryClient {
       published: article.published,
       depth: depth,
       originalId: article.id,
+      originalContentHash: article.contentHash,
       usage: (result['usage'] as Map?)?.cast<String, dynamic>(),
-      blocks: text
-          .trim()
-          .split(RegExp(r'\n\s*\n'))
-          .where((p) => p.trim().isNotEmpty)
-          .map((p) => ArticleBlock(p.trim()))
-          .toList(),
+      // Preserve the returned version exactly; never rewrite the source article.
+      blocks: text.split('\n\n').map((p) => ArticleBlock(p)).toList(),
     );
   }
 }
