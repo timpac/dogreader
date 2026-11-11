@@ -50,7 +50,16 @@ Future<File?> generateNarrationPreview({
   if (host.isEmpty || token.isEmpty) {
     throw StateError('Connect Dogreader Cloud in narration settings first.');
   }
-  final text = sample.length > 300 ? sample.substring(0, 300) : sample;
+  var end = sample.length > 300 ? 300 : sample.length;
+  if (end > 0 &&
+      end < sample.length &&
+      sample.codeUnitAt(end - 1) >= 0xd800 &&
+      sample.codeUnitAt(end - 1) <= 0xdbff &&
+      sample.codeUnitAt(end) >= 0xdc00 &&
+      sample.codeUnitAt(end) <= 0xdfff) {
+    end--;
+  }
+  final text = sample.substring(0, end);
   if (text.trim().isEmpty) return null;
   var response = await narrationRequest(
     host,

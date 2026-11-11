@@ -124,3 +124,91 @@ preview restoration and media-session lifecycle regressions are also checked.
 No full chapter was synthesized, no TTS service was contacted and no APK was
 built or released. Actual engine pronunciation and sustained Android playback
 still need device/listening acceptance in an authorized future build.
+
+## Final integration handoff
+
+The dictionary is ready as a component for coordinated integration. This is not
+approval to merge a combined client: #22/#24 are still separate, unmerged
+candidates, and no mixed-branch runtime or device acceptance is claimed.
+
+### Review fixes and compatibility
+
+New snapshots use matching `version: 2`, treating astral letters and combining
+marks as word characters without changing UTF-16 coordinate units. Unversioned
+snapshots read as version 1 and keep the original matching behavior on retry;
+regeneration opts into version 2. Unknown versions are rejected rather than
+silently reinterpreted. Preview truncation also respects surrogate pairs.
+
+Audio installation now retains the prior MP3 until its dictionary/offset metadata
+has been atomically written through a temporary state file. A handled metadata
+write failure rolls back the MP3 replacement; a failed first download is removed.
+The optional `replaceNarrationFile.afterReplace` hook is the metadata commit
+boundary. This handles reported I/O failures, not a journaled transaction across
+both files during abrupt process/device termination. #22 must retain its sidecar
+invalidation around this boundary and keep failed replacement metadata unchanged.
+
+### Article import (PR #24)
+
+Reviewed `feature/article-import-summary` at
+`46048e5dee8733ba4053434b945e7f51d60135df`. Required integration changes:
+
+1. Keep `ImportedArticle.chapter`'s exact saved block text and two-newline joins.
+   Do not run it through the EPUB parser, which applies different whitespace and
+   indentation rules. During its existing block loop, classify each whole block
+   with exported `isDecorativeNarrationSeparator(block.text)` and append a
+   `StyledRange(start, start + block.text.length)` to `narrationSeparators` when
+   true. Pass those ranges into `ReaderChapter`; preserve existing heading ranges.
+   Only pass `semantic: true` when retained import metadata proves a separator.
+   Existing saved articles with no semantic metadata use the conservative common
+   ornament whitelist; ambiguous punctuation remains audible or uses an explicit
+   user silence rule. The direct-chapter adapter is exercised with synthetic text.
+2. Retain #23's shared `NarrationQueueScreen` submission path for both articles
+   and summaries: freeze dictionary version/rules, derive `narration_offsets`,
+   preserve these fields on save/download/retry. Add article/summary IDs to the
+   dictionary selector's book list. Global rules apply to both; an original's
+   per-book rule does not silently propagate to its separately identified summary.
+3. Summarization consumes immutable readable article text before dictionary
+   transformations. A summary has its own immutable text, book ID, reading/audio
+   state and maps. Never reuse an original's audio or offsets for a summary.
+4. With #22, thread `onSave: (chapter, offset) => saveProgress(book.id, chapter,
+   offset)` through the article's queue/player navigation; those parameters are
+   required in that branch. Combine library loading for EPUBs/articles without
+   rewriting their persisted text. Resolve shared `lib/main.dart`/README edits
+   against the canonical branch; preserve its manual-only release workflow.
+
+### Synchronization and eventual whole-book narration
+
+The #22 contract reviewed is `a97ed9cc08e735a4dfc7b1f0721f0b0492fb048e`.
+Its spoken-to-reader composition, explicit silent-span coverage, exact original
+and spoken text digests, reviewed word timing, and audio/job binding remain the
+integration requirements described above. Dart reader/edit offsets are UTF-16;
+text digests are over exact UTF-8. Backend code-point/byte indexes must be
+converted explicitly. Keep each recording's saved matching version, not the
+latest dictionary, and preserve the empty-XHTML-title parser correction from #22.
+Do not weaken validation to enable synchronization on transformed text.
+
+The existing Entire book selector already calls the same `generate` loop for
+individual chapter jobs; there is no separate dictionary policy per selection.
+The focused multi-chapter check verifies one frozen book configuration and
+independent chapter-local maps, including scene separators. A future whole-book
+planner must freeze dictionary/voice/settings and source identity once before
+estimation/approval, then reuse them for every chapter and retry. Estimate the
+transformed narration input. Keep original chapter indexes, even for an entirely
+silent chapter (currently reported as an error without TTS); an eventual planner
+must represent deliberate omission explicitly. If chapters are concatenated,
+store original/spoken UTF-16 chapter bases including exact boundary text and an
+audio timeline per chapter, while retaining chapter-local maps. Do not use summed
+spoken lengths as saved reading offsets or use a chapter fraction as whole-book
+audio time. No whole-book planner, concatenation, new queue or backend was added.
+
+### Verification scope
+
+Reused the earlier 53 passing focused tests for unchanged UI, seek and transport
+behavior. New/changed checks reproduced the review failures before the fixes,
+then verified Unicode boundaries, legacy snapshot retry semantics, preview
+truncation, metadata-failure rollback, per-chapter consistency and the article
+block adapter. The 27 distinct focused tests across the six affected test files passed,
+with clean analysis of changed code. Only affected test files were run for this
+review; no full-suite repetition, synthesis, APK build, deployment or merge.
+Actual engine pronunciation and sustained physical-device playback remain
+acceptance work. Other agents' branches were inspected read-only.

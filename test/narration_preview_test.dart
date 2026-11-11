@@ -97,6 +97,11 @@ void main() {
     );
   });
 
+  test('short preview limit never splits a UTF-16 surrogate pair', () async {
+    await preview(sample: '${List.filled(299, 'x').join()}😀');
+    expect(payloads.single['text'], List.filled(299, 'x').join());
+  });
+
   test(
     'unsupported engine/voice is reported without playing another engine',
     () async {

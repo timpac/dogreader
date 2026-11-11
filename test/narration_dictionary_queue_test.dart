@@ -112,6 +112,21 @@ void main() {
         });
         queue.host = 'http://127.0.0.1:${server.port}';
         queue.token = 'test';
+        // A metadata commit failure must not leave the new MP3 paired with
+        // the old recording's offsets. Simulate an unwritable state target.
+        final savedState = await stateFile.readAsString();
+        await stateFile.delete();
+        final blockedState = Directory(stateFile.path);
+        await blockedState.create();
+        await expectLater(
+          HttpOverrides.runWithHttpOverrides(() async {
+            await queue.downloadAudio(0, 'new');
+          }, _RealHttp()),
+          throwsA(isA<FileSystemException>()),
+        );
+        expect(await audio.readAsBytes(), List.filled(1200, 7));
+        await blockedState.delete();
+        await stateFile.writeAsString(savedState);
         await HttpOverrides.runWithHttpOverrides(() async {
           await queue.downloadAudio(0, 'new');
         }, _RealHttp());

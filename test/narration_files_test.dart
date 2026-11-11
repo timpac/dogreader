@@ -39,6 +39,20 @@ void main() {
     expect(await target.readAsBytes(), List.filled(2200, 2));
     expect(await File('${target.path}.bak').exists(), isFalse);
   });
+  test('metadata commit failure restores old audio or removes a failed first download', () async {
+    for (final hadRecording in [true, false]) {
+      if (!hadRecording) await target.delete();
+      await expectLater(replaceNarrationFile(target, Stream.value(List.filled(2200, 2)),
+        contentLength: 2200, afterReplace: () async {
+          throw const FileSystemException('Metadata cannot be saved');
+        }), throwsA(isA<FileSystemException>()));
+      expect(await target.exists(), hadRecording);
+      if (hadRecording) expect(await target.readAsBytes(), List.filled(2000, 1));
+      expect(await File('${target.path}.part').exists(), isFalse);
+      expect(await File('${target.path}.bak').exists(), isFalse);
+    }
+  });
+
   test('delete clears only this chapter audio and cloud job; reading progress survives', () async {
     final state = File('${root.path}/narration_state.json');
     await state.writeAsString(jsonEncode({'book:0': {'path': target.path, 'positionMs': 9000}, 'book:1': {'positionMs': 7000}}));

@@ -17,6 +17,14 @@ class ReaderChapter {
       {this.narrationSeparators = const []});
 }
 
+/// Classify a whole source block without reparsing or changing its text. Article
+/// import can use the same policy while retaining its own block offsets.
+bool isDecorativeNarrationSeparator(String text, {bool semantic = false}) {
+  final compact = text.replaceAll(RegExp(r'\s'), '');
+  return RegExp(r'^(?:\*{3,}|[⁂⁎❦❧✦✧]+|[•·]{3,})$').hasMatch(compact) ||
+      (semantic && RegExp(r'^[*⁂⁎❦❧✦✧•·♦◇◆◊—–~#=\-]+$').hasMatch(compact));
+}
+
 // EPUB paths are archive paths, never network URLs. Resolve relative links
 // against their owning document, including escaped names and parent segments.
 String? epubResourcePath(String owner, String href) {
@@ -128,9 +136,7 @@ ReaderChapter parseReaderChapter(String title, String rawHtml,
       // Only whole extracted blocks qualify. Inline punctuation, multiplication,
       // footnote stars and emphasized prose remain audible. Keep reader text
       // and every existing style/position offset exactly as before.
-      final compact = text.replaceAll(RegExp(r'\s'), '');
-      if (RegExp(r'^(?:\*{3,}|[⁂⁎❦❧✦✧]+|[•·]{3,})$').hasMatch(compact) ||
-          (pendingSemanticSeparator && RegExp(r'^[*⁂⁎❦❧✦✧•·♦◇◆◊—–~#=\-]+$').hasMatch(compact))) {
+      if (isDecorativeNarrationSeparator(text, semantic: pendingSemanticSeparator)) {
         separators.add(StyledRange(base, base + text.length));
       }
       for (final range in pendingRanges) {

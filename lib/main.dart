@@ -1236,19 +1236,25 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       final target = File('${folder.path}/${widget.book.id}_$index.mp3');
       await replaceNarrationFile(target, response,
           contentLength: response.contentLength,
-          beforeReplace: () => audioHandler.unloadChapter(widget.book.id, index));
-      final stateFile = File('${root.path}/narration_state.json');
-      Map<String, dynamic> data = {};
-      if (await stateFile.exists()) {
-        try {
-          data = jsonDecode(
-            await stateFile.readAsString(),
-          ) as Map<String, dynamic>;
-        } catch (_) {}
-      }
-      data['${widget.book.id}:$index'] = {'path': target.path, 'positionMs': 0,
-        ...recordingMetadata(jobs[index] ?? {})};
-      await stateFile.writeAsString(jsonEncode(data));
+          beforeReplace: () => audioHandler.unloadChapter(widget.book.id, index),
+          afterReplace: () async {
+            final stateFile = File('${root.path}/narration_state.json');
+            Map<String, dynamic> data = {};
+            if (await stateFile.exists()) {
+              try {
+                data = jsonDecode(await stateFile.readAsString()) as Map<String, dynamic>;
+              } catch (_) {}
+            }
+            data['${widget.book.id}:$index'] = {'path': target.path, 'positionMs': 0,
+              ...recordingMetadata(jobs[index] ?? {})};
+            final temporary = File('${stateFile.path}.tmp');
+            try {
+              await temporary.writeAsString(jsonEncode(data), flush: true);
+              await temporary.rename(stateFile.path);
+            } finally {
+              if (await temporary.exists()) await temporary.delete();
+            }
+          });
       jobs[index] = {...?jobs[index], 'status': 'ready', 'id': id};
       jobs[index]!.remove('previousRecording');
     } finally {

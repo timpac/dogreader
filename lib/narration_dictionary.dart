@@ -35,21 +35,29 @@ class NarrationRule {
 class NarrationDictionaryConfig {
   final List<NarrationRule> rules;
   final bool ignoreSeparators;
+  final int version;
   const NarrationDictionaryConfig({
     this.rules = const [],
     this.ignoreSeparators = true,
+    this.version = 2,
   });
-  factory NarrationDictionaryConfig.fromJson(Map<String, dynamic> data) =>
-      NarrationDictionaryConfig(
-        rules: (data['rules'] as List? ?? [])
-            .map(
-              (r) =>
-                  NarrationRule.fromJson(Map<String, dynamic>.from(r as Map)),
-            )
-            .toList(),
-        ignoreSeparators: data['ignoreSeparators'] == true,
-      );
+  factory NarrationDictionaryConfig.fromJson(Map<String, dynamic> data) {
+    final version = data['version'] as int? ?? 1;
+    if (version != 1 && version != 2) {
+      throw const FormatException('Unsupported narration dictionary version');
+    }
+    return NarrationDictionaryConfig(
+      rules: (data['rules'] as List? ?? [])
+          .map(
+            (r) => NarrationRule.fromJson(Map<String, dynamic>.from(r as Map)),
+          )
+          .toList(),
+      ignoreSeparators: data['ignoreSeparators'] == true,
+      version: version,
+    );
+  }
   Map<String, dynamic> toJson() => {
+    'version': version,
     'rules': rules.map((r) => r.toJson()).toList(),
     'ignoreSeparators': ignoreSeparators,
   };
@@ -73,16 +81,37 @@ class NarrationDictionaryConfig {
     }
     // Literal, case-sensitive, single-pass matching. Word edges keep a name
     // such as Ann from replacing the same letters inside another word.
-    final word = RegExp(r'[\p{L}\p{N}_]', unicode: true);
+    // Pre-review queued snapshots have no version. Preserve their exact input
+    // on retry, including the old word-edge behavior; regeneration opts into v2.
+    final word = RegExp(
+      version == 1 ? r'[\p{L}\p{N}_]' : r'[\p{L}\p{M}\p{N}_]',
+      unicode: true,
+    );
+    bool wordAt(String text, int offset) {
+      if (version == 1) return word.hasMatch(text[offset]);
+      var start = offset, end = offset + 1;
+      final unit = text.codeUnitAt(offset);
+      if (unit >= 0xdc00 && unit <= 0xdfff && offset > 0) {
+        final previous = text.codeUnitAt(offset - 1);
+        if (previous >= 0xd800 && previous <= 0xdbff) {
+          start--;
+        }
+      } else if (unit >= 0xd800 && unit <= 0xdbff && end < text.length) {
+        final next = text.codeUnitAt(end);
+        if (next >= 0xdc00 && next <= 0xdfff) {
+          end++;
+        }
+      }
+      return word.hasMatch(text.substring(start, end));
+    }
+
     bool matches(NarrationRule rule, int at) {
       final end = at + rule.original.length;
       return source.startsWith(rule.original, at) &&
-          !(at > 0 &&
-              word.hasMatch(rule.original[0]) &&
-              word.hasMatch(source[at - 1])) &&
+          !(at > 0 && wordAt(rule.original, 0) && wordAt(source, at - 1)) &&
           !(end < source.length &&
-              word.hasMatch(rule.original[rule.original.length - 1]) &&
-              word.hasMatch(source[end]));
+              wordAt(rule.original, rule.original.length - 1) &&
+              wordAt(source, end));
     }
 
     for (var at = 0; at < source.length;) {

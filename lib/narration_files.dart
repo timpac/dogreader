@@ -3,7 +3,8 @@ import 'dart:io';
 
 /// Replace a downloaded recording only after validating the complete response.
 Future<void> replaceNarrationFile(File target, Stream<List<int>> bytes,
-    {required int contentLength, Future<void> Function()? beforeReplace}) async {
+    {required int contentLength, Future<void> Function()? beforeReplace,
+    Future<void> Function()? afterReplace}) async {
   final temp = File('${target.path}.part');
   try {
     await bytes.pipe(temp.openWrite());
@@ -18,13 +19,21 @@ Future<void> replaceNarrationFile(File target, Stream<List<int>> bytes,
       await target.rename(backup.path);
       try {
         await temp.rename(target.path);
-        await backup.delete();
+        await afterReplace?.call();
       } catch (_) {
+        if (await target.exists()) await target.delete();
         if (await backup.exists()) await backup.rename(target.path);
         rethrow;
       }
+      await backup.delete();
     } else {
       await temp.rename(target.path);
+      try {
+        await afterReplace?.call();
+      } catch (_) {
+        if (await target.exists()) await target.delete();
+        rethrow;
+      }
     }
   } finally {
     if (await temp.exists()) await temp.delete();
