@@ -1,3 +1,6 @@
+// Keep this pure-Dart diagnostic harness runnable without Flutter imports.
+// ignore_for_file: avoid_relative_lib_imports, avoid_print
+
 import '../lib/whole_book_preflight.dart';
 import '../lib/whole_book_progress.dart';
 

@@ -9,7 +9,6 @@ are retained from the complete build-135 source.
 
 ## Narration Dictionary
 
-
 Open **Settings → Narration Dictionary**, or **Narration Dictionary** on a book's
 Generate narration screen. Choose Global or This Book to add, edit, disable or
 delete pronunciation and Do Not Narrate rules. Per-book entries override matching

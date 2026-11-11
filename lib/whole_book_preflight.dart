@@ -58,8 +58,9 @@ class WholeBookChapter {
 
   String? get ineligibleReason {
     if (characters < 100) return 'Fewer than 100 characters';
-    if (characters > 250000)
+    if (characters > 250000) {
       return 'Exceeds the 250,000-character chapter limit';
+    }
     if (text.trim().isEmpty) return 'No narratable text';
     return null;
   }
