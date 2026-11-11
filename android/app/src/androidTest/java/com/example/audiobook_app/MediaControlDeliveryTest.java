@@ -162,6 +162,23 @@ public class MediaControlDeliveryTest {
             if (system) {
                 // Anchor to our own media card, rather than another app's Play.
                 AccessibilityNodeInfo title = find(root, "Control probe");
+                if (title == null) {
+                    List<AccessibilityNodeInfo> nodes = new ArrayList<>();
+                    nodes.add(root);
+                    for (int i = 0; i < nodes.size() && i < 4000; i++) {
+                        AccessibilityNodeInfo node = nodes.get(i);
+                        if (node.isVisibleToUser() &&
+                                "com.android.systemui:id/qs_media_controls".equals(node.getViewIdResourceName()) &&
+                                text(node.getContentDescription()).contains("Control probe by Synthetic fixture")) {
+                            title = node;
+                            break;
+                        }
+                        for (int child = 0; child < node.getChildCount(); child++) {
+                            AccessibilityNodeInfo next = node.getChild(child);
+                            if (next != null) nodes.add(next);
+                        }
+                    }
+                }
                 for (int depth = 0; title != null && depth < 12; depth++, title = title.getParent()) {
                     AccessibilityNodeInfo control = find(title, label);
                     if (control != null && "com.android.systemui".equals(text(control.getPackageName()))) {
@@ -225,6 +242,26 @@ public class MediaControlDeliveryTest {
         assertTrue("Touch up not injected", automation.injectInputEvent(release, true));
         press.recycle();
         release.recycle();
+    }
+
+    private void openNotificationShade() throws Exception {
+        shell("am start -W -a android.intent.action.MAIN -c android.intent.category.HOME");
+        long deadline = SystemClock.uptimeMillis() + 10000;
+        Rect display = null;
+        while (SystemClock.uptimeMillis() < deadline) {
+            AccessibilityNodeInfo root = automation.getRootInActiveWindow();
+            if (root != null && text(root.getPackageName()).contains("launcher")) {
+                display = new Rect();
+                root.getBoundsInScreen(display);
+                break;
+            }
+            SystemClock.sleep(100);
+        }
+        assertNotNull("Launcher must be visible before pulling down the shade", display);
+        // Match a user's pull-down, after Home has settled. An expand command
+        // issued during the launcher transition can be closed by that transition.
+        int x = display.width() / 4;
+        shell("input swipe " + x + " 3 " + x + " " + (display.height() * 3 / 4) + " 500");
     }
 
     private void command(String stage, String label, String method, Boolean playing,
@@ -500,8 +537,7 @@ public class MediaControlDeliveryTest {
                 assertNativeOutput(true);
             }
             result("seek-pause-play-no-deadlock", state());
-            shell("input keyevent KEYCODE_HOME");
-            shell("cmd statusbar expand-notifications");
+            openNotificationShade();
             command("shade-touch-pause", "Pause", "pause", false, 0, true);
             command("shade-touch-play", "Play", "play", true, 0, true);
             shell("cmd statusbar collapse");
