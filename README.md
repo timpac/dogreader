@@ -7,6 +7,28 @@ appearance settings. Reader page jumps, publisher scene spacing, read-to-audio
 seeking, chapter repair/download/deletion and narration engine/voice selection
 are retained from the complete build-135 source.
 
+## Narration Dictionary (feature branch)
+
+Open **Settings → Narration Dictionary**, or **Narration Dictionary** on a book's
+Generate narration screen. Choose Global or This Book to add, edit, disable or
+delete pronunciation and Do Not Narrate rules. Per-book entries override matching
+global entries; a disabled book entry opts out of that global entry. Matches are
+literal, case-sensitive and bounded at word edges. The global decorative-separator
+setting defaults on, keeping standalone `***`, `⁂` and common EPUB ornaments
+visible while silencing them in newly generated narration. Prose punctuation and
+inline emphasis remain intact.
+
+Preview an unsaved pronunciation or a short sample with the selected narration
+engine/voice. Settings uses the last saved narration voice; choose another on the
+book's Generate narration screen. Preview requires the existing Cloud connection
+and engine support. It submits at most 300 characters and uses temporary audio.
+
+Changes affect new jobs only. Affected recordings say **Dictionary changed —
+regenerate to apply**. Use the existing Regenerate narration confirmation to
+replace audio; the current download survives until its replacement downloads
+successfully. See [implementation and alignment notes](docs/NARRATION_DICTIONARY.md).
+This feature has no APK or backend deployment yet.
+
 ## Development baseline
 
 Use **`dogreader-oct22-update`**, the repository's sole development/default

@@ -23,6 +23,9 @@ export 'reader_content.dart' show ReaderChapter, StyledRange;
 import 'narration_seek.dart';
 import 'narration_files.dart';
 import 'narration_options.dart';
+import 'narration_dictionary.dart';
+import 'narration_dictionary_screen.dart';
+import 'narration_preview.dart';
 
 late final DogreaderAudioHandler audioHandler;
 
@@ -43,7 +46,35 @@ Future<void> main() async {
 
   final appearance = ThemePreferences();
   await appearance.load();
+  await narrationDictionary.load();
   runApp(AudiobookApp(appearance: appearance));
+}
+
+/// Shared entry point for Settings and the book's narration queue.
+Future<void> openNarrationDictionary(BuildContext context, {
+  required Map<String, String> bookTitles, String? bookId,
+  NarrationPreference? preference, String? host, String? token,
+}) async {
+  Map<String, dynamic> saved = {};
+  if (preference == null || host == null || token == null) {
+    try {
+      final root = await getApplicationDocumentsDirectory();
+      saved = jsonDecode(await File('${root.path}/dogreader_queue.json').readAsString()) as Map<String, dynamic>;
+    } catch (_) {}
+  }
+  final selected = preference ?? NarrationPreference.fromJson(saved);
+  if (!context.mounted) return;
+  await Navigator.push(context, MaterialPageRoute<void>(builder: (_) => NarrationDictionaryScreen(
+    dictionary: narrationDictionary, bookTitles: bookTitles, initialBookId: bookId,
+    previewLabel: recordingLabel(selected.toJson()),
+    onStopPreview: () => audioHandler.stopPreview(),
+    onPreview: (sample, isCurrent) async {
+      final file = await generateNarrationPreview(host: host ?? saved['host'] as String? ?? '',
+        token: token ?? saved['token'] as String? ?? '', preference: selected,
+        sample: sample, isCurrent: isCurrent);
+      if (file != null && isCurrent()) await audioHandler.playPreview(file.path, 'Pronunciation preview');
+    },
+  )));
 }
 
 // Set by GitHub Actions at build time; visible on the library home screen.
@@ -485,6 +516,14 @@ class _LibraryScreenState extends State<LibraryScreen> {
       padding: const EdgeInsets.all(22),
       children: [
         Text('Settings', style: Theme.of(context).textTheme.headlineMedium),
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.record_voice_over_outlined),
+          title: const Text('Narration Dictionary'),
+          subtitle: const Text('Pronunciations and Do Not Narrate rules'),
+          onTap: () => openNarrationDictionary(context,
+            bookTitles: {for (final b in books) b.id: b.title}),
+        ),
         const SizedBox(height: 24),
         Card(
           margin: EdgeInsets.zero,
@@ -856,6 +895,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   }
 
   Future<void> load() async {
+    await narrationDictionary.load();
     try {
       final file = await queueFile;
       if (await file.exists()) {
@@ -919,26 +959,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     String path, [
     Map<String, dynamic>? payload,
   ]) async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
-    try {
-      final req = await client
-          .openUrl(method, endpoint(path))
-          .timeout(const Duration(seconds: 8));
-      req.headers.set('X-Dogreader-Token', token);
-      if (payload != null) {
-        req.headers.contentType = ContentType.json;
-        req.write(jsonEncode(payload));
-      }
-      final response = await req.close().timeout(const Duration(seconds: 15));
-      final body = await utf8.decoder.bind(response).join();
-      final result = jsonDecode(body) as Map<String, dynamic>;
-      if (response.statusCode >= 400) {
-        throw Exception(result['error'] ?? 'HTTP ${response.statusCode}');
-      }
-      return result;
-    } finally {
-      client.close(force: true);
-    }
+    return narrationRequest(host, token, method, path, payload);
   }
 
   Future<void> configure() async {
@@ -1112,45 +1133,11 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     final preference = NarrationPreference(narrationEngine, narrator);
     setState(() { previewing = true; notice = 'Preparing voice preview…'; });
     try {
-      var response = await requestJson('POST', '/dogreader/jobs', {
-        ...preference.toJson(),
-        'title': 'Voice preview',
-        'text': 'Welcome to Dogreader. “Shall we begin?” he asked. '
+      final preview = await generateNarrationPreview(host: host, token: token,
+        preference: preference, sample: 'Welcome to Dogreader. “Shall we begin?” he asked. '
             'Settle in, choose a chapter, and enjoy a few quiet moments with your next story.',
-      });
-      final id = response['id'] as String;
-      for (var attempt = 0; attempt < 60; attempt++) {
-        if (!mounted || sequence != previewSequence) { return; }
-        if (response['status'] == 'ready') { break; }
-        if (response['status'] == 'error') { throw Exception(response['error'] ?? 'Preview generation failed'); }
-        await Future<void>.delayed(const Duration(seconds: 2));
-        response = await requestJson('GET', '/dogreader/jobs/$id');
-      }
-      if (response['status'] != 'ready') { throw Exception('Preview is still queued. Tap Preview voice again to resume.'); }
-      if ((response['engine'] ?? 'google') != preference.engine ||
-          (response['voice'] != null && response['voice'] != preference.voice)) {
-        throw Exception('Server returned a different engine or voice. Update the backend.');
-      }
-      final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
-      late File preview;
-      try {
-        final req = await client.getUrl(endpoint('/dogreader/audio/$id'));
-        req.headers.set('X-Dogreader-Token', token);
-        final audio = await req.close().timeout(const Duration(seconds: 20));
-        if (audio.statusCode != 200) { throw Exception('Preview download failed (${audio.statusCode})'); }
-        final root = await getTemporaryDirectory();
-        preview = File('${root.path}/preview_$id.mp3');
-        final staged = File('${preview.path}.part');
-        await audio.pipe(staged.openWrite());
-        if (await staged.length() < 1000 ||
-            (audio.contentLength >= 0 && await staged.length() != audio.contentLength)) {
-          throw Exception('Preview download was incomplete');
-        }
-        await staged.rename(preview.path);
-      } finally {
-        client.close(force: true);
-      }
-      if (!mounted || sequence != previewSequence) { return; }
+        isCurrent: () => mounted && sequence == previewSequence);
+      if (preview == null || !mounted || sequence != previewSequence) return;
       setState(() => notice = 'Preview: ${recordingLabel(preference.toJson())}');
       await audioHandler.playPreview(preview.path, 'Preview: ${recordingLabel(preference.toJson())}');
     } catch (e) {
@@ -1181,6 +1168,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       jobs[index] = {
         'previousRecording': jobs[index]?['previousRecording'] ?? jobs[index],
         'status': 'waiting', ...preference.toJson(),
+        'narration_dictionary': narrationDictionary.effective(widget.book.id).toJson(),
       };
     });
     await save();
@@ -1198,7 +1186,8 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       notice = null;
     });
     for (final index in selected.toList()..sort()) {
-      jobs[index] = {'status': 'waiting', 'engine': narrationEngine, 'voice': narrator};
+      jobs[index] = {'status': 'waiting', 'engine': narrationEngine, 'voice': narrator,
+        'narration_dictionary': narrationDictionary.effective(widget.book.id).toJson()};
     }
     await save();
     if (mounted) {
@@ -1267,6 +1256,36 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     }
   }
 
+  Map<String, dynamic> chapterPayload(int index) {
+    final chapter = widget.book.chapters[index];
+    final snapshot = jobs[index]?['narration_dictionary'];
+    final transformed = snapshot is Map
+        ? NarrationDictionaryConfig.fromJson(Map<String, dynamic>.from(snapshot)).transform(chapter)
+        : const NarrationDictionaryConfig(ignoreSeparators: false).transform(chapter);
+    if (transformed.text.trim().isEmpty) {
+      throw StateError('This chapter is silent under the current dictionary. Disable its silence rules to generate audio.');
+    }
+    jobs[index]!['narration_offsets'] = transformed.offsets;
+    return {
+      'title': chapter.title, 'text': transformed.text,
+      'engine': jobs[index]?['engine'] ?? 'google',
+      'voice': jobs[index]?['voice'] ?? 'en-US-Chirp3-HD-Achernar',
+      for (final key in ['model_version', 'settings'])
+        if (jobs[index]?.containsKey(key) == true) key: jobs[index]![key],
+    };
+  }
+
+  bool dictionaryChanged(int index) {
+    final job = jobs[index];
+    if (job == null) return false;
+    final chapter = widget.book.chapters[index];
+    final snapshot = job['narration_dictionary'];
+    final old = snapshot is Map
+        ? NarrationDictionaryConfig.fromJson(Map<String, dynamic>.from(snapshot)).transform(chapter).text
+        : chapter.text;
+    return narrationDictionary.effective(widget.book.id).transform(chapter).text != old;
+  }
+
   Future<void> checkJobs() async {
     if (busy || host.isEmpty || token.isEmpty || jobs.isEmpty) return;
     busy = true;
@@ -1291,15 +1310,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         }
         try {
           if (status == 'waiting') {
-            final chapter = widget.book.chapters[index];
-            final response = await requestJson('POST', '/dogreader/jobs', {
-              'title': chapter.title,
-              'text': chapter.text,
-              'engine': jobs[index]?['engine'] ?? 'google',
-              'voice': jobs[index]?['voice'] ?? 'en-US-Chirp3-HD-Achernar',
-              ...{for (final key in ['model_version', 'settings'])
-                if (jobs[index]?.containsKey(key) == true) key: jobs[index]![key]},
-            });
+            final response = await requestJson('POST', '/dogreader/jobs', chapterPayload(index));
             jobs[index] = {
               ...?jobs[index],
               ...recordingMetadata(response),
@@ -1317,15 +1328,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
             if (!e.toString().contains('Unknown job') && !e.toString().contains('Job not found')) {
               rethrow;
             }
-            final chapter = widget.book.chapters[index];
-            final submitted = await requestJson('POST', '/dogreader/jobs', {
-              'title': chapter.title,
-              'text': chapter.text,
-              'engine': jobs[index]?['engine'] ?? 'google',
-              'voice': jobs[index]?['voice'] ?? 'en-US-Chirp3-HD-Achernar',
-              ...{for (final key in ['model_version', 'settings'])
-                if (jobs[index]?.containsKey(key) == true) key: jobs[index]![key]},
-            });
+            final submitted = await requestJson('POST', '/dogreader/jobs', chapterPayload(index));
             jobs[index] = {
               ...?jobs[index],
               ...recordingMetadata(submitted),
@@ -1354,7 +1357,9 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         } catch (e) {
           // Preserve pending work for a later retry.
           if (jobs[index]?['id'] == null) {
-            jobs[index] = {...?jobs[index], 'status': 'waiting'};
+            jobs[index] = {...?jobs[index],
+              'status': e is StateError ? 'error' : 'waiting',
+              if (e is StateError) 'error': e.message};
           }
           // A temporary socket failure should not masquerade as a failed job.
           // Keep the job queued and retry on the next refresh.
@@ -1444,6 +1449,17 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
             previewing: previewing,
             onPreview: previewing ? stopPreview : previewVoice,
           ),
+          TextButton.icon(
+            icon: const Icon(Icons.menu_book), label: const Text('Narration Dictionary'),
+            onPressed: () async {
+              await stopPreview();
+              if (!mounted) return;
+              await openNarrationDictionary(this.context,
+                bookTitles: {widget.book.id: widget.book.title}, bookId: widget.book.id,
+                preference: NarrationPreference(narrationEngine, narrator), host: host, token: token);
+              if (mounted) setState(() {});
+            },
+          ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Row(
@@ -1516,7 +1532,8 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
                             : status == 'error'
                             ? ((jobs[index]?['error'] as String?) ?? 'Narration failed. Retry to resume.')
                             : status) +
-                        (voiceLabel == null ? '' : ' • $voiceLabel'),
+                        (voiceLabel == null ? '' : ' • $voiceLabel') +
+                        (dictionaryChanged(index) ? ' • Dictionary changed — regenerate to apply' : ''),
                   ),
                   onChanged:
                       status == 'ready' ||
@@ -2160,7 +2177,8 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
           // loadChapter deliberately preserves an already loaded chapter.
           // Seeking is a separate step and always runs for reader navigation.
           final completed = await seekNarrationFromText(
-            fraction: widget.initialTextFraction!, load: prepare,
+            fraction: narrationFraction(widget.initialTextFraction!,
+                entry is Map ? entry['narration_offsets'] : null), load: prepare,
             pause: () => audioHandler.pause(origin: 'reader jump'),
             seek: (target) => audioHandler.seek(target, origin: 'reader jump'),
             duration: () => player.duration, position: () => player.position,
@@ -2242,7 +2260,8 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
       await refreshDuration();
       if (!mounted || audioHandler.mediaItem.value?.id != chapterKey) return;
       await audioHandler.seek(Duration.zero, origin: 'import audio');
-      await updateState({'path': target.path, 'positionMs': 0});
+      await updateState({'path': target.path, 'positionMs': 0,
+        'narration_offsets': null, 'narration_dictionary': null});
       if (mounted) {
         setState(() {
           audioPath = target.path;
