@@ -15,7 +15,7 @@ STAGES = {
     'focus-automatic-resume', 'focus-pause-stays-paused',
     'rapid-commands-final-pause', 'foreground-final-pause',
     'seek-pause-play-no-deadlock',
-    'shade-touch-pause', 'shade-touch-play', 'lock-touch-pause', 'lock-touch-play',
+    'shade-ui-pause', 'shade-ui-play', 'lock-ui-pause', 'lock-ui-play',
 }
 
 
@@ -51,7 +51,7 @@ def run(apk, instrumentation_apk, case):
     adb('shell', 'pm', 'clear', PACKAGE)
     # Instrumentation owns launch and the complete session. Starting a separate
     # instrumentation for each dump would restart the app and invalidate it.
-    method = 'nativeDeliveryAndActualSystemTouches' if case == 'controls' else 'serviceRecreationRetainsCommandDelivery'
+    method = 'nativeDeliveryAndSystemUiControls' if case == 'controls' else 'serviceRecreationRetainsCommandDelivery'
     output = adb('shell', 'am', 'instrument', '-w', '-r', '-e', 'class',
                  'com.example.audiobook_app.MediaControlDeliveryTest#' + method,
                  '-e', 'expectListenerLoss', str(case == 'baseline').lower(),
@@ -89,6 +89,9 @@ def main():
         report['error'] = str(error)
         print(json.dumps(report), flush=True)
         try:
+            native = adb('shell', 'run-as', PACKAGE, 'cat',
+                         'files/media_transport_diagnostics/transport.jsonl')
+            print('NATIVE_TRANSPORT_TAIL\n' + '\n'.join(native.splitlines()[-60:]), flush=True)
             print(adb('shell', 'dumpsys', 'media_session'), flush=True)
             print(adb('logcat', '-d', '-t', '200', '-s', 'flutter', 'AudioService'), flush=True)
         except subprocess.SubprocessError:

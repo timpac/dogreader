@@ -157,7 +157,7 @@ public class MediaControlDeliveryTest {
         return null;
     }
 
-    private Rect bounds(String label, boolean system) {
+    private AccessibilityNodeInfo controlNode(String label, boolean system) {
         for (AccessibilityNodeInfo root : roots()) {
             if (system) {
                 // Anchor to our own media card, rather than another app's Play.
@@ -184,7 +184,7 @@ public class MediaControlDeliveryTest {
                     if (control != null && "com.android.systemui".equals(text(control.getPackageName()))) {
                         Rect bounds = new Rect();
                         control.getBoundsInScreen(bounds);
-                        if (!bounds.isEmpty()) return bounds;
+                        if (!bounds.isEmpty()) return control;
                     }
                 }
             } else {
@@ -192,7 +192,7 @@ public class MediaControlDeliveryTest {
                 if (control != null && PACKAGE.equals(text(control.getPackageName()))) {
                     Rect bounds = new Rect();
                     control.getBoundsInScreen(bounds);
-                    if (!bounds.isEmpty()) return bounds;
+                    if (!bounds.isEmpty()) return control;
                 }
             }
         }
@@ -201,10 +201,15 @@ public class MediaControlDeliveryTest {
 
     private void tap(String label, boolean system) throws Exception {
         long deadline = SystemClock.uptimeMillis() + 20000;
+        AccessibilityNodeInfo control = null;
+        while (control == null && SystemClock.uptimeMillis() < deadline) {
+            control = controlNode(label, system);
+            if (control == null) SystemClock.sleep(100);
+        }
         Rect target = null;
-        while (target == null && SystemClock.uptimeMillis() < deadline) {
-            target = bounds(label, system);
-            if (target == null) SystemClock.sleep(100);
+        if (control != null) {
+            target = new Rect();
+            control.getBoundsInScreen(target);
         }
         if (target == null) {
             StringBuilder tree = new StringBuilder("\nSYSTEM_UI_TREE\n");
@@ -230,6 +235,14 @@ public class MediaControlDeliveryTest {
             instrumentation.sendStatus(2, status);
         }
         assertNotNull("Visible control absent: " + label + "; state=" + state(), target);
+        if (system) {
+            // Activate the real System UI button's accessibility action. This
+            // exercises its own MediaController callback without coordinate
+            // scaling ambiguity from the emulator's overridden viewport.
+            assertTrue("System UI button rejected accessibility click: " + label,
+                    control.performAction(AccessibilityNodeInfo.ACTION_CLICK));
+            return;
+        }
         long down = SystemClock.uptimeMillis();
         MotionEvent press = MotionEvent.obtain(down, down, MotionEvent.ACTION_DOWN,
                 target.centerX(), target.centerY(), 0);
@@ -490,7 +503,7 @@ public class MediaControlDeliveryTest {
         result("foreground-final-pause", state());
     }
 
-    @Test public void nativeDeliveryAndActualSystemTouches() throws Exception {
+    @Test public void nativeDeliveryAndSystemUiControls() throws Exception {
         assertEquals("Only the isolated test package is allowed", PACKAGE, context.getPackageName());
         audio = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
         AccessibilityServiceInfo info = automation.getServiceInfo();
@@ -538,8 +551,8 @@ public class MediaControlDeliveryTest {
             }
             result("seek-pause-play-no-deadlock", state());
             openNotificationShade();
-            command("shade-touch-pause", "Pause", "pause", false, 0, true);
-            command("shade-touch-play", "Play", "play", true, 0, true);
+            command("shade-ui-pause", "Pause", "pause", false, 0, true);
+            command("shade-ui-play", "Play", "play", true, 0, true);
             shell("cmd statusbar collapse");
             externalCommand("background-session-pause", "pause", false, 0);
             externalCommand("background-session-play", "play", true, 0);
@@ -559,8 +572,8 @@ public class MediaControlDeliveryTest {
                 SystemClock.sleep(100);
             }
             assertTrue("Lock-screen check requires a locked emulator", keyguard.isKeyguardLocked());
-            command("lock-touch-pause", "Pause", "pause", false, 0, true);
-            command("lock-touch-play", "Play", "play", true, 0, true);
+            command("lock-ui-pause", "Pause", "pause", false, 0, true);
+            command("lock-ui-play", "Play", "play", true, 0, true);
             externalCommand("lock-session-pause", "pause", false, 0);
             externalCommand("lock-session-play", "play", true, 0);
 
