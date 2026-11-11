@@ -6,7 +6,7 @@
     <application android:usesCleartextTraffic="true"
         android:label="${dogreaderAppLabel}"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="${dogreaderAppIcon}">
         <activity
             android:name=".MainActivity"
             android:exported="true"

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 
 import 'narration_options.dart';
+import 'app_identity.dart';
 
 Future<Map<String, dynamic>> narrationRequest(
   String host,
@@ -11,7 +12,9 @@ Future<Map<String, dynamic>> narrationRequest(
   String method,
   String path, [
   Map<String, dynamic>? payload,
+  bool paidRequestApproved = false,
 ]) async {
+  requireNarrationRequestConsent(method, path, approved: paidRequestApproved);
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
   try {
     final req = await client
@@ -46,6 +49,7 @@ Future<File?> generateNarrationPreview({
   required NarrationPreference preference,
   required String sample,
   required bool Function() isCurrent,
+  bool paidRequestApproved = false,
 }) async {
   if (host.isEmpty || token.isEmpty) {
     throw StateError('Connect Dogreader Cloud in narration settings first.');
@@ -67,6 +71,7 @@ Future<File?> generateNarrationPreview({
     'POST',
     '/dogreader/jobs',
     {...preference.toJson(), 'title': 'Pronunciation preview', 'text': text},
+    paidRequestApproved,
   );
   final id = response['id'] as String;
   for (var attempt = 0; attempt < 60; attempt++) {

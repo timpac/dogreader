@@ -1,10 +1,10 @@
-name: Release Dogreader APK
+name: Release Dog Reader 2.0 experimental APK
 
 on:
   workflow_dispatch:
     inputs:
       release_commit:
-        description: Reviewed full source SHA reachable from the default branch
+        description: Reviewed experimental branch source SHA
         required: true
         type: string
       build_number:
@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   apk:
-    if: github.ref == 'refs/heads/dogreader-oct22-update' && github.actor == github.repository_owner
+    if: github.ref == 'refs/heads/experimental/dog-reader-2-installation' && github.actor == github.repository_owner
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -34,13 +34,13 @@ jobs:
       RELEASE_COMMIT: ${{ inputs.release_commit }}
       BUILD_NUMBER: ${{ inputs.build_number }}
     steps:
-      - name: Require canonical branch, reviewed SHA and unused number
+      - name: Require experimental branch, reviewed SHA and unused number
         uses: actions/github-script@v7
         with:
           script: |
             const {owner, repo} = context.repo;
             const metadata = (await github.rest.repos.get({owner, repo})).data;
-            if (metadata.default_branch !== 'dogreader-oct22-update' || context.ref !== 'refs/heads/dogreader-oct22-update') throw new Error('Canonical branch mismatch');
+            if (metadata.default_branch !== 'dogreader-oct22-update' || context.ref !== 'refs/heads/experimental/dog-reader-2-installation') throw new Error('Experimental branch/default mismatch');
             if (Number(process.env.GITHUB_RUN_ATTEMPT) !== 1) throw new Error('Inspect retained assets before a new explicitly authorized dispatch; do not rerun');
             if (!/^[0-9a-f]{40}$/.test(process.env.RELEASE_COMMIT)) throw new Error('Full lowercase source SHA required');
             const number = process.env.BUILD_NUMBER;
@@ -65,12 +65,13 @@ jobs:
           ref: ${{ inputs.release_commit }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Require complete build-135 and canonical branch ancestry
+      - name: Require integrated build-137 ancestry on the experimental branch
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
           git merge-base --is-ancestor cdf4227dc6a966b20e24f61179ac953b22689024 HEAD
-          git merge-base --is-ancestor HEAD origin/dogreader-oct22-update
+          git merge-base --is-ancestor eca7c65412c1c174557224b1522b7dbabfa559c7 HEAD
+          git merge-base --is-ancestor HEAD origin/experimental/dog-reader-2-installation
       - name: Free unused runner disk space
         run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/powershell
       - uses: actions/setup-java@v4
@@ -98,26 +99,40 @@ jobs:
         run: flutter analyze --no-pub > /tmp/analysis.log 2>&1 || { tail -80 /tmp/analysis.log; exit 1; }
       - name: Run full Flutter regression suite
         run: flutter test --no-pub --reporter expanded > /tmp/tests.log 2>&1 || { tail -100 /tmp/tests.log; exit 1; }
-      - name: Build the requested original-app update once
+      - name: Experimental paid-operation and playback regressions
+        run: |
+          flutter test --no-pub --reporter expanded --dart-define=DOGREADER_EXPERIMENTAL=true --dart-define=DOGREADER_ENABLE_ARTICLE_SUMMARIES=true test/experimental_policy_test.dart test/experimental_queue_consent_test.dart test/session_lifecycle_test.dart test/system_media_controls_test.dart > /tmp/experimental-tests.log 2>&1 || { tail -100 /tmp/experimental-tests.log; exit 1; }
+          python3 -m unittest discover -s tools -p 'test_verify_experimental_apk.py'
+      - name: Build Dog Reader 2.0 once
         env:
           ORG_GRADLE_PROJECT_dogreaderOriginalUpdate: 'true'
-        run: flutter build apk --debug --no-pub --build-number "$BUILD_NUMBER" --dart-define="DOGREADER_BUILD=$BUILD_NUMBER" > /tmp/build.log 2>&1 || { tail -100 /tmp/build.log; exit 1; }
-      - name: Verify signature, package and version; prepare download
+        run: flutter build apk --debug --no-pub --build-number "$BUILD_NUMBER" --build-name 2.0.0 --dart-define="DOGREADER_BUILD=$BUILD_NUMBER" --dart-define=DOGREADER_EXPERIMENTAL=true --dart-define=DOGREADER_ENABLE_ARTICLE_SUMMARIES=false > /tmp/build.log 2>&1 || { tail -100 /tmp/build.log; exit 1; }
+      - name: Verify signature, package, version and build-135 coexistence
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           BUILD_TOOLS="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
           APK=build/app/outputs/flutter-apk/app-debug.apk
           "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" > /tmp/apk-certificates.txt
           grep -Fqi 'c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177' /tmp/apk-certificates.txt
           "$BUILD_TOOLS/aapt" dump badging "$APK" > /tmp/apk-identity.txt
-          grep -Fq "package: name='com.example.audiobook_app' versionCode='$BUILD_NUMBER'" /tmp/apk-identity.txt
+          grep -Fq "package: name='com.example.audiobook_app.experimental' versionCode='$BUILD_NUMBER'" /tmp/apk-identity.txt
+          grep -Fq "versionName='2.0.0'" /tmp/apk-identity.txt
+          grep -Fq "application-label:'Dog Reader 2.0'" /tmp/apk-identity.txt
+          mkdir -p /tmp/original-release
+          gh release download v135 --repo "$GITHUB_REPOSITORY" --pattern Dogreader-135.apk --dir /tmp/original-release
+          echo '48af8661b9287c225479a5dafb0a786b2c2fad4343f0b8d3b0bd432368351d1b  /tmp/original-release/Dogreader-135.apk' | sha256sum --check
+          python3 tools/verify_experimental_apk.py "$BUILD_TOOLS/aapt" /tmp/original-release/Dogreader-135.apk "$APK" "$BUILD_NUMBER" > /tmp/isolation.txt
           mkdir -p dist
-          cp "$APK" dist/Dogreader-${BUILD_NUMBER}.apk
-          (cd dist && sha256sum Dogreader-${BUILD_NUMBER}.apk > SHA256SUMS)
-          printf 'Dogreader Build %s\nSource: %s\nRun: %s/%s/actions/runs/%s\n\n' "$BUILD_NUMBER" "$RELEASE_COMMIT" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > dist/BUILD.txt
+          cp "$APK" dist/Dogreader-${BUILD_NUMBER}-Dog-Reader-2.0.apk
+          (cd dist && sha256sum Dogreader-${BUILD_NUMBER}-Dog-Reader-2.0.apk > SHA256SUMS)
+          printf 'Dog Reader 2.0 Experimental Build %s\nSource: %s\nRun: %s/%s/actions/runs/%s\n\n' "$BUILD_NUMBER" "$RELEASE_COMMIT" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > dist/BUILD.txt
           cat /tmp/analysis.log >> dist/BUILD.txt
           tail -1 /tmp/tests.log >> dist/BUILD.txt
+          tail -1 /tmp/experimental-tests.log >> dist/BUILD.txt
+          cat /tmp/isolation.txt >> dist/BUILD.txt
           cat /tmp/apk-certificates.txt >> dist/BUILD.txt
-          head -1 /tmp/apk-identity.txt >> dist/BUILD.txt
+          cat /tmp/apk-identity.txt >> dist/BUILD.txt
           cat dist/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
       - name: Retain and verify a new GitHub Release; publish only when requested
         uses: actions/github-script@v7
@@ -130,8 +145,8 @@ jobs:
             const {owner, repo} = context.repo;
             const number = process.env.BUILD_NUMBER;
             const source = process.env.RELEASE_COMMIT;
-            const tag = `v${number}`;
-            const name = `Dogreader-${number}.apk`;
+            const tag = `v${number}-dog-reader-2.0`;
+            const name = `Dogreader-${number}-Dog-Reader-2.0.apk`;
             const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
             for (const request of [
               () => github.rest.repos.getReleaseByTag({owner, repo, tag}),
@@ -143,10 +158,10 @@ jobs:
             const apk = fs.readFileSync(`dist/${name}`);
             const sha256 = digest(apk);
             const run = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
-            const body = `Source: ${source}\nBuild: ${number}\nActions: ${run}\nAPK SHA-256: ${sha256}\nPackage: com.example.audiobook_app\nSigning certificate SHA-256: c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177\n\nInstall in place without uninstalling or clearing storage. Device validation is separate from CI checks.`;
+            const body = `Source: ${source}\nBuild: ${number}\nActions: ${run}\nAPK SHA-256: ${sha256}\nPackage: com.example.audiobook_app.experimental\nSigning certificate SHA-256: c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177\n\nDog Reader 2.0 experimental app: installs separately from original Dogreader. Independent library, recordings, preferences and positions. One explicitly approved chapter or preview request at a time; batch/whole-book generation and AI summaries disabled. No backend deployment. APK manifest comparison verifies co-installation identities; physical dual-app/media-control acceptance remains separate.`;
             const release = (await github.rest.repos.createRelease({
               owner, repo, tag_name: tag, target_commitish: source,
-              name: `Dogreader ${number}`, body, draft: true, make_latest: 'false'
+              name: `Dog Reader 2.0 — Experimental build ${number}`, body, draft: true, prerelease: true, make_latest: 'false'
             })).data;
             for (const filename of [name, 'SHA256SUMS', 'BUILD.txt']) {
               const data = fs.readFileSync(`dist/${filename}`);
@@ -161,7 +176,7 @@ jobs:
             let verified = (await github.rest.repos.getRelease({owner, repo, release_id: release.id})).data;
             if (verified.tag_name !== tag || verified.target_commitish !== source || !verified.draft) throw new Error('Release identity changed');
             if (process.env.PUBLISH === 'true') {
-              verified = (await github.rest.repos.updateRelease({owner, repo, release_id: release.id, draft: false, make_latest: 'true'})).data;
+              verified = (await github.rest.repos.updateRelease({owner, repo, release_id: release.id, draft: false, prerelease: true, make_latest: 'false'})).data;
               verified = (await github.rest.repos.getRelease({owner, repo, release_id: release.id})).data;
               if (verified.draft) throw new Error('Release not published');
               const ref = (await github.rest.git.getRef({owner, repo, ref: `tags/${tag}`})).data;
@@ -171,6 +186,6 @@ jobs:
             if (!asset || asset.size !== apk.length || asset.state !== 'uploaded') throw new Error('Final APK missing');
             if (asset.digest && asset.digest !== `sha256:${sha256}`) throw new Error('Final APK digest differs');
             core.notice(`Verified ${verified.draft ? 'draft' : 'published'} release: ${verified.html_url}`);
-            await core.summary.addHeading(`Dogreader ${number}: ${verified.draft ? 'verified draft; publication pending' : 'published'}`)
+            await core.summary.addHeading(`Dog Reader 2.0 ${number}: ${verified.draft ? 'verified draft; publication pending' : 'published'}`)
               .addLink('GitHub Release', verified.html_url)
               .addRaw(`\n\nSource: ${source}\n\nAPK SHA-256: ${sha256}\n`).write();

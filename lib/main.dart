@@ -14,6 +14,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:audio_service/audio_service.dart';
 
 import 'dogreader_audio_handler.dart';
+import 'app_identity.dart';
 import 'app_theme.dart';
 import 'theme_preferences.dart';
 export 'app_theme.dart' show background, panel, accent;
@@ -39,8 +40,10 @@ Future<void> main() async {
   audioHandler = await AudioService.init(
     builder: () => DogreaderAudioHandler(),
     config: const AudioServiceConfig(
-      androidNotificationChannelId: 'com.example.audiobook_app.audio',
-      androidNotificationChannelName: 'Dogreader narration',
+      androidNotificationChannelId: narrationNotificationChannel,
+      androidNotificationChannelName: '$dogreaderAppName narration',
+      androidNotificationIcon: dogreaderExperimental
+          ? 'drawable/ic_notification_experimental' : 'mipmap/ic_launcher',
       // Keep the media service available for lock-screen/Bluetooth resume.
       androidStopForegroundOnPause: false,
     ),
@@ -52,6 +55,20 @@ Future<void> main() async {
   await appearance.load();
   await narrationDictionary.load();
   runApp(AudiobookApp(appearance: appearance));
+}
+
+Future<bool> confirmExperimentalNarration(BuildContext context, String item) async {
+  if (!dogreaderExperimental) return true;
+  return await showDialog<bool>(context: context, builder: (context) => AlertDialog(
+    title: const Text('Allow paid cloud request?'),
+    content: Text('Submit $item to your configured chapter narration service? '
+        'This may incur charges. Approval covers one request only. '
+        'Whole-book generation and AI summaries remain disabled.'),
+    actions: [
+      TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+      FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Approve one request')),
+    ],
+  )) ?? false;
 }
 
 /// Shared entry point for Settings and the book's narration queue.
@@ -73,9 +90,10 @@ Future<void> openNarrationDictionary(BuildContext context, {
     previewLabel: recordingLabel(selected.toJson()),
     onStopPreview: () => audioHandler.stopPreview(),
     onPreview: (sample, isCurrent) async {
+      if (!await confirmExperimentalNarration(context, 'this short pronunciation preview') || !isCurrent()) return;
       final file = await generateNarrationPreview(host: host ?? saved['host'] as String? ?? '',
         token: token ?? saved['token'] as String? ?? '', preference: selected,
-        sample: sample, isCurrent: isCurrent);
+        sample: sample, isCurrent: isCurrent, paidRequestApproved: true);
       if (file != null && isCurrent()) await audioHandler.playPreview(file.path, 'Pronunciation preview');
     },
   )));
@@ -96,7 +114,7 @@ class AudiobookApp extends StatelessWidget {
     return AnimatedBuilder(
       animation: appearance,
       builder: (context, child) => MaterialApp(
-        title: 'Dogreader',
+        title: dogreaderAppName,
         debugShowCheckedModeBanner: false,
         theme: theme.copyWith(
           textTheme: GoogleFonts.urbanistTextTheme(theme.textTheme),
@@ -537,7 +555,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
             const SizedBox(width: 12),
             const Flexible(
               child: Text(
-                'Dogreader',
+                dogreaderAppName,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(fontWeight: FontWeight.w700, fontSize: 19),
@@ -974,6 +992,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   bool busy = false;
   String? notice;
   Timer? timer;
+  final generationConsent = ChapterGenerationConsent();
 
   Future<File> get queueFile async {
     final root = await getApplicationDocumentsDirectory();
@@ -1128,6 +1147,10 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   }
 
   void selectEntireBook() {
+    if (dogreaderExperimental) {
+      setState(() => notice = 'Choose one chapter. Whole-book generation is disabled.');
+      return;
+    }
     setState(() {
       selected.clear();
       for (var i = 0; i < widget.book.chapters.length; i++) {
@@ -1215,6 +1238,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       setState(() => notice = 'Connect Dogreader Cloud before previewing.');
       return;
     }
+    if (!await confirmExperimentalNarration(context, 'this short voice preview') || !mounted) return;
     final sequence = ++previewSequence;
     final preference = NarrationPreference(narrationEngine, narrator);
     setState(() { previewing = true; notice = 'Preparing voice preview…'; });
@@ -1222,7 +1246,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       final preview = await generateNarrationPreview(host: host, token: token,
         preference: preference, sample: 'Welcome to Dogreader. “Shall we begin?” he asked. '
             'Settle in, choose a chapter, and enjoy a few quiet moments with your next story.',
-        isCurrent: () => mounted && sequence == previewSequence);
+        isCurrent: () => mounted && sequence == previewSequence, paidRequestApproved: true);
       if (preview == null || !mounted || sequence != previewSequence) return;
       setState(() => notice = 'Preview: ${recordingLabel(preference.toJson())}');
       await audioHandler.playPreview(preview.path, 'Preview: ${recordingLabel(preference.toJson())}');
@@ -1239,7 +1263,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     final confirmed = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
       title: const Text('Regenerate narration?'),
       content: Text('Generate ${widget.book.chapters[index].title} with ${recordingLabel(preference.toJson())}? '
-          'The current download is replaced only after the new audio downloads successfully.'),
+          'This may incur cloud charges. The current download is replaced only after the new audio downloads successfully.'),
       actions: [
         TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
         FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Generate narration')),
@@ -1257,16 +1281,22 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         'narration_dictionary': narrationDictionary.effective(widget.book.id).toJson(),
       };
     });
-    await save();
-    await checkJobs();
+    generationConsent.approve(index);
+    try { await save(); await checkJobs(); } finally { generationConsent.clear(); }
   }
 
   Future<void> generate() async {
     if (busy || selected.isEmpty) return;
+    if (dogreaderExperimental && selected.length != 1) {
+      setState(() => notice = 'Choose one chapter. Whole-book generation is disabled.');
+      return;
+    }
     if (host.isEmpty || token.isEmpty) {
       setState(() => notice = 'Set your Cloud Run URL and access token first.');
       return;
     }
+    if (!await confirmExperimentalNarration(context, 'chapter ${widget.book.chapters[selected.first].title}') || !mounted) return;
+    generationConsent.approve(selected.first);
     setState(() {
       busy = true;
       notice = null;
@@ -1275,14 +1305,18 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       jobs[index] = {'status': 'waiting', 'engine': narrationEngine, 'voice': narrator,
         'narration_dictionary': narrationDictionary.effective(widget.book.id).toJson()};
     }
-    await save();
-    if (mounted) {
-      setState(() {
-        selected.clear();
-        busy = false;
-      });
+    try {
+      await save();
+      if (mounted) {
+        setState(() {
+          selected.clear();
+          busy = false;
+        });
+      }
+      await checkJobs();
+    } finally {
+      generationConsent.clear();
     }
-    await checkJobs();
   }
 
   Future<void> repairChapterAudio(int index) async {
@@ -1378,6 +1412,11 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     return narrationDictionary.effective(widget.book.id).transform(chapter).text != old;
   }
 
+  Future<Map<String, dynamic>> submitChapter(int index) {
+    final approved = generationConsent.take(index);
+    return narrationRequest(host, token, 'POST', '/dogreader/jobs', chapterPayload(index), approved);
+  }
+
   Future<void> checkJobs() async {
     if (busy || host.isEmpty || token.isEmpty || jobs.isEmpty) return;
     busy = true;
@@ -1402,7 +1441,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         }
         try {
           if (status == 'waiting') {
-            final response = await requestJson('POST', '/dogreader/jobs', chapterPayload(index));
+            final response = await submitChapter(index);
             jobs[index] = {
               ...?jobs[index],
               ...recordingMetadata(response),
@@ -1420,7 +1459,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
             if (!e.toString().contains('Unknown job') && !e.toString().contains('Job not found')) {
               rethrow;
             }
-            final submitted = await requestJson('POST', '/dogreader/jobs', chapterPayload(index));
+            final submitted = await submitChapter(index);
             jobs[index] = {
               ...?jobs[index],
               ...recordingMetadata(submitted),
@@ -1482,6 +1521,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   @override
   void dispose() {
     timer?.cancel();
+    generationConsent.clear();
     previewSequence++;
     unawaited(audioHandler.stopPreview());
     super.dispose();
@@ -1532,6 +1572,10 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
               ],
             ),
           ),
+          if (dogreaderExperimental) const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16),
+            child: Text('Paid narration needs approval for each chapter or preview. Whole-book generation and AI summaries are disabled.'),
+          ),
           NarrationControls(
             preference: NarrationPreference(narrationEngine, narrator),
             onChanged: (value) {
@@ -1556,7 +1600,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Row(
               children: [
-                OutlinedButton.icon(
+                if (!dogreaderExperimental) OutlinedButton.icon(
                   onPressed: selectEntireBook,
                   icon: const Icon(Icons.select_all),
                   label: const Text('Entire book'),
@@ -1635,6 +1679,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
                       ? null
                       : (value) => setState(() {
                           if (value == true) {
+                            if (dogreaderExperimental) selected.clear();
                             selected.add(index);
                           } else {
                             selected.remove(index);

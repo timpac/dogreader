@@ -3,12 +3,15 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'article_import.dart';
+import 'app_identity.dart';
 
 // Enable only in a separately approved rollout after backend acceptance.
-const articleSummariesEnabled = bool.fromEnvironment(
-  'DOGREADER_ENABLE_ARTICLE_SUMMARIES',
-  defaultValue: false,
-);
+const articleSummariesEnabled =
+    !dogreaderExperimental &&
+    bool.fromEnvironment(
+      'DOGREADER_ENABLE_ARTICLE_SUMMARIES',
+      defaultValue: false,
+    );
 const articleSummariesDisabledMessage =
     'AI summaries are disabled pending backend integration and rollout approval. The original remains available.';
 
@@ -25,7 +28,7 @@ class ArticleSummaryClient {
     String path,
     Map<String, dynamic> payload,
   ) async {
-    if (!enabled) {
+    if (dogreaderExperimental || !enabled) {
       throw const ArticleImportException(articleSummariesDisabledMessage);
     }
     final settings = File('${documents.path}/dogreader_queue.json');
