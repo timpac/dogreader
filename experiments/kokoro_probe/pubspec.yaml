@@ -18,3 +18,5 @@ flutter:
   assets:
     - passage.txt
     - model-manifest.json
+    - fp32-model-manifest.json
+    - comparison-passage.txt
