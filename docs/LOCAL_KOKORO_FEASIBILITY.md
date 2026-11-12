@@ -148,6 +148,23 @@ chunk durations are word timestamps. Local output must have a separate model,
 runtime, voice, lexicon/G2P and dictionary identity; cloud MP3 cache IDs cannot
 identify these WAVs. All existing behavior is untouched in this experiment.
 
+Read-only inspection of the current
+[cloud worker](https://github.com/timpac/dogreader-cloud/blob/main/kokoro_worker.py)
+and [locked dependencies](https://github.com/timpac/dogreader-cloud/blob/main/requirements-kokoro.txt)
+confirms it uses **kokoro-onnx 0.6.1**, ONNX Runtime 1.23.2, a pinned
+325,532,387-byte FP32 graph and its own 28,214,398-byte voice file. Its requirements
+include phonemizer 3.4.0 and espeakng-loader 0.2.4. This is distinct from the
+official Python/Misaki pipeline and from the probe's Sherpa lexicons. The worker
+uses British English, speed 1, `trim=False`, CPU execution, 24 kHz PCM followed by
+FFmpeg/LAME 64 kbps MP3. Its lossless 1,200-character splitter preserves source
+slices before the frontend's phoneme splitting. Current client narrator choices
+are George, Fable, Daniel and Lewis. Those names correspond to Sherpa speaker
+IDs **26, 25, 24 and 27**, respectively; voice-name correspondence does not establish
+identical audio or pronunciation. The probe exposes Heart, Michael and Emma and
+uses US Heart for its controlled fixture. A future acceptance pass must compare
+the existing four British narrators and dictionary-transformed passages directly.
+No backend code, service, credential or deployed behavior was changed or invoked.
+
 Before integration, choose a complete offline English frontend: port/package
 Misaki-compatible normalization and G2P with validated dependencies, or evaluate a
 licensed alternative. Older Sherpa plus eSpeak is technically convenient but
