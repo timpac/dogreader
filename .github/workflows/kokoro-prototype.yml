@@ -81,6 +81,8 @@ jobs:
           mkdir -p "$HOME/.android"
           printf '%s' "$DOGREADER_KEYSTORE_B64" | base64 --decode > "$HOME/.android/debug.keystore"
           chmod 600 "$HOME/.android/debug.keystore"
+          keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey > /tmp/keystore-cert.txt
+          grep -Fqi 'C5:CC:08:D9:75:7C:0E:92:89:3A:71:62:04:A2:6F:EB:61:57:F5:35:0A:00:DB:B0:B7:96:20:49:D6:D9:D1:77' /tmp/keystore-cert.txt
           cd experiments/kokoro_probe
           flutter create --no-pub --platforms android --org com.dogreader --project-name kokoro_probe . > /tmp/template.log 2>&1
           rm -f test/widget_test.dart
@@ -95,16 +97,26 @@ jobs:
         working-directory: experiments/kokoro_probe
         run: |
           flutter build apk --release --no-pub --target-platform android-arm64 --build-number "$BUILD_NUMBER" --dart-define="DOGREADER_BUILD=$BUILD_NUMBER" > /tmp/build.log 2>&1 || { tail -100 /tmp/build.log; exit 1; }
+      - name: Retain compiled bytes before verification to allow recovery without rebuilding
+        uses: actions/upload-artifact@v4
+        with:
+          name: kokoro-probe-${{ inputs.build_number }}-build-output
+          path: |
+            experiments/kokoro_probe/build/app/outputs/flutter-apk/app-release.apk
+            experiments/kokoro_probe/pubspec.lock
+          retention-days: 14
       - name: Verify identity, signature and 16 KB native alignment
         run: |
           set -euo pipefail
           TOOLS="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
           APK=experiments/kokoro_probe/build/app/outputs/flutter-apk/app-release.apk
           "$TOOLS/apksigner" verify --verbose --print-certs "$APK" > /tmp/apk-cert.txt
+          cat /tmp/apk-cert.txt
           grep -Fqi c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177 /tmp/apk-cert.txt
           "$TOOLS/aapt" dump badging "$APK" > /tmp/apk-identity.txt
+          head -10 /tmp/apk-identity.txt
           grep -Fq "package: name='com.dogreader.kokoro_probe' versionCode='$BUILD_NUMBER'" /tmp/apk-identity.txt
-          "$TOOLS/zipalign" -c -P 16 -v 4 "$APK" > /tmp/alignment.txt
+          "$TOOLS/zipalign" -c -P 16 -v 4 "$APK" > /tmp/alignment.txt || { tail -50 /tmp/alignment.txt; exit 1; }
           python3 experiments/kokoro_probe/tool/verify_apk.py "$APK"
           mkdir -p dist
           cp "$APK" "dist/Dogreader-${BUILD_NUMBER}-Kokoro-Offline-Probe.apk"
@@ -118,11 +130,6 @@ jobs:
           cat /tmp/analysis.log /tmp/tests.log /tmp/apk-cert.txt >> dist/BUILD.txt
           head -1 /tmp/apk-identity.txt >> dist/BUILD.txt
           (cd dist && sha256sum *.apk prototype-pubspec.lock FEASIBILITY.md LICENSES.txt BUILD.txt > SHA256SUMS)
-      - uses: actions/upload-artifact@v4
-        with:
-          name: kokoro-probe-${{ inputs.build_number }}
-          path: dist/
-          retention-days: 14
       - name: Retain, download-verify and publish numbered experimental release
         uses: actions/github-script@v7
         env:
