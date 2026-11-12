@@ -75,6 +75,8 @@ flutter {
 }
 
 dependencies {
+    // Same AndroidX Media version already used by audio_service.
+    implementation("androidx.media:media:1.7.0")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }

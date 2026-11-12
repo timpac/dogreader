@@ -138,6 +138,8 @@ Future<void> main() async {
           'positionMs': player.position.inMilliseconds,
           'durationMs': player.duration?.inMilliseconds,
           'fatal': fatal,
+          'handlerStarted': handler.diagnosticStarted.millisecondsSinceEpoch,
+          'stopped': state.processingState == AudioProcessingState.idle,
         }),
       );
       await file.rename('${root.path}/media-control-probe.json');
