@@ -11,7 +11,47 @@ import 'narration_storage.dart';
 class DeliveryHttpError implements Exception {
   DeliveryHttpError(this.status);
   final int status;
+  @override
+  String toString() => 'HTTP $status';
 }
+
+String narrationDeliveryLabel(Map<String, dynamic>? job) {
+  if (job == null) return 'Not generated';
+  final state = job['delivery'];
+  if (state == 'downloading') return 'Downloading…';
+  if (state == 'downloaded') return 'Downloaded — ready to listen';
+  if (state == 'server_ready' ||
+      (job['status'] == 'ready' && state != 'failed')) {
+    return 'Waiting to download';
+  }
+  if (state == 'failed' || job['status'] == 'error') {
+    final generation =
+        job['failureStage'] == 'generation' || job['status'] == 'error';
+    final message = generation ? job['error'] : job['deliveryError'];
+    return 'Failed — ${message ?? 'Narration unavailable.'}'
+        '${generation ? '' : ' Retrying automatically.'}';
+  }
+  final completed = job['progress'], total = job['chunks'];
+  final progress =
+      completed is int &&
+          total is int &&
+          total > 0 &&
+          completed >= 0 &&
+          completed <= total
+      ? ' • $completed/$total chunks complete'
+      : '';
+  return switch (job['status']) {
+    'generating' => 'Generating…$progress',
+    'queued' => 'Queued in cloud$progress',
+    'waiting' => 'Waiting to submit',
+    _ => 'Checking narration…',
+  };
+}
+
+bool canRetryNarrationDownload(Map<String, dynamic>? job) =>
+    job?['id'] is String &&
+    (job!['id'] as String).isNotEmpty &&
+    job['status'] == 'ready';
 
 /// App-owned delivery of existing job IDs. Never submits text or resets TTS.
 /// The legacy queue/status fields remain readable; delivery fields are additive.
@@ -22,12 +62,14 @@ class NarrationDelivery extends ChangeNotifier {
     DateTime Function()? clock,
     this.responseTimeout = const Duration(seconds: 20),
     this.idleTimeout = const Duration(seconds: 30),
+    this.diagnosticSink,
   }) : clock = clock ?? DateTime.now;
 
   final Future<Directory> Function() documentsDirectory;
   final Future<void> Function(String, int) beforeReplace;
   final DateTime Function() clock;
   final Duration responseTimeout, idleTimeout;
+  final void Function(Map<String, Object?>)? diagnosticSink;
   final Map<String, Map<int, Map<String, dynamic>>> books = {};
   final Map<String, Future<void>> _downloads = {};
   final List<String> diagnostics = [];
@@ -60,6 +102,9 @@ class NarrationDelivery extends ChangeNotifier {
             jobs[index] = Map<String, dynamic>.from(entry.value as Map);
           }
         }
+        for (final job in jobs.values) {
+          _normalizeInterruptedState(job);
+        }
         books[book.key.toString()] = jobs;
       }
     }
@@ -67,6 +112,16 @@ class NarrationDelivery extends ChangeNotifier {
   }
 
   void attachBook(String book, Map<int, Map<String, dynamic>> jobs) {
+    for (final index in jobs.keys.toList()) {
+      final active = books[book]?[index];
+      if (deliveryInFlight(book, index) && active != null) {
+        // Opening the queue must not replace the live transfer with a stale
+        // disk snapshot or normalize its genuine Downloading state.
+        jobs[index] = active;
+      } else {
+        _normalizeInterruptedState(jobs[index]!);
+      }
+    }
     books[book] = jobs;
   }
 
@@ -97,21 +152,185 @@ class NarrationDelivery extends ChangeNotifier {
     if (active) start();
   }
 
-  void _log(String event, String book, int index, String id, [Object? error]) {
-    // Never log URLs, headers, tokens, source text or raw exception messages.
+  void _normalizeInterruptedState(Map<String, dynamic> job) {
+    final pending = job['status'] == 'queued' || job['status'] == 'generating';
+    // Build 143 recorded a normal not-ready probe as a failed download.
+    if (pending && job['deliveryError'] == 'Download HTTP 404') {
+      job.remove('deliveryError');
+      job.remove('failureStage');
+      job.remove('deliveryNextAttempt');
+      job['deliveryAttempts'] = 0;
+      job['delivery'] = 'pending';
+    }
+    if (job['delivery'] == 'downloading') {
+      job['delivery'] = job['status'] == 'ready' ? 'server_ready' : 'pending';
+    }
+  }
+
+  static const _statuses = {
+    'waiting',
+    'queued',
+    'generating',
+    'ready',
+    'error',
+  };
+  static const _deliveries = {
+    'pending',
+    'server_ready',
+    'downloading',
+    'downloaded',
+    'failed',
+  };
+
+  void _log(
+    String event,
+    String book,
+    int index,
+    String id, {
+    Object? error,
+    bool automatic = true,
+    int? attempt,
+    int? http,
+    String? fromStatus,
+    String? fromDelivery,
+  }) {
+    final job = books[book]?[index];
+    final fields = <String, Object?>{
+      'deliveryEvent': event,
+      'jobId': RegExp(r'^[0-9a-f]{32}$').hasMatch(id) ? id : 'unknown',
+      'chapter': index,
+      'retryMode': automatic ? 'automatic' : 'manual',
+      'attempt': attempt ?? (job?['deliveryAttempts'] as int? ?? 0),
+      'serverStatus': _statuses.contains(job?['status'])
+          ? job!['status']
+          : 'unknown',
+      'deliveryState': _deliveries.contains(job?['delivery'])
+          ? job!['delivery']
+          : 'unknown',
+      if (fromStatus != null)
+        'fromServerStatus': _statuses.contains(fromStatus)
+            ? fromStatus
+            : 'unknown',
+      if (fromDelivery != null)
+        'fromDeliveryState': _deliveries.contains(fromDelivery)
+            ? fromDelivery
+            : 'unknown',
+      if (http != null || error is DeliveryHttpError)
+        'httpStatus': http ?? (error as DeliveryHttpError).status,
+      if (error != null) 'errorKind': error.runtimeType.toString(),
+      if (job?['progress'] is int) 'completedChunks': job!['progress'],
+      if (job?['chunks'] is int) 'totalChunks': job!['chunks'],
+    };
+    // Only opaque job IDs and safe scalar state/error codes; no book IDs,
+    // credentials, URLs, chapter text, paths or raw exception messages.
     diagnostics.add(
-      '${clock().toUtc().toIso8601String()} $event book=$book chapter=$index id=$id'
-      '${error == null ? '' : ' error=${error.runtimeType}'}'
-      '${error is DeliveryHttpError ? ' http=${error.status}' : ''}',
+      '${clock().toUtc().toIso8601String()} ${jsonEncode(fields)}',
     );
     if (diagnostics.length > 80) diagnostics.removeAt(0);
     debugPrint('narration_delivery ${diagnostics.last}');
+    try {
+      diagnosticSink?.call(fields);
+    } catch (_) {
+      /* Diagnostics cannot stop delivery. */
+    }
+  }
+
+  void _transition(
+    Map<String, dynamic> job,
+    String book,
+    int index, {
+    String? status,
+    String? delivery,
+    bool automatic = true,
+  }) {
+    final oldStatus = job['status'] as String? ?? 'unknown';
+    final oldDelivery = job['delivery'] as String? ?? 'unknown';
+    if (status != null) job['status'] = status;
+    if (delivery != null) job['delivery'] = delivery;
+    if (oldStatus != (job['status'] ?? 'unknown') ||
+        oldDelivery != (job['delivery'] ?? 'unknown')) {
+      _log(
+        'state_transition',
+        book,
+        index,
+        job['id'] as String? ?? '',
+        automatic: automatic,
+        fromStatus: oldStatus,
+        fromDelivery: oldDelivery,
+      );
+    }
+  }
+
+  void _clearFailure(Map<String, dynamic> job) {
+    job['deliveryAttempts'] = 0;
+    job.remove('deliveryError');
+    job.remove('failureStage');
+    job.remove('deliveryNextAttempt');
+  }
+
+  Future<void> _failure(
+    Map<String, dynamic> job,
+    String book,
+    int index,
+    Object error, {
+    required bool automatic,
+    String stage = 'download',
+  }) async {
+    final previous = (job['deliveryAttempts'] as num?)?.toInt() ?? 0;
+    final attempt = previous >= maxAttempts ? maxAttempts : previous + 1;
+    job['deliveryAttempts'] = attempt;
+    job['deliveryNextAttempt'] = clock()
+        .add(
+          Duration(
+            seconds: attempt >= maxAttempts ? 900 : 15 * (1 << (attempt - 1)),
+          ),
+        )
+        .millisecondsSinceEpoch;
+    job['failureStage'] = stage;
+    final action = stage == 'status' ? 'Status check' : 'Download';
+    job['deliveryError'] = error is DeliveryHttpError
+        ? '$action HTTP ${error.status}'
+        : error is TimeoutException
+        ? '$action timed out.'
+        : '$action interrupted.';
+    _transition(job, book, index, delivery: 'failed', automatic: automatic);
+    _log(
+      '${stage}_failed',
+      book,
+      index,
+      job['id'] as String? ?? '',
+      error: error,
+      automatic: automatic,
+      attempt: attempt,
+    );
+    await save();
+  }
+
+  Future<void> _notReady(
+    Map<String, dynamic> job,
+    String book,
+    int index, {
+    required bool automatic,
+  }) async {
+    _clearFailure(job);
+    final failed = job['status'] == 'error';
+    if (failed) job['failureStage'] = 'generation';
+    job['deliveryNextAttempt'] = clock()
+        .add(Duration(seconds: failed ? 900 : 12))
+        .millisecondsSinceEpoch;
+    _transition(
+      job,
+      book,
+      index,
+      delivery: failed ? 'failed' : 'pending',
+      automatic: automatic,
+    );
+    await save();
   }
 
   Future<void> reconcile() => _checking ??= _reconcile()
       .catchError((Object e) {
-        // A metadata failure must not discard the durable queue or start paid work.
-        _log('reconcile_failed', '', -1, '', e);
+        _log('reconcile_failed', '', -1, '', error: e);
       })
       .whenComplete(() => _checking = null);
 
@@ -131,58 +350,77 @@ class NarrationDelivery extends ChangeNotifier {
         job['localAvailable'] =
             await target.exists() && await target.length() >= 1000;
         if (job['previousRecording'] == null &&
-            await target.exists() &&
-            await target.length() >= 1000 &&
+            job['localAvailable'] == true &&
             job['status'] == 'ready' &&
             (job['delivery'] == null || job['delivery'] == 'downloaded')) {
           if (job['delivery'] != 'downloaded') {
-            job['localAvailable'] = true;
-            job['delivery'] = 'downloaded';
+            _transition(job, book.key, entry.key, delivery: 'downloaded');
             await save();
           }
           continue;
         }
         final next = (job['deliveryNextAttempt'] as num?)?.toInt() ?? 0;
-        if (clock().millisecondsSinceEpoch < next) {
-          continue;
+        if (clock().millisecondsSinceEpoch < next) continue;
+        if (job['status'] != 'ready') {
+          try {
+            _log(
+              'status_requested',
+              book.key,
+              entry.key,
+              id,
+              attempt: (job['deliveryAttempts'] as int? ?? 0) + 1,
+            );
+            final result = await _status(id);
+            // A manual fetch may have completed while the status request waited.
+            if (!identical(books[book.key]?[entry.key], job) ||
+                _downloads.containsKey(key) ||
+                job['status'] == 'ready') {
+              continue;
+            }
+            final status = result['status'];
+            if (!_statuses.contains(status)) {
+              throw const FormatException('Invalid job status');
+            }
+            job.addAll(recordingMetadata(result));
+            final total = result['chunks'], completed = result['progress'];
+            if (total is int && total > 0) job['chunks'] = total;
+            if (completed is int &&
+                completed >= 0 &&
+                (job['chunks'] is! int ||
+                    completed <= (job['chunks'] as int))) {
+              job['progress'] = completed;
+            }
+            job['error'] = result['error'];
+            _transition(job, book.key, entry.key, status: status as String);
+            _log('status_received', book.key, entry.key, id, http: 200);
+            if (status != 'ready') {
+              await _notReady(job, book.key, entry.key, automatic: true);
+              continue;
+            }
+            _clearFailure(job);
+            _transition(job, book.key, entry.key, delivery: 'server_ready');
+            await save();
+          } catch (error) {
+            if (error is! DeliveryHttpError || error.status != 404) {
+              await _failure(
+                job,
+                book.key,
+                entry.key,
+                error,
+                automatic: true,
+                stage: 'status',
+              );
+              continue;
+            }
+            // Retain a quiet GET-only fallback for legacy/missing status records.
+            _log('status_missing', book.key, entry.key, id, error: error);
+          }
         }
         try {
-          // Probe existing bytes first, even with stale/error/missing job state.
+          // Known completed recordings never call the dispatching status endpoint.
           await retryDownload(book.key, entry.key, automatic: true);
-        } on DeliveryHttpError catch (e) {
-          if (e.status != 404 || job['status'] == 'ready') continue;
-          // Only automatic reconciliation polls the existing recovery endpoint.
-          // Manual Retry Download never makes this call (which may dispatch work).
-          try {
-            final result = await _status(id);
-            if (!identical(book.value[entry.key], job)) continue;
-            job.addAll(recordingMetadata(result));
-            job['status'] = result['status'];
-            job['error'] = result['error'];
-            if (result['status'] == 'ready') {
-              job['delivery'] = 'server_ready';
-            } else {
-              job['delivery'] = result['status'] == 'error'
-                  ? 'failed'
-                  : 'pending';
-              job['failureStage'] = result['status'] == 'error'
-                  ? 'generation'
-                  : null;
-              // Normal generation polling must not spend download failure budget.
-              if (result['status'] != 'error') {
-                job['deliveryAttempts'] = 0;
-                job['deliveryNextAttempt'] = clock()
-                    .add(const Duration(seconds: 12))
-                    .millisecondsSinceEpoch;
-              }
-            }
-            await save();
-            _log('status_${result['status']}', book.key, entry.key, id);
-          } catch (error) {
-            _log('status_failed', book.key, entry.key, id, error);
-          }
         } catch (_) {
-          // Download already persisted bounded backoff and safe error details.
+          /* Download already persisted its bounded retry state. */
         }
       }
     }
@@ -213,8 +451,12 @@ class NarrationDelivery extends ChangeNotifier {
   Future<File> audioFile(String book, int index) async =>
       File('${(await documentsDirectory()).path}/narration/${book}_$index.mp3');
 
-  bool downloading(String book, int index) =>
+  bool deliveryInFlight(String book, int index) =>
       _downloads.containsKey('$book:$index');
+
+  bool downloading(String book, int index) =>
+      deliveryInFlight(book, index) &&
+      books[book]?[index]?['delivery'] == 'downloading';
 
   /// Source preparation waits for the audio/metadata transaction to settle.
   /// Failed repairs leave the previous recording available to the player.
@@ -230,7 +472,18 @@ class NarrationDelivery extends ChangeNotifier {
 
   Future<void> retryDownload(String book, int index, {bool automatic = false}) {
     final key = '$book:$index';
-    return _downloads[key] ??= _download(book, index, automatic: automatic)
+    final existing = _downloads[key];
+    if (existing != null) {
+      _log(
+        'attempt_joined',
+        book,
+        index,
+        books[book]?[index]?['id'] as String? ?? '',
+        automatic: automatic,
+      );
+      return existing;
+    }
+    return _downloads[key] = _download(book, index, automatic: automatic)
         .whenComplete(() {
           _downloads.remove(key);
         });
@@ -256,31 +509,81 @@ class NarrationDelivery extends ChangeNotifier {
       await recoverNarrationFile(local);
       job['localAvailable'] =
           await local.exists() && await local.length() >= 1000;
-      job['delivery'] = 'downloading';
       if (!automatic) job['deliveryAttempts'] = 0;
+      if (job['status'] == 'ready' && job['delivery'] != 'downloaded') {
+        _transition(
+          job,
+          book,
+          index,
+          delivery: 'server_ready',
+          automatic: automatic,
+        );
+      }
       await save();
-      _log('download_started', book, index, id);
+      _log(
+        'download_attempt',
+        book,
+        index,
+        id,
+        automatic: automatic,
+        attempt: (job['deliveryAttempts'] as int? ?? 0) + 1,
+      );
       final req = await client
           .getUrl(_endpoint('/dogreader/audio/$id'))
           .timeout(responseTimeout);
       req.followRedirects = false;
       req.headers.set('X-Dogreader-Token', token);
       final response = await req.close().timeout(responseTimeout);
+      if (response.statusCode == 404 && job['status'] != 'ready') {
+        _log(
+          'download_not_ready',
+          book,
+          index,
+          id,
+          http: 404,
+          automatic: automatic,
+        );
+        await _notReady(job, book, index, automatic: automatic);
+        return;
+      }
       if (response.statusCode != 200) {
         throw DeliveryHttpError(response.statusCode);
       }
-      job['status'] = 'ready';
-      job['delivery'] = 'server_ready';
-      await save();
       if (response.contentLength < 1000 ||
           (response.headers.contentType != null &&
               response.headers.contentType!.mimeType != 'audio/mpeg')) {
         throw const FormatException('Incomplete audio response');
       }
-      job['delivery'] = 'downloading';
+      if (!identical(books[book]?[index], job)) {
+        throw StateError('Recording changed');
+      }
+      _transition(
+        job,
+        book,
+        index,
+        status: 'ready',
+        delivery: 'server_ready',
+        automatic: automatic,
+      );
       await save();
       final target = await audioFile(book, index);
       await target.parent.create(recursive: true);
+      _transition(
+        job,
+        book,
+        index,
+        delivery: 'downloading',
+        automatic: automatic,
+      );
+      await save();
+      _log(
+        'download_started',
+        book,
+        index,
+        id,
+        automatic: automatic,
+        http: 200,
+      );
       await replaceNarrationFile(
         target,
         response.timeout(idleTimeout),
@@ -318,40 +621,19 @@ class NarrationDelivery extends ChangeNotifier {
         },
       );
       job['localAvailable'] = true;
-      job['delivery'] = 'downloaded';
-      job['deliveryAttempts'] = 0;
-      job.remove('deliveryNextAttempt');
-      job.remove('deliveryError');
-      job.remove('failureStage');
+      _clearFailure(job);
+      _transition(
+        job,
+        book,
+        index,
+        delivery: 'downloaded',
+        automatic: automatic,
+      );
       job.remove('previousRecording');
       await save();
-      _log('download_completed', book, index, id);
+      _log('download_completed', book, index, id, automatic: automatic);
     } catch (e) {
-      final previousAttempts = (job['deliveryAttempts'] as num?)?.toInt() ?? 0;
-      final attempts = previousAttempts >= maxAttempts
-          ? maxAttempts
-          : previousAttempts + 1;
-      job['deliveryAttempts'] = attempts;
-      // Six quick attempts, then one probe per 15 minutes. Reopening keeps
-      // the cooldown; prolonged outages still recover without manual repair.
-      job['deliveryNextAttempt'] = clock()
-          .add(
-            Duration(
-              seconds: attempts >= maxAttempts
-                  ? 900
-                  : 15 * (1 << (attempts - 1)),
-            ),
-          )
-          .millisecondsSinceEpoch;
-      job['delivery'] = 'failed';
-      job['failureStage'] = 'download';
-      job['deliveryError'] = e is DeliveryHttpError
-          ? 'Download HTTP ${e.status}'
-          : e is TimeoutException
-          ? 'Download timed out'
-          : 'Download interrupted (${e.runtimeType})';
-      await save();
-      _log('download_failed', book, index, id, e);
+      await _failure(job, book, index, e, automatic: automatic);
       rethrow;
     } finally {
       client.close(force: true);

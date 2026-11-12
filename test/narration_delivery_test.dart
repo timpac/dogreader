@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:audiobook_app/narration_delivery.dart';
 import 'package:audiobook_app/narration_storage.dart';
+import 'package:audiobook_app/media_diagnostics.dart';
 
 void main() {
   late Directory root;
@@ -22,20 +23,31 @@ void main() {
     await req.response.close();
   }
 
-  NarrationDelivery create({Duration timeout = const Duration(seconds: 2)}) =>
-      NarrationDelivery(
-        documentsDirectory: () async => root,
-        beforeReplace: (_, _) async {},
-        clock: () => now,
-        responseTimeout: timeout,
-        idleTimeout: timeout,
-      );
+  NarrationDelivery create({
+    Duration timeout = const Duration(seconds: 2),
+    void Function(Map<String, Object?>)? diagnosticSink,
+  }) => NarrationDelivery(
+    documentsDirectory: () async => root,
+    beforeReplace: (_, _) async {},
+    clock: () => now,
+    responseTimeout: timeout,
+    idleTimeout: timeout,
+    diagnosticSink: diagnosticSink,
+  );
 
   setUp(() async {
     root = await Directory.systemTemp.createTemp('delivery-');
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     requests = [];
-    respond = audio;
+    respond = (req) async {
+      if (req.uri.path.startsWith('/dogreader/jobs/')) {
+        req.response.headers.contentType = ContentType.json;
+        req.response.write(jsonEncode({'status': 'ready'}));
+        await req.response.close();
+      } else {
+        await audio(req);
+      }
+    };
     server.listen((req) {
       requests.add('${req.method} ${req.uri.path}');
       unawaited(respond(req).catchError((Object _) {}));
@@ -46,7 +58,7 @@ void main() {
     delivery.host = 'http://127.0.0.1:${server.port}';
     delivery.token = 'TEST_PRIVATE_TOKEN';
     delivery.books['book'] = {
-      0: {'id': 'existing', 'status': 'generating'},
+      0: {'id': 'existing', 'status': 'ready'},
     };
     await delivery.save();
   });
@@ -56,9 +68,13 @@ void main() {
     await root.delete(recursive: true);
   });
 
-  test('discovers stored audio despite stale generation state; no generation or status request', () async {
+  test('status discovers stored audio despite stale generation state without submission', () async {
+    delivery.books['book']![0]!['status'] = 'generating';
     await delivery.reconcile();
-    expect(requests, ['GET /dogreader/audio/existing']);
+    expect(requests, [
+      'GET /dogreader/jobs/existing',
+      'GET /dogreader/audio/existing',
+    ]);
     expect(delivery.books['book']![0]!['delivery'], 'downloaded');
     expect(await (await delivery.audioFile('book', 0)).readAsBytes(), bytes);
     expect(delivery.diagnostics.join(), isNot(contains('TEST_PRIVATE_TOKEN')));
@@ -190,6 +206,7 @@ void main() {
     expect(delivery.books['book']![1]!['delivery'], 'downloaded');
     expect(requests, [
       'GET /dogreader/audio/existing',
+      'GET /dogreader/jobs/second',
       'GET /dogreader/audio/second',
     ]);
   });
@@ -212,13 +229,20 @@ void main() {
     expect(await File('${target.path}.part').exists(), isFalse);
   });
 
-  test('normal generation polling reuses existing server recovery without POST or resubmit', () async {
+  test('normal generation polling never announces downloading or failure and shows actual progress', () async {
+    delivery.books['book']![0]!['status'] = 'generating';
+    final states = <String?>[];
+    delivery.addListener(
+      () => states.add(delivery.books['book']![0]!['delivery'] as String?),
+    );
     respond = (req) async {
       if (req.uri.path.contains('/audio/')) {
         req.response.statusCode = 404;
       } else {
         req.response.headers.contentType = ContentType.json;
-        req.response.write(jsonEncode({'status': 'generating'}));
+        req.response.write(
+          jsonEncode({'status': 'generating', 'progress': 8, 'chunks': 31}),
+        );
       }
       await req.response.close();
     };
@@ -228,7 +252,14 @@ void main() {
     }
     expect(delivery.books['book']![0]!['status'], 'generating');
     expect(delivery.books['book']![0]!['deliveryAttempts'], 0);
-    expect(requests.where((r) => r.contains('/jobs/')).length, 8);
+    expect(requests, List.filled(8, 'GET /dogreader/jobs/existing'));
+    expect(states, isNot(contains('downloading')));
+    expect(states, isNot(contains('failed')));
+    expect(
+      narrationDeliveryLabel(delivery.books['book']![0]),
+      contains('8/31 chunks complete'),
+    );
+    expect(canRetryNarrationDownload(delivery.books['book']![0]), isFalse);
     expect(requests.every((r) => r.startsWith('GET ')), isTrue);
   });
 
@@ -266,5 +297,306 @@ void main() {
     expect(saved['book:0']['positionMs'], 22000);
     expect(saved['book:0']['recording_id'], 'existing');
     expect(saved['other:0']['positionMs'], 1);
+  });
+
+  test('waiting remains visible until accepted audio headers, then downloads automatically', () async {
+    delivery.books['book']![0]!['status'] = 'generating';
+    final arrived = Completer<void>(), headers = Completer<void>();
+    var polls = 0;
+    final states = <String?>[];
+    delivery.addListener(
+      () => states.add(delivery.books['book']![0]!['delivery'] as String?),
+    );
+    respond = (req) async {
+      if (req.uri.path.contains('/jobs/')) {
+        polls++;
+        req.response.headers.contentType = ContentType.json;
+        req.response.write(
+          jsonEncode(
+            polls == 1
+                ? {'status': 'queued', 'progress': 15, 'chunks': 31}
+                : {'status': 'ready'},
+          ),
+        );
+        await req.response.close();
+      } else {
+        arrived.complete();
+        await headers.future;
+        await audio(req);
+      }
+    };
+    await delivery.reconcile();
+    expect(
+      narrationDeliveryLabel(delivery.books['book']![0]),
+      'Queued in cloud • 15/31 chunks complete',
+    );
+    expect(requests, ['GET /dogreader/jobs/existing']);
+    // Emulate a process restart without creating a generation-screen widget.
+    delivery.dispose();
+    delivery = create();
+    await delivery.load();
+    delivery.addListener(
+      () => states.add(delivery.books['book']![0]!['delivery'] as String?),
+    );
+    now = now.add(const Duration(seconds: 12));
+    final pending = delivery.reconcile();
+    await arrived.future;
+    expect(
+      narrationDeliveryLabel(delivery.books['book']![0]),
+      'Waiting to download',
+    );
+    expect(delivery.deliveryInFlight('book', 0), isTrue);
+    expect(delivery.downloading('book', 0), isFalse);
+    expect(states, isNot(contains('downloading')));
+    expect(states, isNot(contains('failed')));
+    headers.complete();
+    await pending;
+    expect(states, contains('downloading'));
+    expect(delivery.books['book']![0]!['delivery'], 'downloaded');
+    expect(requests, [
+      'GET /dogreader/jobs/existing',
+      'GET /dogreader/jobs/existing',
+      'GET /dogreader/audio/existing',
+    ]);
+  });
+
+  test('opening the queue during an active transfer preserves its job and actual downloading state', () async {
+    final release = Completer<void>();
+    final started = Completer<void>();
+    delivery.addListener(() {
+      if (delivery.downloading('book', 0) && !started.isCompleted) {
+        started.complete();
+      }
+    });
+    respond = (req) async {
+      req.response.headers.contentType = ContentType('audio', 'mpeg');
+      req.response.contentLength = bytes.length;
+      req.response.add(bytes.take(100).toList());
+      await req.response.flush();
+      await release.future;
+      req.response.add(bytes.skip(100).toList());
+      await req.response.close();
+    };
+    final live = delivery.books['book']![0]!;
+    final transfer = delivery.retryDownload('book', 0);
+    await started.future;
+    final stale = <int, Map<String, dynamic>>{
+      0: {'id': 'existing', 'status': 'ready', 'delivery': 'server_ready'},
+    };
+    delivery.attachBook('book', stale);
+    expect(identical(stale[0], live), isTrue);
+    expect(delivery.downloading('book', 0), isTrue);
+    final joined = delivery.retryDownload('book', 0);
+    expect(identical(transfer, joined), isTrue);
+    release.complete();
+    await transfer;
+    expect(stale[0]!['delivery'], 'downloaded');
+    expect(await (await delivery.audioFile('book', 0)).readAsBytes(), bytes);
+    expect(requests, ['GET /dogreader/audio/existing']);
+  });
+
+  test('manual 404 for unfinished audio stays pending and never polls or submits jobs', () async {
+    delivery.books['book']![0]!['status'] = 'generating';
+    final states = <String?>[];
+    delivery.addListener(
+      () => states.add(delivery.books['book']![0]!['delivery'] as String?),
+    );
+    respond = (req) async {
+      req.response.statusCode = 404;
+      await req.response.close();
+    };
+    await delivery.retryDownload('book', 0);
+    final job = delivery.books['book']![0]!;
+    expect(requests, ['GET /dogreader/audio/existing']);
+    expect(job['status'], 'generating');
+    expect(job['delivery'], 'pending');
+    expect(job['deliveryAttempts'], 0);
+    expect(job['failureStage'], isNull);
+    expect(states, isNot(contains('downloading')));
+    expect(states, isNot(contains('failed')));
+    expect(DeliveryHttpError(404).toString(), 'HTTP 404');
+  });
+
+  test('missing legacy status falls back quietly and recovers the existing recording', () async {
+    delivery.books['book']![0]!['status'] = 'queued';
+    final states = <String?>[];
+    delivery.addListener(
+      () => states.add(delivery.books['book']![0]!['delivery'] as String?),
+    );
+    respond = (req) async {
+      if (req.uri.path.contains('/jobs/')) {
+        req.response.statusCode = 404;
+        await req.response.close();
+      } else {
+        await audio(req);
+      }
+    };
+    await delivery.reconcile();
+    expect(requests, [
+      'GET /dogreader/jobs/existing',
+      'GET /dogreader/audio/existing',
+    ]);
+    expect(delivery.books['book']![0]!['delivery'], 'downloaded');
+    expect(states, isNot(contains('failed')));
+  });
+
+  test('legacy status and audio both missing remain pending without download failures', () async {
+    delivery.books['book']![0]!['status'] = 'queued';
+    respond = (req) async {
+      req.response.statusCode = 404;
+      await req.response.close();
+    };
+    await delivery.reconcile();
+    expect(delivery.books['book']![0]!['delivery'], 'pending');
+    expect(delivery.books['book']![0]!['deliveryAttempts'], 0);
+    expect(requests.every((r) => r.startsWith('GET ')), isTrue);
+  });
+
+  test('status outage backs off across restart and automatically downloads after recovery', () async {
+    delivery.books['book']![0]!['status'] = 'generating';
+    respond = (req) async {
+      req.response.statusCode = 503;
+      await req.response.close();
+    };
+    await delivery.reconcile();
+    expect(delivery.books['book']![0]!['failureStage'], 'status');
+    expect(delivery.books['book']![0]!['status'], 'generating');
+    final count = requests.length;
+    delivery.dispose();
+    delivery = create();
+    await delivery.reconcile();
+    expect(requests.length, count);
+    respond = (req) async {
+      if (req.uri.path.contains('/jobs/')) {
+        req.response.headers.contentType = ContentType.json;
+        req.response.write(jsonEncode({'status': 'ready'}));
+        await req.response.close();
+      } else {
+        await audio(req);
+      }
+    };
+    now = now.add(const Duration(seconds: 15));
+    await delivery.reconcile();
+    expect(delivery.books['book']![0]!['delivery'], 'downloaded');
+    expect(requests.every((r) => r.startsWith('GET ')), isTrue);
+  });
+
+  test(
+    'build-143 false 404 failure is normalized when restored or attached',
+    () async {
+      final jobs = <int, Map<String, dynamic>>{
+        0: {
+          'id': 'existing',
+          'status': 'generating',
+          'delivery': 'failed',
+          'deliveryError': 'Download HTTP 404',
+          'deliveryAttempts': 6,
+          'deliveryNextAttempt': now
+              .add(const Duration(hours: 1))
+              .millisecondsSinceEpoch,
+        },
+      };
+      delivery.attachBook('book', jobs);
+      expect(jobs[0]!['delivery'], 'pending');
+      expect(jobs[0]!['deliveryAttempts'], 0);
+      expect(jobs[0]!['deliveryNextAttempt'], isNull);
+      expect(narrationDeliveryLabel(jobs[0]), 'Generating…');
+    },
+  );
+
+  test('delivery diagnostics persist job IDs, transitions, HTTP codes and retry modes without content', () async {
+    final journal = MediaDiagnostics(
+      directory: () async => Directory('${root.path}/logs'),
+    );
+    delivery.dispose();
+    delivery = create(
+      diagnosticSink: (fields) =>
+          journal.record(MediaDiagnosticEvent.narrationDelivery, fields),
+    );
+    await delivery.load();
+    const id = '0123456789abcdef0123456789abcdef';
+    delivery.books.clear();
+    delivery.books['Private book title'] = {
+      0: {'id': id, 'status': 'ready', 'text': 'Sensitive chapter'},
+    };
+    respond = (req) async {
+      req.response.statusCode = 503;
+      req.response.write('Sensitive chapter TEST_PRIVATE_TOKEN');
+      await req.response.close();
+    };
+    await expectLater(
+      delivery.retryDownload('Private book title', 0),
+      throwsA(isA<DeliveryHttpError>()),
+    );
+    respond = audio;
+    now = now.add(const Duration(seconds: 15));
+    await delivery.reconcile();
+    await journal.flush();
+    final reopened = MediaDiagnostics(
+      directory: () async => Directory('${root.path}/logs'),
+    );
+    final exported = await reopened.export();
+    expect(exported, contains(id));
+    expect(exported, contains('"httpStatus":503'));
+    expect(exported, contains('"retryMode":"manual"'));
+    expect(exported, contains('"retryMode":"automatic"'));
+    expect(exported, contains('"fromDeliveryState":"failed"'));
+    expect(exported, contains('"deliveryState":"downloaded"'));
+    for (final secret in [
+      'Private book title',
+      'Sensitive chapter',
+      'TEST_PRIVATE_TOKEN',
+      delivery.host,
+    ]) {
+      expect(exported, isNot(contains(secret)));
+      expect(delivery.diagnostics.join(), isNot(contains(secret)));
+    }
+  });
+
+  test('labels distinguish generation, readiness, transfer and retryable failure using valid counts only', () {
+    expect(
+      narrationDeliveryLabel({
+        'status': 'generating',
+        'progress': 7,
+        'chunks': 31,
+      }),
+      'Generating… • 7/31 chunks complete',
+    );
+    expect(
+      narrationDeliveryLabel({
+        'status': 'generating',
+        'progress': 32,
+        'chunks': 31,
+      }),
+      'Generating…',
+    );
+    expect(
+      narrationDeliveryLabel({'status': 'generating', 'progress': 0}),
+      'Generating…',
+    );
+    expect(
+      narrationDeliveryLabel({'status': 'ready', 'delivery': 'server_ready'}),
+      'Waiting to download',
+    );
+    expect(
+      narrationDeliveryLabel({'status': 'ready', 'delivery': 'downloading'}),
+      'Downloading…',
+    );
+    expect(
+      narrationDeliveryLabel({
+        'status': 'ready',
+        'delivery': 'failed',
+        'deliveryError': 'Download HTTP 503',
+      }),
+      contains('Retrying automatically.'),
+    );
+    expect(
+      canRetryNarrationDownload({'id': 'existing', 'status': 'generating'}),
+      isFalse,
+    );
+    expect(
+      canRetryNarrationDownload({'id': 'existing', 'status': 'ready'}),
+      isTrue,
+    );
   });
 }

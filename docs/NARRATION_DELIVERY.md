@@ -29,24 +29,30 @@ Downloaded. Old queues and already downloaded audio continue to work. Existing
 book/article IDs, frozen dictionary snapshots, seek maps and original signing
 identity remain in place. There is no reading-state migration.
 
-Reconciliation first probes the audio URL for an existing ID. A stored MP3 can
-therefore be found despite a stale server job status. Only a not-yet-completed
-job whose audio returns 404 proceeds to the existing job-status/recovery GET.
-A known Ready recording never calls that dispatching endpoint after a download
-failure. The previous implicit missing-job text resubmission is removed.
+As of build 144, reconciliation checks the existing job-status/recovery GET for
+queued/generating IDs first. That backend endpoint already discovers a published
+MP3 despite stale durable status and exposes completed/total chunk counts. A Ready
+response starts delivery in the same cycle. A missing legacy status record falls
+back quietly to audio GET; an unfinished recording's audio 404 remains pending
+and consumes no failure budget. A known Ready recording uses only audio GET
+after a delivery failure, never the dispatching status endpoint. Missing jobs
+are never implicitly resubmitted as new text.
 
 **Retry Download** performs only the existing audio GET. It neither submits text
 nor invokes the generation retry endpoint. It is available for linked recordings
-without local audio, and as repair for downloaded recordings. Repeated taps,
+known Ready without local audio, and as repair for downloaded recordings. Repeated taps,
 resume and polling share one in-flight download per chapter.
 
 Failures back off for 15, 30, 60, 120 and 240 seconds. At six failures the client
 enters a persistent 15-minute cooldown between probes. Reopening preserves that
 cooldown; manual Retry Download may bypass it. Successful generation polling
 uses the existing 12-second interval. A stalled recording has bounded waits, so
-subsequent chapters can continue. Diagnostics retain 80 safe event lines with
-job/chapter identity, stage, error type and HTTP code; no tokens, URLs, request
-bodies or raw provider exception messages are logged.
+subsequent chapters can continue. Diagnostics retain 80 safe in-memory event
+lines and use the existing bounded persistent diagnostic journal (two 256 KiB files, at most 128 pending writes).
+Records include opaque job ID, chapter index, state transitions, completed/total
+chunks, HTTP code and automatic/manual retry mode. No book titles/IDs, tokens,
+URLs, request bodies or raw provider exception messages are logged. Existing
+Share diagnostics includes these events after restart.
 
 Downloads restart from byte zero after interruption. HTTP ranges are deliberately
 not introduced: same-directory `.part` staging, declared length checking and

@@ -46,6 +46,22 @@ void main() {
     expect(exported, contains('"chapter":2'));
   });
 
+  test('delivery fields permit opaque job IDs and safe codes while rejecting arbitrary content', () async {
+    final log = MediaDiagnostics(directory: () async => root);
+    const id = '0123456789abcdef0123456789abcdef';
+    log.record(MediaDiagnosticEvent.narrationDelivery, {
+      'jobId': id, 'deliveryEvent': 'download_failed', 'retryMode': 'automatic',
+      'httpStatus': 503, 'attempt': 2, 'serverStatus': 'ready', 'deliveryState': 'failed',
+      'message': 'SECRET', 'token': 'SECRET', 'url': 'SECRET', 'bookId': 'SECRET',
+    });
+    log.record(MediaDiagnosticEvent.narrationDelivery, {'jobId': 'SECRET', 'retryMode': 'SECRET', 'deliveryEvent': 'SECRET'});
+    final exported = await log.export();
+    expect(exported, contains(id));
+    expect(exported, contains('"httpStatus":503'));
+    expect(exported, contains('"retryMode":"automatic"'));
+    expect(exported, isNot(contains('SECRET')));
+  });
+
   test('slow storage has a bounded queue and never blocks transport', () async {
     final directory = Completer<Directory>();
     final log = MediaDiagnostics(directory: () => directory.future, maxPending: 4);

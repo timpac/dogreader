@@ -23,6 +23,7 @@ enum MediaDiagnosticEvent {
   restoreFinished,
   chapterUnloaded,
   nativeObserverUnavailable,
+  narrationDelivery,
 }
 
 /// Process-local producer, bounded asynchronous disk consumer. Never awaited by
@@ -50,10 +51,22 @@ class MediaDiagnostics {
 
   static const _numbers = {
     'id', 'positionMs', 'source', 'engine', 'intent', 'chapter', 'count',
-    'code', 'bookTag',
+    'code', 'bookTag', 'httpStatus', 'attempt', 'completedChunks', 'totalChunks',
   };
   static const _booleans = {'playing', 'sessionPlaying', 'wanted', 'begin'};
   static const _strings = <String, Set<String>>{
+    'deliveryEvent': {
+      'reconcile_failed', 'state_transition', 'status_requested', 'status_received',
+      'status_missing', 'status_failed', 'download_attempt', 'download_not_ready',
+      'download_started', 'download_completed', 'download_failed', 'attempt_joined',
+    },
+    'retryMode': {'automatic', 'manual'},
+    'serverStatus': {'waiting', 'queued', 'generating', 'ready', 'error', 'unknown'},
+    'fromServerStatus': {'waiting', 'queued', 'generating', 'ready', 'error', 'unknown'},
+    'deliveryState': {'pending', 'server_ready', 'downloading', 'downloaded', 'failed', 'unknown'},
+    'fromDeliveryState': {'pending', 'server_ready', 'downloading', 'downloaded', 'failed', 'unknown'},
+    'errorKind': {'DeliveryHttpError', 'TimeoutException', 'SocketException',
+      'HttpException', 'HandshakeException', 'FormatException', 'StateError', 'FileSystemException'},
     'command': {'play', 'pause', 'stop', 'seek', 'speed', 'next', 'previous'},
     'origin': {
       'external', 'in-app', 'in-app seek', 'reader jump', 'import audio',
@@ -81,6 +94,8 @@ class MediaDiagnostics {
       if ((_numbers.contains(entry.key) && value is int) ||
           (_booleans.contains(entry.key) && value is bool) ||
           (_strings[entry.key]?.contains(value) ?? false) ||
+          (event == MediaDiagnosticEvent.narrationDelivery && entry.key == 'jobId' &&
+              value is String && RegExp(r'^(unknown|[0-9a-f]{32})$').hasMatch(value)) ||
           (entry.key == 'build' && value is String &&
               RegExp(r'^(DEV|[0-9]{1,8})$').hasMatch(value))) {
         safe[entry.key] = value!;

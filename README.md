@@ -8,12 +8,16 @@ seeking, chapter repair/download/deletion and narration engine/voice selection
 are retained from the complete build-135 source.
 
 Finished cloud narration is discovered automatically when Dogreader opens or
-resumes and when returning to a chapter. The queue distinguishes server readiness,
-downloading and downloaded audio. **Retry Download** fetches the existing recording
+resumes and when returning to a chapter, without keeping the generation screen
+open. Generation progress shows completed/total chunks when the API supplies it.
+The queue distinguishes Generating, Waiting to download, Downloading, Downloaded
+and Failed; Downloading begins only after an audio response is accepted.
+**Retry Download** fetches the existing recording
 without generating narration or making a TTS request; repairs preserve listening
 positions. The combined release also retains build 142's native media-control
 ownership fix and diagnostics. See [delivery recovery](docs/NARRATION_DELIVERY.md)
-and [142 integration provenance](docs/RELEASE_143.md).
+and [142 integration provenance](docs/RELEASE_143.md). See [build 144](docs/RELEASE_144.md)
+for download-state recovery and persistent delivery diagnostics.
 
 ## Narration Dictionary
 
