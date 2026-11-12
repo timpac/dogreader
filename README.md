@@ -1,5 +1,9 @@
 # Dogreader
 
+Offline Kokoro research is isolated in `experiments/kokoro_probe`; see
+[feasibility findings and Pixel test instructions](docs/LOCAL_KOKORO_FEASIBILITY.md).
+It is a separate experimental app and does not change Dogreader narration.
+
 Dogreader is a Flutter Android EPUB reader with cloud-generated narration,
 offline chapter audio, saved reading/listening positions, background and
 continuous playback, Android media controls, and Light / Dark / Follow system

@@ -24,6 +24,27 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Explicitly requested isolated experiment. The canonical app job below is
+  # unchanged and cannot run on this feature branch. Dispatch this existing
+  # registered workflow with ref=feature/local-kokoro-feasibility; no merge is needed.
+  kokoro-probe:
+    if: github.ref == 'refs/heads/feature/local-kokoro-feasibility' && github.actor == github.repository_owner && inputs.release_commit != 'f34d6f778ff7eb89387dfbed19ccaac716ad0c3d'
+    uses: ./.github/workflows/kokoro-prototype.yml
+    permissions:
+      contents: write
+    with:
+      release_commit: ${{ inputs.release_commit }}
+      build_number: ${{ inputs.build_number }}
+      publish: ${{ inputs.publish }}
+    secrets: inherit
+  kokoro-retained:
+    if: github.ref == 'refs/heads/feature/local-kokoro-feasibility' && github.actor == github.repository_owner && inputs.release_commit == 'f34d6f778ff7eb89387dfbed19ccaac716ad0c3d' && inputs.build_number == '145'
+    uses: ./.github/workflows/kokoro-retained.yml
+    permissions:
+      contents: write
+      actions: read
+    with:
+      publish: ${{ inputs.publish }}
   apk:
     if: github.ref == 'refs/heads/dogreader-oct22-update' && github.actor == github.repository_owner
     runs-on: ubuntu-latest

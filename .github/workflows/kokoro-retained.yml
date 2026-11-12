@@ -1,0 +1,107 @@
+name: Verify and publish retained Kokoro 145 APK (no compilation)
+
+on:
+  workflow_call:
+    inputs:
+      publish:
+        required: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  retained:
+    if: github.ref == 'refs/heads/feature/local-kokoro-feasibility' && github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    env:
+      COMPILED_SOURCE: f34d6f778ff7eb89387dfbed19ccaac716ad0c3d
+      APK_SHA256: ec11adbe165a2404edb03c614b8d207e94db20bb006cca9674bb0b1bc81938c1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify immutable artifact and reserved empty draft provenance
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            if (context.ref !== 'refs/heads/feature/local-kokoro-feasibility') throw Error('Wrong branch');
+            const run = (await github.rest.actions.getWorkflowRun({owner, repo, run_id: 43316612418})).data;
+            if (run.head_sha !== process.env.COMPILED_SOURCE || run.head_branch !== 'feature/local-kokoro-feasibility') throw Error('Wrong compiled source');
+            const jobs = (await github.rest.actions.listJobsForWorkflowRun({owner, repo, run_id: run.id})).data.jobs;
+            const steps = jobs.find(j => j.name === 'kokoro-probe / probe')?.steps || [];
+            for (const name of ['Targeted analysis and frontend safeguards', 'Build one ARM64 AOT prototype APK without any model binaries']) {
+              if (!steps.some(s => s.name === name && s.conclusion === 'success')) throw Error('Missing successful compile/check evidence');
+            }
+            const artifact = (await github.rest.actions.getArtifact({owner, repo, artifact_id: 13988162939})).data;
+            if (artifact.expired || artifact.name !== 'kokoro-probe-145-build-output' || artifact.workflow_run.head_sha !== process.env.COMPILED_SOURCE || artifact.digest !== 'sha256:b2dadfd8f9d5a7630be27d8c60c5705284d120d25b0836e2d3915e3c5779d673') throw Error('Artifact identity/digest mismatch');
+            const release = (await github.rest.repos.getRelease({owner, repo, release_id: 443574234})).data;
+            if (!release.draft || !release.prerelease || release.tag_name !== 'v145-kokoro-offline' || release.target_commitish !== process.env.COMPILED_SOURCE || release.assets.length) throw Error('Reserved draft differs; inspect without overwriting');
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 43316612418
+          artifact-ids: '13988162939'
+          path: retained
+          merge-multiple: true
+      - name: Verify unchanged APK, certificate, package, version and alignment
+        run: |
+          set -euo pipefail
+          APK=retained/build/app/outputs/flutter-apk/app-release.apk
+          echo "$APK_SHA256  $APK" | sha256sum --check
+          TOOLS="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          "$TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/apk-cert.txt
+          grep -Fqi c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177 /tmp/apk-cert.txt
+          "$TOOLS/aapt" dump badging "$APK" > /tmp/apk-identity.txt
+          grep -Fq "package: name='com.dogreader.kokoro_probe' versionCode='145'" /tmp/apk-identity.txt
+          "$TOOLS/zipalign" -c -P 16 -v 4 "$APK" > /tmp/alignment.txt
+          python3 experiments/kokoro_probe/tool/verify_apk.py "$APK" | tee /tmp/elf-check.txt
+          mkdir -p dist
+          cp "$APK" dist/Dogreader-145-Kokoro-Offline-Probe.apk
+          cp retained/pubspec.lock dist/prototype-pubspec.lock
+          cp docs/LOCAL_KOKORO_FEASIBILITY.md dist/FEASIBILITY.md
+          cp experiments/kokoro_probe/LICENSES.txt dist/LICENSES.txt
+          curl -fsSL https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/v2.0.1/LICENSE >> dist/LICENSES.txt
+          curl -fsSL https://raw.githubusercontent.com/microsoft/onnxruntime/v1.28.2/LICENSE >> dist/LICENSES.txt
+          curl -fsSL https://raw.githubusercontent.com/microsoft/onnxruntime/v1.28.2/ThirdPartyNotices.txt >> dist/LICENSES.txt
+          printf 'Dogreader experimental build 145\nCompiled source: %s\nVerification recipe: %s\nCompile/tests: https://github.com/timpac/dogreader/actions/runs/43316612418\nVerification/publication: %s/%s/actions/runs/%s\nArtifact: 13988162939\nArtifact ZIP SHA-256: b2dadfd8f9d5a7630be27d8c60c5705284d120d25b0836e2d3915e3c5779d673\n\nAnalysis, three frontend tests and ARM64 AOT compilation passed in the source run. That run failed at an overly strict ABI assertion. This job reuses the retained APK unchanged; no compilation, model download or inference. Six unused non-ARM64 dependency libraries remain packaged; only ARM64 devices supported. Pixel speed/RAM/battery/heat and Android inference remain unmeasured.\n\n' "$COMPILED_SOURCE" "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > dist/BUILD.txt
+          cat /tmp/apk-cert.txt /tmp/elf-check.txt >> dist/BUILD.txt
+          head -1 /tmp/apk-identity.txt >> dist/BUILD.txt
+          (cd dist && sha256sum *.apk prototype-pubspec.lock FEASIBILITY.md LICENSES.txt BUILD.txt > SHA256SUMS)
+      - name: Upload, download-verify and publish reserved experimental release
+        uses: actions/github-script@v7
+        env:
+          PUBLISH: ${{ inputs.publish }}
+        with:
+          script: |
+            const fs = require('fs'), crypto = require('crypto');
+            const {owner, repo} = context.repo;
+            const id = 443574234, tag = 'v145-kokoro-offline';
+            const hash = x => crypto.createHash('sha256').update(x).digest('hex');
+            let release = (await github.rest.repos.getRelease({owner, repo, release_id: id})).data;
+            if (!release.draft || release.assets.length || release.target_commitish !== process.env.COMPILED_SOURCE) throw Error('Draft changed; do not overwrite');
+            for (const name of fs.readdirSync('dist')) {
+              const data = fs.readFileSync('dist/' + name);
+              const asset = (await github.rest.repos.uploadReleaseAsset({owner, repo, release_id: id, name, data,
+                headers: {'content-type': name.endsWith('.apk') ? 'application/vnd.android.package-archive' : 'text/plain', 'content-length': data.length}})).data;
+              if (asset.state !== 'uploaded' || asset.size !== data.length || !data.length) throw Error('Incomplete asset upload');
+              const downloaded = await github.rest.repos.getReleaseAsset({owner, repo, asset_id: asset.id, headers: {accept: 'application/octet-stream'}});
+              if (hash(Buffer.from(downloaded.data)) !== hash(data)) throw Error('Downloaded bytes differ');
+            }
+            const body = release.body + `\n\nVerification and publication completed using retained bytes, without rebuilding: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}. Verification recipe: ${context.sha}. All uploaded assets were downloaded again and SHA-256 verified.`;
+            release = (await github.rest.repos.updateRelease({owner, repo, release_id: id, body,
+              draft: process.env.PUBLISH !== 'true', prerelease: true, make_latest: 'false'})).data;
+            const final = (await github.rest.repos.getRelease({owner, repo, release_id: id})).data;
+            const apk = final.assets.find(a => a.name === 'Dogreader-145-Kokoro-Offline-Probe.apk');
+            if (!apk || apk.size !== 94681614 || apk.state !== 'uploaded' || apk.digest !== 'sha256:' + process.env.APK_SHA256) throw Error('Final APK mismatch');
+            if (process.env.PUBLISH === 'true') {
+              if (final.draft) throw Error('Still a draft');
+              const ref = (await github.rest.git.getRef({owner, repo, ref: 'tags/' + tag})).data;
+              if (ref.object.sha !== process.env.COMPILED_SOURCE) throw Error('Tag/source mismatch');
+            }
+            await core.summary.addLink('Verified experimental release', final.html_url).write();
