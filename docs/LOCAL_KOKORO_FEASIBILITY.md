@@ -21,6 +21,18 @@ Pixel speed, memory, battery, temperature and listening quality are **not measur
 APK compilation/static checks are reported separately in the release's `BUILD.txt`.
 The prototype must be exercised on the phone before claiming working Android narration.
 
+Delivery evidence: Actions run `43316612418` passed analysis, the three frontend
+tests, compilation, package/version, original-key signature and ZIP alignment.
+Its final custom verifier rejected unused non-ARM64 dependency libraries. The
+APK was retained as artifact `13988162939`; its ZIP SHA-256 is
+`b2dadfd8f9d5a7630be27d8c60c5705284d120d25b0836e2d3915e3c5779d673`.
+The verifier was corrected to validate the ARM64 Flutter/Dart code and all five
+ARM64 ELF libraries, allowing six unused dependency libraries for other ABIs.
+Those retained APK bytes passed local ELF and ZIP 16 KB checks, with no APK
+modification or third compilation. The Actions run's overall status remains
+failed because of the original verifier assertion; do not describe it as green CI.
+The release's `BUILD.txt` records the compiled source and subsequent verification.
+
 One short **Linux x86_64 host smoke test**, using the same Sherpa 2.0.1 model,
 US lexicon, voice 3 and two threads, produced finite, nonzero 24 kHz audio:
 3.318 seconds output, 3.070 seconds model load and 13.406 seconds generation
