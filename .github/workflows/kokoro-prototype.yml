@@ -89,7 +89,10 @@ jobs:
           keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey > /tmp/keystore-cert.txt
           grep -Fqi 'C5:CC:08:D9:75:7C:0E:92:89:3A:71:62:04:A2:6F:EB:61:57:F5:35:0A:00:DB:B0:B7:96:20:49:D6:D9:D1:77' /tmp/keystore-cert.txt
           cd experiments/kokoro_probe
+          # flutter create writes its template lockfile even with --no-pub.
+          cp pubspec.lock /tmp/kokoro-probe-dependencies.lock
           flutter create --no-pub --platforms android --org com.dogreader --project-name kokoro_probe . > /tmp/template.log 2>&1
+          cp /tmp/kokoro-probe-dependencies.lock pubspec.lock
           rm -f test/widget_test.dart
           python3 tool/configure_android.py
           flutter pub get --enforce-lockfile > /tmp/dependencies.log 2>&1 || { tail -60 /tmp/dependencies.log; exit 1; }
