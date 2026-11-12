@@ -11,7 +11,9 @@ Finished cloud narration is discovered automatically when Dogreader opens or
 resumes and when returning to a chapter. The queue distinguishes server readiness,
 downloading and downloaded audio. **Retry Download** fetches the existing recording
 without generating narration or making a TTS request; repairs preserve listening
-positions. See [delivery recovery and verification](docs/NARRATION_DELIVERY.md).
+positions. The combined release also retains build 142's native media-control
+ownership fix and diagnostics. See [delivery recovery](docs/NARRATION_DELIVERY.md)
+and [142 integration provenance](docs/RELEASE_143.md).
 
 ## Narration Dictionary
 

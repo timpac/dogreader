@@ -8,6 +8,8 @@ import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'media_diagnostics.dart';
+
 class _Recording {
   const _Recording(
     this.path,
@@ -32,6 +34,8 @@ class _Recording {
 /// it completes at Pause/EOF, rather than when playback starts.
 class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
   final AudioPlayer player;
+  final MediaDiagnostics? diagnostics;
+  String? _lastDiagnosticState;
   final Future<Directory> Function() _documentsDirectory;
   final List<StreamSubscription<dynamic>> _subscriptions = [];
   Future<void> _operations = Future<void>.value();
@@ -65,6 +69,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
   DogreaderAudioHandler({
     AudioPlayer? player,
     Future<Directory> Function()? documentsDirectory,
+    this.diagnostics,
   }) : player =
            player ??
            AudioPlayer(
@@ -73,6 +78,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
            ),
        _documentsDirectory =
            documentsDirectory ?? getApplicationDocumentsDirectory {
+    recordDiagnostic(MediaDiagnosticEvent.handlerCreated);
     _subscriptions.add(
       this.player.positionStream.listen((position) {
         if (_recording == null ||
@@ -142,6 +148,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
       AudioService.asyncError.listen((error) {
         diagnosticLastSessionError = _diagnosticReason(error);
         _logDiagnostic('SESSION ERROR $diagnosticLastSessionError');
+        recordDiagnostic(MediaDiagnosticEvent.bridgeError);
       }),
     );
   }
@@ -152,6 +159,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     await session.configure(const AudioSessionConfiguration.speech());
     if (_disposed || _session != null) return;
     _session = session;
+    recordDiagnostic(MediaDiagnosticEvent.sessionInitialized);
     bindInterruptions(
       session.interruptionEventStream,
       session.becomingNoisyEventStream,
@@ -165,6 +173,11 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
   ) {
     _subscriptions.add(
       interruptions.listen((event) {
+        diagnostics?.record(MediaDiagnosticEvent.focus, {
+          ..._diagnosticFields,
+          'begin': event.begin,
+          'focusType': event.type.name,
+        });
         _logDiagnostic(
           'FOCUS ${event.begin ? "begin" : "end"} ${event.type.name}',
         );
@@ -236,8 +249,31 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
   String? diagnosticLastSessionError;
   bool get diagnosticWantsPlayback => _wantsPlayback;
 
+  Map<String, Object?> get _diagnosticFields => {
+    'playing': player.playing,
+    'playerState': player.processingState.name,
+    'sessionPlaying': playbackState.value.playing,
+    'sessionState': playbackState.value.processingState.name,
+    'wanted': _wantsPlayback,
+    'positionMs': player.position.inMilliseconds,
+    'intent': _intentRevision,
+    'source': _sourceRevision,
+    'engine': _engineRevision,
+    'chapter': _recording?.index,
+  };
+
+  void recordDiagnostic(MediaDiagnosticEvent event) =>
+      diagnostics?.record(event, _diagnosticFields);
+
+  void _executing(int id) => diagnostics?.record(
+    MediaDiagnosticEvent.commandExecuting, {'id': id, ..._diagnosticFields},
+  );
+
   int _logCommand(String command, {String origin = 'external'}) {
     final id = ++diagnosticCommandCount;
+    diagnostics?.record(MediaDiagnosticEvent.commandReceived, {
+      'id': id, 'command': command, 'origin': origin, ..._diagnosticFields,
+    });
     _logDiagnostic(
       '#$id $command received origin=$origin playing=${player.playing} '
       'state=${player.processingState.name} positionMs=${player.position.inMilliseconds} '
@@ -246,17 +282,24 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     return id;
   }
 
-  void _result(int id, String phase) => _logDiagnostic(
-    '#$id $phase '
-    'playing=${player.playing} session=${playbackState.value.playing} '
-    'wanted=$_wantsPlayback positionMs=${player.position.inMilliseconds}',
-  );
+  void _result(int id, String phase) {
+    diagnostics?.record(MediaDiagnosticEvent.commandResult, {
+      'id': id, 'phase': phase, ..._diagnosticFields,
+    });
+    _logDiagnostic(
+      '#$id $phase '
+      'playing=${player.playing} session=${playbackState.value.playing} '
+      'wanted=$_wantsPlayback positionMs=${player.position.inMilliseconds}',
+    );
+  }
 
   void _logDiagnostic(String entry) {
     if (_disposed) return;
     final line = '${DateTime.now().toIso8601String()} $entry';
     diagnosticCommands.value = [line, ...diagnosticCommands.value.take(119)];
-    debugPrint('dogreader_media $line');
+    if (const bool.fromEnvironment('DOGREADER_MEDIA_VERBOSE')) {
+      debugPrint('dogreader_media $line');
+    }
   }
 
   void _recordPlaybackError(Object error) {
@@ -267,6 +310,9 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
       _resumePosition = player.position;
     }
     _playbackError = error is PlayerException ? error.code : -1;
+    diagnostics?.record(MediaDiagnosticEvent.playbackError, {
+      ..._diagnosticFields, 'code': _playbackError,
+    });
     final reason = _diagnosticReason(error);
     diagnosticLastError = '${error.runtimeType} code=$_playbackError: $reason';
     _logDiagnostic('ERROR $diagnosticLastError');
@@ -324,6 +370,15 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
             : null,
       ),
     );
+    if (diagnostics != null) {
+      final state = '${player.processingState.name}:${player.playing}:'
+          '${playbackState.value.processingState.name}:'
+          '${playbackState.value.playing}:$_wantsPlayback:$_playbackError';
+      if (state != _lastDiagnosticState) {
+        _lastDiagnosticState = state;
+        recordDiagnostic(MediaDiagnosticEvent.playbackState);
+      }
+    }
   }
 
   Future<void> _releaseNative() async {
@@ -380,6 +435,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
 
   void _publish(_Recording recording) {
     _recording = recording;
+    recordDiagnostic(MediaDiagnosticEvent.chapterLoaded);
     _lastSavedSecond = -1;
     mediaItem.add(
       MediaItem(
@@ -405,6 +461,15 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     bool Function()? isCurrent,
   }) {
     if (_disposed) return Future<void>.value();
+    // Stable opaque correlation only; no book title, source path or book ID.
+    var bookTag = 0x811c9dc5;
+    for (final unit in bookId.codeUnits) {
+      bookTag = ((bookTag ^ unit) * 0x01000193) & 0xffffffff;
+    }
+    diagnostics?.record(MediaDiagnosticEvent.chapterLoadRequested, {
+      'bookTag': bookTag, 'chapter': chapterIndex, 'count': chapterCount,
+      'positionMs': startPosition.inMilliseconds,
+    });
     if (!forceReload &&
         _loadedRevision == _sourceRevision &&
         !_preparing &&
@@ -470,15 +535,23 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
         _resumePosition = startPosition;
         _loadedRevision = revision;
         _publish(recording);
+      } catch (error) {
+        diagnostics?.record(MediaDiagnosticEvent.chapterLoadFailed, {
+          ..._diagnosticFields,
+          'code': error is PlayerException ? error.code : -1,
+        });
+        rethrow;
       } finally {
         _preparing = false;
         _broadcastPlaybackState();
+        recordDiagnostic(MediaDiagnosticEvent.chapterLoadEnded);
       }
     });
   }
 
   Future<void> unloadChapter(String bookId, int index) async {
     if (_recording?.key != '$bookId:$index') return;
+    recordDiagnostic(MediaDiagnosticEvent.chapterUnloaded);
     final revision = ++_sourceRevision;
     await stop();
     await _serial(() async {
@@ -497,6 +570,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     _resumeFocusRevision = null;
     _stopped = false;
     return _serial(() async {
+      _executing(id);
       bool current() =>
           !_disposed &&
           intent == _intentRevision &&
@@ -591,6 +665,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
   @override
   Future<void> pause({String origin = 'external'}) async {
     final id = _logCommand('pause', origin: origin);
+    _executing(id);
     ++_intentRevision;
     _wantsPlayback = false;
     _resumeFocusRevision = null;
@@ -619,6 +694,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
   @override
   Future<void> stop() async {
     final id = _logCommand('stop');
+    _executing(id);
     ++_intentRevision;
     _wantsPlayback = false;
     _resumeFocusRevision = null;
@@ -644,6 +720,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     final id = _logCommand('seek', origin: origin);
     final revision = _sourceRevision;
     return _serial(() async {
+      _executing(id);
       if (_disposed || revision != _sourceRevision) {
         _result(id, 'cancelled');
         return;
@@ -679,6 +756,9 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
         _broadcastPlaybackState();
         await _savePosition(player.position);
         _result(id, 'completed');
+      } catch (_) {
+        _result(id, 'failed');
+        rethrow;
       } finally {
         _seeking = false;
       }
@@ -690,12 +770,36 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
   @override
   Future<void> fastForward() =>
       seek(player.position + const Duration(seconds: 30));
+
+  // Preserve the inherited no-op behavior while making headset skip delivery
+  // observable. Chapter navigation semantics are outside this investigation.
+  @override
+  Future<void> skipToNext() async {
+    final id = _logCommand('next');
+    _executing(id);
+    await super.skipToNext();
+    _result(id, 'unsupported');
+  }
+
+  @override
+  Future<void> skipToPrevious() async {
+    final id = _logCommand('previous');
+    _executing(id);
+    await super.skipToPrevious();
+    _result(id, 'unsupported');
+  }
   @override
   Future<void> setSpeed(double speed) => _serial(() async {
     final id = _logCommand('speed');
-    await player.setSpeed(speed);
-    _broadcastPlaybackState();
-    _result(id, 'completed');
+    _executing(id);
+    try {
+      await player.setSpeed(speed);
+      _broadcastPlaybackState();
+      _result(id, 'completed');
+    } catch (_) {
+      _result(id, 'failed');
+      rethrow;
+    }
   });
 
   Future<void> _advanceToNextChapter() async {
@@ -866,6 +970,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
 
   Future<void> dispose() async {
     if (_disposed) return;
+    recordDiagnostic(MediaDiagnosticEvent.handlerDisposed);
     ++_sourceRevision;
     await stop();
     _disposed = true;
