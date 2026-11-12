@@ -24,6 +24,8 @@ Flutter dependency notices screen. The resolved lockfile is attached to the rele
 Kokoro-82M v1.0 model and voice package: Apache-2.0 per hexgrad model card.
 https://huggingface.co/hexgrad/Kokoro-82M
 Model package conversion/quantization: k2-fsa/sherpa-onnx tts-models release.
+The optional FP32 comparison uses the matching kokoro-multi-lang-v1_0 package
+under the same Apache-2.0 grant. Both packages retain their own LICENSE/README.
 Model binaries are not distributed inside the APK. Model installation retains
 the package LICENSE and README, and excludes unused eSpeak-NG data, Chinese
 normalization rules, and dictionary directories. Upstream training-data credits:

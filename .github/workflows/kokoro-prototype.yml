@@ -14,6 +14,9 @@ on:
       publish:
         required: true
         type: boolean
+      quality_comparison:
+        type: boolean
+        default: false
     secrets:
       DOGREADER_KEYSTORE_B64:
         required: true
@@ -23,7 +26,7 @@ permissions:
 
 jobs:
   probe:
-    if: github.ref == 'refs/heads/feature/local-kokoro-feasibility' && github.actor == github.repository_owner
+    if: (github.ref == 'refs/heads/feature/local-kokoro-feasibility' || github.ref == 'refs/heads/feature/kokoro-quality-comparison') && github.actor == github.repository_owner
     runs-on: ubuntu-latest
     timeout-minutes: 35
     permissions:
@@ -31,6 +34,7 @@ jobs:
     env:
       SOURCE: ${{ inputs.release_commit }}
       BUILD_NUMBER: ${{ inputs.build_number }}
+      QUALITY_COMPARISON: ${{ inputs.quality_comparison }}
     defaults:
       run:
         shell: bash
@@ -39,7 +43,8 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            if (context.ref !== 'refs/heads/feature/local-kokoro-feasibility') throw Error('Wrong branch');
+            const expectedBranch = process.env.QUALITY_COMPARISON === 'true' ? 'feature/kokoro-quality-comparison' : 'feature/local-kokoro-feasibility';
+            if (context.ref !== 'refs/heads/' + expectedBranch) throw Error('Wrong branch');
             if (process.env.GITHUB_RUN_ATTEMPT !== '1') throw Error('Inspect retained assets before another explicit dispatch');
             if (!/^[a-f0-9]{40}$/.test(process.env.SOURCE) || context.sha !== process.env.SOURCE) throw Error('Reviewed source must equal this feature tip');
             const {owner, repo} = context.repo;
@@ -87,12 +92,12 @@ jobs:
           flutter create --no-pub --platforms android --org com.dogreader --project-name kokoro_probe . > /tmp/template.log 2>&1
           rm -f test/widget_test.dart
           python3 tool/configure_android.py
-          flutter pub get > /tmp/dependencies.log 2>&1 || { tail -60 /tmp/dependencies.log; exit 1; }
+          flutter pub get --enforce-lockfile > /tmp/dependencies.log 2>&1 || { tail -60 /tmp/dependencies.log; exit 1; }
       - name: Targeted analysis and frontend safeguards
         working-directory: experiments/kokoro_probe
         run: |
           flutter analyze --no-pub lib test > /tmp/analysis.log 2>&1 || { cat /tmp/analysis.log; exit 1; }
-          flutter test --no-pub test/frontend_test.dart > /tmp/tests.log 2>&1 || { cat /tmp/tests.log; exit 1; }
+          flutter test --no-pub test > /tmp/tests.log 2>&1 || { cat /tmp/tests.log; exit 1; }
       - name: Build one ARM64 AOT prototype APK without any model binaries
         working-directory: experiments/kokoro_probe
         run: |
@@ -122,6 +127,7 @@ jobs:
           cp "$APK" "dist/Dogreader-${BUILD_NUMBER}-Kokoro-Offline-Probe.apk"
           cp experiments/kokoro_probe/pubspec.lock dist/prototype-pubspec.lock
           cp docs/LOCAL_KOKORO_FEASIBILITY.md dist/FEASIBILITY.md
+          if [ "$QUALITY_COMPARISON" = true ]; then cp docs/KOKORO_QUALITY_COMPARISON.md dist/COMPARISON.md; fi
           cp experiments/kokoro_probe/LICENSES.txt dist/LICENSES.txt
           curl -fsSL https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/v2.0.1/LICENSE >> dist/LICENSES.txt
           curl -fsSL https://raw.githubusercontent.com/microsoft/onnxruntime/v1.28.2/LICENSE >> dist/LICENSES.txt
@@ -150,9 +156,11 @@ jobs:
               throw Error('Release/tag already exists. Never overwrite.');
             }
             const body = `Isolated offline feasibility prototype; installs beside Dogreader as Kokoro Offline Probe (com.dogreader.kokoro_probe).\n\nOpen Assets and install ${name}. Download the model once (132.4 MB), then enable airplane mode and disable Wi-Fi. Use af_heart, two threads, one run for the first 1,000-word test. Tap Play latest WAV and Save measurements. See FEASIBILITY.md for the Pixel procedure and limitations. Unknown words are rejected.\n\nSource: ${source}\nAPK SHA-256: ${digest(fs.readFileSync('dist/' + name))}\n\nPixel inference, speed, RAM, heat and battery remain unmeasured. Existing Dogreader app and Google Cloud unchanged. No merge. Native/runtime license notices and dependency lockfile are attached. Source and build recipe are at this release tag. Downloads are public and require no API key.`;
+            const comparisonBody = `INT8 versus FP32 audio-quality experiment. Update Kokoro Offline Probe in place; existing INT8 download is retained. Package: com.dogreader.kokoro_probe.\n\nOpen Assets and install ${name}. Select FP32 and download it optionally (349.9 MB; allow 1.5 GB free during installation). Then enable airplane mode and turn Wi-Fi off. Tap Load short comparison passage; use af_heart, two threads, one run. Generate INT8 and FP32 without changing text or settings. Both recordings have separate Play, Save WAV and Save measurements buttons. Confirm Comparison controls match. See COMPARISON.md for exact instructions, evidence and unresolved problems.\n\nModel precision is the comparison variable. No filter, denoiser, resampler or gain change is applied. Quantization as the hiss cause remains a hypothesis pending listening to both outputs. No model binaries in APK or Git.\n\nOwner-reported build-145 Pixel baseline: 1,000 words, 276 s audio, 402 s generation, RTF 1.46, two threads, approximately 658 MB sampled peak memory, no severe thermal pressure. FP32 Android metrics and quality improvement remain unmeasured. Short host results are not phone benchmarks.\n\nSource: ${source}\nAPK SHA-256: ${digest(fs.readFileSync('dist/' + name))}\n\nAnalysis, targeted tests, package, version, signing and 16 KB alignment verified. Assets are downloaded again and hash-checked before publication. Existing Dogreader/cloud/media/RSS/progress unchanged; no merge.`;
             const release = (await github.rest.repos.createRelease({owner, repo, tag_name: tag,
               target_commitish: source, name: `Dogreader ${number} — Kokoro offline experiment`,
-              body, draft: true, prerelease: true, make_latest: 'false'})).data;
+              body: process.env.QUALITY_COMPARISON === 'true' ? comparisonBody : body,
+              draft: true, prerelease: true, make_latest: 'false'})).data;
             for (const filename of fs.readdirSync('dist')) {
               const data = fs.readFileSync('dist/' + filename);
               const asset = (await github.rest.repos.uploadReleaseAsset({owner, repo, release_id: release.id,

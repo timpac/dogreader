@@ -1,11 +1,13 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:archive/archive_io.dart';
 import 'package:crypto/crypto.dart';
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 import 'frontend.dart';
+import 'audio.dart';
 
 Future<String> fileHash(File file) async =>
     (await sha256.bind(file.openRead()).first).toString();
@@ -51,7 +53,7 @@ Future<void> install(Map<String, dynamic> args, SendPort port) async {
         // Flush applies backpressure, keeping a fast connection from buffering the model in RAM.
         await output.flush();
         if (received - lastUpdate > 2 * 1024 * 1024) {
-          port.send({'status': 'Downloading ${(received / 1000000).toStringAsFixed(1)} / 132.4 MB'});
+          port.send({'status': 'Downloading ${(received / 1000000).toStringAsFixed(1)} / ${((manifest['archiveBytes'] as int) / 1000000).toStringAsFixed(1)} MB'});
           lastUpdate = received;
         }
       }
@@ -106,6 +108,8 @@ Future<void> install(Map<String, dynamic> args, SendPort port) async {
 
 Future<void> generate(Map<String, dynamic> args, SendPort port) async {
   final root = args['model'] as String;
+  final variant = args['variant'] as String;
+  final modelFile = args['modelFile'] as String;
   final lexiconName = args['british'] == true ? 'lexicon-gb-en.txt' : 'lexicon-us-en.txt';
   final frontendTimer = Stopwatch()..start();
   final lexicon = parseLexicon(File('$root/$lexiconName').readAsStringSync());
@@ -126,7 +130,7 @@ Future<void> generate(Map<String, dynamic> args, SendPort port) async {
   final tts = sherpa.OfflineTts(sherpa.OfflineTtsConfig(
     model: sherpa.OfflineTtsModelConfig(
       kokoro: sherpa.OfflineTtsKokoroModelConfig(
-        model: '$root/model.int8.onnx', voices: '$root/voices.bin',
+        model: '$root/$modelFile', voices: '$root/voices.bin',
         tokens: '$root/tokens.txt', lexicon: '$root/$lexiconName',
         lang: args['british'] == true ? 'en-gb' : 'en-us',
       ),
@@ -138,24 +142,30 @@ Future<void> generate(Map<String, dynamic> args, SendPort port) async {
     for (var run = 1; run <= (args['repeats'] as int); run++) {
       port.send({'runStart': run});
       final timer = Stopwatch()..start();
-      final path = '${args['output']}/probe-${args['id']}-$run.wav';
+      final path = '${args['output']}/probe-$variant-${args['id']}-$run.wav';
       final partial = File('$path.part');
       final wav = partial.openSync(mode: FileMode.write);
       var frames = 0;
       var firstAudioMs = 0;
+      double peak = 0, sum = 0, squares = 0;
+      var clipped = 0, fullScale = 0;
+      int? previousPcm;
+      final boundaries = <Map<String, dynamic>>[];
       try {
         wav.writeFromSync(Uint8List(44));
         for (var i = 0; i < prepared.chunks.length; i++) {
           final audio = tts.generate(text: prepared.chunks[i], sid: args['sid'] as int, speed: 1.0);
           if (audio.sampleRate != 24000 || audio.samples.isEmpty) throw StateError('Empty or unexpected audio');
           if (i == 0) firstAudioMs = timer.elapsedMilliseconds;
-          final bytes = ByteData(audio.samples.length * 2);
-          for (var j = 0; j < audio.samples.length; j++) {
-            final sample = audio.samples[j];
-            if (!sample.isFinite) throw StateError('Non-finite audio sample');
-            bytes.setInt16(j * 2, (sample.clamp(-1.0, 1.0) * 32767).round(), Endian.little);
-          }
-          wav.writeFromSync(bytes.buffer.asUint8List());
+          final pcm = encodePcm16(audio.samples);
+          peak = math.max(peak, pcm.peak);
+          sum += pcm.sum; squares += pcm.squareSum;
+          clipped += pcm.clippedSamples; fullScale += pcm.fullScaleSamples;
+          boundaries.add({'chunk': i + 1, 'startFrame': frames,
+            'frames': audio.samples.length, 'firstPcm': pcm.firstPcm, 'lastPcm': pcm.lastPcm,
+            'joinDeltaPcm': previousPcm == null ? null : pcm.firstPcm - previousPcm});
+          previousPcm = pcm.lastPcm;
+          wav.writeFromSync(pcm.bytes);
           frames += audio.samples.length;
           port.send({'status': 'Run $run: ${i + 1}/${prepared.chunks.length} chunks'});
         }
@@ -174,22 +184,19 @@ Future<void> generate(Map<String, dynamic> args, SendPort port) async {
         'audioSeconds': audioSeconds, 'rtf': timer.elapsedMilliseconds / 1000 / audioSeconds,
         'threads': args['threads'], 'sid': args['sid'], 'speed': 1.0,
         'runtime': 'sherpa_onnx 2.0.1 CPU', 'modelArchiveSha256': args['modelSha'],
+        'modelVariant': variant, 'modelFile': modelFile, 'modelFileSha256': args['modelFileSha'],
+        'sampleRate': 24000, 'channels': 1, 'pcmBits': 16, 'sampleFrames': frames,
+        'rawPeakAmplitude': peak, 'rawRmsAmplitude': math.sqrt(squares / frames),
+        'rawMeanAmplitude': sum / frames, 'clippedSamples': clipped,
+        'samplesAtOrBeyondFullScale': fullScale, 'chunkBoundaries': boundaries,
+        'chunksSha256': sha256.convert(utf8.encode(jsonEncode(prepared.chunks))).toString(),
+        'comparisonSettingsSha256': sha256.convert(utf8.encode(jsonEncode({
+          'text': args['text'], 'sid': args['sid'], 'threads': args['threads'], 'speed': 1.0,
+          'runtime': 'sherpa_onnx 2.0.1 CPU', 'frontend': 'probe-145-lexicon-chunker',
+        }))).toString(),
         'textSha256': sha256.convert(utf8.encode(args['text'] as String)).toString(),
         'wavBytes': File(path).lengthSync(), 'wavSha256': await fileHash(File(path)),
       }});
     }
   } finally { tts.free(); }
-}
-
-Uint8List wavHeader(int frames, int rate) {
-  final bytes = ByteData(44);
-  final raw = bytes.buffer.asUint8List();
-  void tag(int offset, String value) => raw.setRange(offset, offset + value.length, ascii.encode(value));
-  tag(0, 'RIFF'); bytes.setUint32(4, 36 + frames * 2, Endian.little);
-  tag(8, 'WAVE'); tag(12, 'fmt '); bytes.setUint32(16, 16, Endian.little);
-  bytes.setUint16(20, 1, Endian.little); bytes.setUint16(22, 1, Endian.little);
-  bytes.setUint32(24, rate, Endian.little); bytes.setUint32(28, rate * 2, Endian.little);
-  bytes.setUint16(32, 2, Endian.little); bytes.setUint16(34, 16, Endian.little);
-  tag(36, 'data'); bytes.setUint32(40, frames * 2, Endian.little);
-  return raw;
 }

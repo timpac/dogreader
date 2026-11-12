@@ -18,8 +18,11 @@ class Probe extends StatefulWidget {
 
 class _ProbeState extends State<Probe> {
   final text = TextEditingController();
-  String manifest = '', root = '', output = '', model = '';
-  String status = 'Starting…', lastWav = '', lastReport = '';
+  String manifest = '', root = '', output = '', model = '', variant = 'int8';
+  String status = 'Starting…';
+  final manifests = <String, String>{};
+  final installed = <String, bool>{};
+  final recordings = <String, Map<String, dynamic>>{};
   bool ready = false, busy = false;
   int threads = 2, repeats = 1, sid = 3;
   final results = <Map<String, dynamic>>[];
@@ -34,18 +37,35 @@ class _ProbeState extends State<Probe> {
   Future<void> initialize() async {
     try {
       manifest = await rootBundle.loadString('model-manifest.json');
+      manifests['int8'] = manifest;
+      manifests['fp32'] = await rootBundle.loadString('fp32-model-manifest.json');
       text.text = await rootBundle.loadString('passage.txt');
       final paths = Map<String, dynamic>.from(await native.invokeMethod('paths'));
       root = paths['files'] as String;
       output = paths['output'] as String;
-      final spec = jsonDecode(manifest);
-      model = '$root/${spec['directory']}';
-      final marker = File('$model/READY');
-      ready = await marker.exists() && await marker.readAsString() == spec['archiveSha256'];
+      for (final entry in manifests.entries) {
+        final spec = jsonDecode(entry.value);
+        final marker = File('$root/${spec['directory']}/READY');
+        installed[entry.key] = await marker.exists() && await marker.readAsString() == spec['archiveSha256'];
+      }
+      selectVariant('int8');
       if (mounted) setState(() => status = ready ? 'Model ready. Enable airplane mode to test.' : 'Download the model once to begin.');
     } catch (error) {
       if (mounted) setState(() => status = '$error');
     }
+  }
+
+  void selectVariant(String value) {
+    variant = value;
+    manifest = manifests[value]!;
+    model = '$root/${jsonDecode(manifest)['directory']}';
+    ready = installed[value] == true;
+    results.clear();
+  }
+
+  Future<void> loadPassage(String asset) async {
+    final passage = await rootBundle.loadString(asset);
+    if (mounted) setState(() => text.text = passage);
   }
 
   Future<void> sample() async {
@@ -64,6 +84,9 @@ class _ProbeState extends State<Probe> {
     Isolate? isolate;
     Timer? timer;
     var succeeded = false;
+    final selectedVariant = variant;
+    final spec = jsonDecode(manifest) as Map<String, dynamic>;
+    final graph = variant == 'int8' ? 'model.int8.onnx' : 'model.onnx';
     final id = DateTime.now().toUtc().toIso8601String().replaceAll(':', '-');
     try {
       await native.invokeMethod('stop');
@@ -82,17 +105,19 @@ class _ProbeState extends State<Probe> {
         'port': receive.sendPort, 'operation': installing ? 'install' : 'generate',
         'manifest': manifest, 'root': root, 'model': model, 'output': output,
         'id': id, 'text': text.text, 'threads': threads, 'repeats': repeats,
-        'sid': sid, 'british': sid == 21, 'modelSha': jsonDecode(manifest)['archiveSha256'],
+        'sid': sid, 'british': sid == 21, 'modelSha': spec['archiveSha256'],
+        'variant': selectedVariant, 'modelFile': graph, 'modelFileSha': spec['files'][graph]['sha256'],
       }, onError: receive.sendPort, onExit: receive.sendPort);
       await for (final message in receive) {
         if (message is! Map) throw StateError('Worker stopped unexpectedly: $message');
         if (message['error'] != null) throw StateError(message['error'] as String);
         if (message['done'] == true) { succeeded = true; break; }
-        if (message['installed'] == true) ready = true;
+        if (message['installed'] == true) { ready = true; installed[selectedVariant] = true; }
         if (message['runStart'] != null) currentRun = message['runStart'] as int;
         if (message['result'] != null) {
           final result = Map<String, dynamic>.from(message['result'] as Map);
-          results.add(result); lastWav = result['path'] as String;
+          results.add(result);
+          recordings[selectedVariant] = result;
         }
         if (mounted) setState(() => status = message['status'] as String? ?? status);
       }
@@ -107,6 +132,7 @@ class _ProbeState extends State<Probe> {
           await sample();
           final summary = <String, dynamic>{
             'experimentalBuild': experimentBuild, 'completed': succeeded,
+            'modelVariant': selectedVariant, 'modelArchiveSha256': spec['archiveSha256'],
             'status': status, 'results': results, 'samples': samples,
             'sampledPeakPssKb': samples.map((s) => (s['pssKb'] as num?) ?? 0).fold<num>(0, (a, b) => a > b ? a : b),
             'sessionProcessCpuMs': (samples.last['cpuMs'] as num?) != null && firstSample?['cpuMs'] != null
@@ -115,8 +141,9 @@ class _ProbeState extends State<Probe> {
                 'Battery deltas include screen, OS and sampling overhead. Generation timing includes WAV writes. '
                 'Run one is engine-cold; later runs reuse the engine. Each session loads a new engine.',
           };
-          lastReport = '$output/benchmark-$id.json';
-          await File(lastReport).writeAsString(const JsonEncoder.withIndent('  ').convert(summary), flush: true);
+          final report = '$output/benchmark-$selectedVariant-$id.json';
+          await File(report).writeAsString(const JsonEncoder.withIndent('  ').convert(summary), flush: true);
+          if (results.isNotEmpty) recordings[selectedVariant]!['report'] = report;
         }
       } catch (error) { status = '$status\nReport error: $error'; }
       await native.invokeMethod('keepAwake', false);
@@ -141,14 +168,27 @@ class _ProbeState extends State<Probe> {
         const Text('Separate experimental app. No cloud calls or API keys. Keep this screen open during generation.'),
         Text('Build $experimentBuild · Sherpa-ONNX 2.0.1 · CPU · 24 kHz WAV'),
         const SizedBox(height: 12),
-        const Text('One-time model download: 132.4 MB. Keep at least 800 MB free while installing. '
+        DropdownButton<String>(value: variant, isExpanded: true,
+          items: const [DropdownMenuItem(value: 'int8', child: Text('INT8 · existing model · 132.4 MB download')),
+            DropdownMenuItem(value: 'fp32', child: Text('FP32 · optional comparison · 349.9 MB download'))],
+          onChanged: busy || manifests.isEmpty ? null : (value) => setState(() {
+            selectVariant(value!);
+            status = ready ? '${variant.toUpperCase()} ready. Enable airplane mode to test.' : 'Download ${variant.toUpperCase()} once to begin.';
+          })),
+        Text(variant == 'int8' ? 'INT8: allow 800 MB free during installation.' :
+            'FP32: allow 1.5 GB free during installation. Larger model; phone performance is unmeasured.'),
+        const Text('Downloads are optional and separate. Existing INT8 stays installed. '
             'Then enable airplane mode, with Wi-Fi off. Only Download model uses the network.'),
         FilledButton(onPressed: busy || root.isEmpty ? null : () => operate(true),
-            child: Text(ready ? 'Re-download verified model' : 'Download model')),
+            child: Text('${ready ? 'Re-download' : 'Download'} ${variant.toUpperCase()} model')),
         const Text('English lexicon experiment: unknown words are rejected before synthesis. '
             'Spell out numbers; no SSML. This is not yet a complete audiobook frontend.'),
         TextField(controller: text, enabled: !busy, minLines: 5, maxLines: 9,
             decoration: const InputDecoration(labelText: 'Passage (default: exactly 1,000 words)', border: OutlineInputBorder())),
+        Wrap(spacing: 10, children: [
+          TextButton(onPressed: busy ? null : () => loadPassage('comparison-passage.txt'), child: const Text('Load short comparison passage')),
+          TextButton(onPressed: busy ? null : () => loadPassage('passage.txt'), child: const Text('Load 1,000 words')),
+        ]),
         Row(children: [
           const Text('Threads: '), DropdownButton<int>(value: threads,
               items: [1, 2, 4].map((n) => DropdownMenuItem(value: n, child: Text('$n'))).toList(),
@@ -163,18 +203,28 @@ class _ProbeState extends State<Probe> {
               DropdownMenuItem(value: 16, child: Text('am_michael · American')),
               DropdownMenuItem(value: 21, child: Text('bf_emma · British'))],
             onChanged: busy ? null : (n) => setState(() => sid = n!)),
-        FilledButton(onPressed: busy || !ready ? null : () => operate(false), child: const Text('Generate offline audio')),
+        FilledButton(onPressed: busy || !ready ? null : () => operate(false), child: Text('Generate ${variant.toUpperCase()} offline audio')),
         if (busy) const LinearProgressIndicator(),
         SelectableText(status),
         for (final r in results) Text('Run ${r['run']}: ${(r['generationAndWriteMs'] / 1000).toStringAsFixed(1)} s '
             'for ${(r['audioSeconds'] as num).toStringAsFixed(1)} s audio; '
             'RTF ${(r['rtf'] as num).toStringAsFixed(3)}. ${r['engineWarm'] == true ? 'Warm engine.' : 'Cold engine.'}'),
-        Wrap(spacing: 10, children: [
-          OutlinedButton(onPressed: busy || lastWav.isEmpty ? null : () => action('play', lastWav), child: const Text('Play latest WAV')),
-          OutlinedButton(onPressed: () => action('stop'), child: const Text('Stop playback')),
-          OutlinedButton(onPressed: busy || lastWav.isEmpty ? null : () => action('export', lastWav), child: const Text('Save WAV…')),
-          OutlinedButton(onPressed: busy || lastReport.isEmpty ? null : () => action('export', lastReport), child: const Text('Save measurements…')),
-        ]),
+        for (final key in ['int8', 'fp32']) if (recordings.containsKey(key)) ...[
+          Text('${key.toUpperCase()} latest recording · voice ${recordings[key]!['sid']} · ${recordings[key]!['threads']} threads'),
+          Text('Peak ${(recordings[key]!['rawPeakAmplitude'] as num).toStringAsFixed(3)} · '
+              'clamped samples ${recordings[key]!['clippedSamples']}'),
+          Wrap(spacing: 10, children: [
+            OutlinedButton(onPressed: busy ? null : () => action('play', recordings[key]!['path']), child: Text('Play ${key.toUpperCase()}')),
+            OutlinedButton(onPressed: busy ? null : () => action('export', recordings[key]!['path']), child: Text('Save ${key.toUpperCase()} WAV…')),
+            OutlinedButton(onPressed: busy || recordings[key]!['report'] == null ? null : () => action('export', recordings[key]!['report']), child: Text('Save ${key.toUpperCase()} measurements…')),
+          ]),
+        ],
+        OutlinedButton(onPressed: () => action('stop'), child: const Text('Stop playback')),
+        if (recordings.containsKey('int8') && recordings.containsKey('fp32'))
+          Text(recordings['int8']!['comparisonSettingsSha256'] == recordings['fp32']!['comparisonSettingsSha256'] &&
+              recordings['int8']!['chunksSha256'] == recordings['fp32']!['chunksSha256']
+              ? 'Comparison controls match: text, voice, speed, threads and chunks.'
+              : 'Comparison settings differ. Regenerate both with the same text, voice and thread count.'),
         const SizedBox(height: 12),
         const Text('Licenses: Kokoro weights/voice package and Sherpa-ONNX Apache-2.0; '
             'ONNX Runtime MIT. Sherpa 2.0.1 has no eSpeak-NG. Flutter and Dart BSD; '

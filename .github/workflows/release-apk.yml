@@ -24,6 +24,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  kokoro-quality:
+    if: github.ref == 'refs/heads/feature/kokoro-quality-comparison' && github.actor == github.repository_owner
+    uses: ./.github/workflows/kokoro-prototype.yml
+    permissions:
+      contents: write
+    with:
+      release_commit: ${{ inputs.release_commit }}
+      build_number: ${{ inputs.build_number }}
+      publish: ${{ inputs.publish }}
+      quality_comparison: true
+    secrets: inherit
   # Explicitly requested isolated experiment. The canonical app job below is
   # unchanged and cannot run on this feature branch. Dispatch this existing
   # registered workflow with ref=feature/local-kokoro-feasibility; no merge is needed.
