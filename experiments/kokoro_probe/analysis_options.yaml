@@ -1,0 +1,6 @@
+# Keep analysis local to the experiment; no dependency on the app's lint package.
+analyzer:
+  exclude:
+    - build/**
+linter:
+  rules: []

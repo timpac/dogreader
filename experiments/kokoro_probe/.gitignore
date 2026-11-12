@@ -1,0 +1,9 @@
+android/
+.metadata
+README.md
+*.onnx
+*.bin
+*.tar*
+*.wav
+*.part
+benchmark-*.json
