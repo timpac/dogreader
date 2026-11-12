@@ -15,6 +15,7 @@ STAGES = {
     'focus-automatic-resume', 'focus-pause-stays-paused',
     'rapid-commands-final-pause', 'foreground-final-pause',
     'seek-pause-play-no-deadlock',
+    'shade-ui-pause', 'shade-ui-play', 'lock-ui-pause', 'lock-ui-play',
 }
 
 
@@ -34,9 +35,14 @@ def check_identity(apk, package):
         raise AssertionError('Refusing an APK outside the isolated test packages.')
 
 
-def run(apk, instrumentation_apk):
+def run(apk, instrumentation_apk, case):
     if adb('shell', 'getprop', 'ro.kernel.qemu').strip() != '1':
         raise AssertionError('This check is restricted to an emulator, not a user phone.')
+    # The runner's generic 320x640 display clips Android 13's media carousel
+    # below Quick Settings. Use a normal portrait phone viewport so actual
+    # System UI controls can be seen and touched; do not bypass their UI.
+    adb('shell', 'wm', 'size', '1080x2400')
+    adb('shell', 'wm', 'density', '420')
     check_identity(apk, PACKAGE)
     check_identity(instrumentation_apk, TEST_PACKAGE)
     adb('install', '-r', '-t', str(apk))
@@ -45,17 +51,24 @@ def run(apk, instrumentation_apk):
     adb('shell', 'pm', 'clear', PACKAGE)
     # Instrumentation owns launch and the complete session. Starting a separate
     # instrumentation for each dump would restart the app and invalidate it.
+    method = 'nativeDeliveryAndSystemUiControls' if case == 'controls' else 'serviceRecreationRetainsCommandDelivery'
     output = adb('shell', 'am', 'instrument', '-w', '-r', '-e', 'class',
-                 'com.example.audiobook_app.MediaControlDeliveryTest',
+                 'com.example.audiobook_app.MediaControlDeliveryTest#' + method,
+                 '-e', 'expectListenerLoss', str(case == 'baseline').lower(),
+                 '-e', 'pauseMs', '660000' if case == 'recreation' else '1000',
                  TEST_PACKAGE + '/androidx.test.runner.AndroidJUnitRunner',
-                 timeout=360)
+                 timeout=960)
+    expected = STAGES if case == 'controls' else ({'baseline-native-command-dropped'} if case == 'baseline' else {
+        'recreated-session-play', 'recreated-session-pause', 'recreated-media-key-play',
+        'recreated-media-key-pause', 'extended-pause-resume',
+    })
     print(output, flush=True)
     stages = set()
     for line in output.splitlines():
         if 'MEDIA_CONTROL_RESULT ' in line:
             value = json.loads(line.split('MEDIA_CONTROL_RESULT ', 1)[1])
             stages.add(value['stage'])
-    if not re.search(r'OK \(1 test\)', output) or stages != STAGES:
+    if not re.search(r'OK \(1 test\)', output) or stages != expected:
         raise AssertionError('Native instrumentation did not pass all stages: ' +
                              json.dumps(sorted(stages)) + '\n' + output[-16000:])
     return sorted(stages)
@@ -66,15 +79,19 @@ def main():
     parser.add_argument('--apk', type=Path, required=True)
     parser.add_argument('--instrumentation-apk', type=Path, required=True)
     parser.add_argument('--report', type=Path, required=True)
+    parser.add_argument('--case', choices=['controls', 'recreation', 'baseline'], default='controls')
     args = parser.parse_args()
     report = {'package': PACKAGE, 'success': False}
     try:
-        report['stages'] = run(args.apk, args.instrumentation_apk)
+        report['stages'] = run(args.apk, args.instrumentation_apk, args.case)
         report['success'] = True
     except Exception as error:
         report['error'] = str(error)
         print(json.dumps(report), flush=True)
         try:
+            native = adb('shell', 'run-as', PACKAGE, 'cat',
+                         'files/media_transport_diagnostics/transport.jsonl')
+            print('NATIVE_TRANSPORT_TAIL\n' + '\n'.join(native.splitlines()[-60:]), flush=True)
             print(adb('shell', 'dumpsys', 'media_session'), flush=True)
             print(adb('logcat', '-d', '-t', '200', '-s', 'flutter', 'AudioService'), flush=True)
         except subprocess.SubprocessError:

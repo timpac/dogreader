@@ -4,6 +4,7 @@ import android.app.Instrumentation;
 import android.app.KeyguardManager;
 import android.app.UiAutomation;
 import android.accessibilityservice.AccessibilityServiceInfo;
+import android.accessibilityservice.AccessibilityService;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -19,8 +20,6 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
-import android.view.InputDevice;
-import android.view.MotionEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
 
@@ -38,6 +37,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import com.ryanheise.audioservice.AudioService;
+import com.ryanheise.audioservice.AudioServicePlugin;
+import com.ryanheise.audioservice.MediaTransportDiagnostics;
+import io.flutter.embedding.engine.FlutterEngine;
+import java.lang.reflect.Method;
 
 import static org.junit.Assert.*;
 
@@ -152,17 +156,34 @@ public class MediaControlDeliveryTest {
         return null;
     }
 
-    private Rect bounds(String label, boolean system) {
+    private AccessibilityNodeInfo controlNode(String label, boolean system) {
         for (AccessibilityNodeInfo root : roots()) {
             if (system) {
                 // Anchor to our own media card, rather than another app's Play.
                 AccessibilityNodeInfo title = find(root, "Control probe");
+                if (title == null) {
+                    List<AccessibilityNodeInfo> nodes = new ArrayList<>();
+                    nodes.add(root);
+                    for (int i = 0; i < nodes.size() && i < 4000; i++) {
+                        AccessibilityNodeInfo node = nodes.get(i);
+                        if (node.isVisibleToUser() &&
+                                "com.android.systemui:id/qs_media_controls".equals(node.getViewIdResourceName()) &&
+                                text(node.getContentDescription()).contains("Control probe by Synthetic fixture")) {
+                            title = node;
+                            break;
+                        }
+                        for (int child = 0; child < node.getChildCount(); child++) {
+                            AccessibilityNodeInfo next = node.getChild(child);
+                            if (next != null) nodes.add(next);
+                        }
+                    }
+                }
                 for (int depth = 0; title != null && depth < 12; depth++, title = title.getParent()) {
                     AccessibilityNodeInfo control = find(title, label);
                     if (control != null && "com.android.systemui".equals(text(control.getPackageName()))) {
                         Rect bounds = new Rect();
                         control.getBoundsInScreen(bounds);
-                        if (!bounds.isEmpty()) return bounds;
+                        if (!bounds.isEmpty()) return control;
                     }
                 }
             } else {
@@ -170,39 +191,67 @@ public class MediaControlDeliveryTest {
                 if (control != null && PACKAGE.equals(text(control.getPackageName()))) {
                     Rect bounds = new Rect();
                     control.getBoundsInScreen(bounds);
-                    if (!bounds.isEmpty()) return bounds;
+                    if (!bounds.isEmpty()) return control;
                 }
             }
         }
         return null;
     }
 
-    private void tap(String label, boolean system) throws Exception {
+    private void activate(String label, boolean system) throws Exception {
         long deadline = SystemClock.uptimeMillis() + 20000;
+        AccessibilityNodeInfo control = null;
+        while (control == null && SystemClock.uptimeMillis() < deadline) {
+            control = controlNode(label, system);
+            if (control == null) SystemClock.sleep(100);
+        }
         Rect target = null;
-        while (target == null && SystemClock.uptimeMillis() < deadline) {
-            target = bounds(label, system);
-            if (target == null) SystemClock.sleep(100);
+        if (control != null) {
+            target = new Rect();
+            control.getBoundsInScreen(target);
+        }
+        if (target == null) {
+            StringBuilder tree = new StringBuilder("\nSYSTEM_UI_TREE\n");
+            for (AccessibilityNodeInfo root : roots()) {
+                List<AccessibilityNodeInfo> nodes = new ArrayList<>();
+                nodes.add(root);
+                for (int i = 0; i < nodes.size() && i < 250; i++) {
+                    AccessibilityNodeInfo node = nodes.get(i);
+                    Rect bounds = new Rect();
+                    node.getBoundsInScreen(bounds);
+                    if (node.isVisibleToUser()) tree.append(node.getPackageName()).append(' ')
+                            .append(node.getViewIdResourceName()).append(' ')
+                            .append(node.getText()).append(' ').append(node.getContentDescription())
+                            .append(' ').append(bounds).append('\n');
+                    for (int child = 0; child < node.getChildCount(); child++) {
+                        AccessibilityNodeInfo next = node.getChild(child);
+                        if (next != null) nodes.add(next);
+                    }
+                }
+            }
+            Bundle status = new Bundle();
+            status.putString("stream", tree.toString());
+            instrumentation.sendStatus(2, status);
         }
         assertNotNull("Visible control absent: " + label + "; state=" + state(), target);
-        long down = SystemClock.uptimeMillis();
-        MotionEvent press = MotionEvent.obtain(down, down, MotionEvent.ACTION_DOWN,
-                target.centerX(), target.centerY(), 0);
-        press.setSource(InputDevice.SOURCE_TOUCHSCREEN);
-        assertTrue("Touch down not injected", automation.injectInputEvent(press, true));
-        SystemClock.sleep(60);
-        MotionEvent release = MotionEvent.obtain(down, SystemClock.uptimeMillis(), MotionEvent.ACTION_UP,
-                target.centerX(), target.centerY(), 0);
-        release.setSource(InputDevice.SOURCE_TOUCHSCREEN);
-        assertTrue("Touch up not injected", automation.injectInputEvent(release, true));
-        press.recycle();
-        release.recycle();
+        // Exercise the visible button's own callback through Android's
+        // accessibility contract. No direct transport command substitutes for
+        // this UI action; receipt and real native output must still follow.
+        assertTrue("Visible UI button rejected accessibility click: " + label,
+                control.performAction(AccessibilityNodeInfo.ACTION_CLICK));
+    }
+
+    private void openNotificationShade() {
+        // Use Android's accessibility global action rather than guessing gesture
+        // coordinates or racing a Home activity transition.
+        assertTrue("Android rejected opening notifications",
+                automation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS));
     }
 
     private void command(String stage, String label, String method, Boolean playing,
                          int direction, boolean system) throws Exception {
         int before = state().getJSONObject("commands").optInt(method);
-        tap(label, system);
+        activate(label, system);
         JSONObject observed = await(value -> {
             if (value.getJSONObject("commands").optInt(method) <= before) return false;
             if (playing != null && (value.getBoolean("playing") != playing ||
@@ -246,6 +295,116 @@ public class MediaControlDeliveryTest {
         });
         if (playing != null) assertNativeOutput(playing);
         result(stage, observed);
+    }
+
+    private void pluginBinding(FlutterEngine engine, String method) {
+        instrumentation.runOnMainSync(() -> {
+            try {
+                Object plugin = engine.getPlugins().get(AudioServicePlugin.class);
+                Method binding = AudioServicePlugin.class.getDeclaredMethod(method);
+                binding.setAccessible(true);
+                binding.invoke(plugin);
+            } catch (Exception error) { throw new AssertionError(error); }
+        });
+    }
+
+    private void awaitService(boolean present) {
+        long deadline = SystemClock.uptimeMillis() + 15000;
+        while ((service() != null) != present && SystemClock.uptimeMillis() < deadline)
+            SystemClock.sleep(100);
+        assertEquals("Framework service lifecycle did not complete", present, service() != null);
+    }
+
+    private AudioService service() {
+        try {
+            java.lang.reflect.Field instance = AudioService.class.getDeclaredField("instance");
+            instance.setAccessible(true);
+            return (AudioService) instance.get(null);
+        } catch (Exception error) { throw new AssertionError(error); }
+    }
+
+    @Test public void serviceRecreationRetainsCommandDelivery() throws Exception {
+        assertEquals(PACKAGE, context.getPackageName());
+        audio = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+        instrumentation.startActivitySync(new Intent().setComponent(new ComponentName(PACKAGE,
+                "com.example.audiobook_app.MainActivity")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        await(value -> value.getBoolean("playing") && value.optLong("durationMs") > 200000);
+        ownController();
+        controller.getTransportControls().seekTo(60000);
+        await(value -> value.getLong("positionMs") >= 60000 && value.getLong("positionMs") < 65000);
+        controller.getTransportControls().pause();
+        JSONObject paused = await(value -> !value.getBoolean("playing") &&
+                value.getString("processing").equals("idle"));
+        long position = paused.getLong("positionMs");
+        long handlerStarted = paused.getLong("handlerStarted");
+        Object oldToken = controller.getSessionToken();
+        FlutterEngine[] engine = new FlutterEngine[1];
+        instrumentation.runOnMainSync(() -> engine[0] = AudioServicePlugin.getFlutterEngine(context));
+        controller.getTransportControls().stop();
+        await(value -> !value.getBoolean("playing") && value.getBoolean("stopped"));
+        // Reproduce the last-binding release while an Activity has already
+        // reattached. Only the private test harness releases that binding;
+        // Android itself destroys/recreates the actual service and session.
+        pluginBinding(engine[0], "disconnect");
+        awaitService(false);
+        FlutterEngine[] surviving = new FlutterEngine[1];
+        instrumentation.runOnMainSync(() -> surviving[0] = AudioServicePlugin.getFlutterEngine(context));
+        assertSame("The owning Flutter engine must survive", engine[0], surviving[0]);
+        pluginBinding(engine[0], "connect");
+        awaitService(true);
+        ownController();
+        assertNotEquals("Android must create a new session", oldToken, controller.getSessionToken());
+        int plays = state().getJSONObject("commands").optInt("play");
+        controller.getTransportControls().play();
+        boolean baseline = InstrumentationRegistry.getArguments().getString("expectListenerLoss", "false").equals("true");
+        if (baseline) {
+            SystemClock.sleep(1500);
+            JSONObject observed = state();
+            assertEquals(plays, observed.getJSONObject("commands").optInt("play"));
+            assertFalse(observed.getBoolean("playing"));
+            boolean dropped = false;
+            for (String line : MediaTransportDiagnostics.snapshot().split("\n")) {
+                if (!line.startsWith("{")) continue;
+                JSONObject entry = new JSONObject(line);
+                if (entry.optString("event").equals("native_command") &&
+                        entry.optString("command").equals("play") && !entry.getBoolean("listener")) dropped = true;
+            }
+            assertTrue("Baseline must receive native Play with a missing listener", dropped);
+            result("baseline-native-command-dropped", observed);
+            return;
+        }
+        JSONObject resumed = await(value -> value.getJSONObject("commands").optInt("play") > plays &&
+                value.getBoolean("playing") && nativeStateIs(PlaybackState.STATE_PLAYING));
+        assertEquals(handlerStarted, resumed.getLong("handlerStarted"));
+        assertTrue("Retained source must resume near its saved position", resumed.getLong("positionMs") >= position - 500 &&
+                resumed.getLong("positionMs") < position + 5000);
+        assertNativeOutput(true);
+        result("recreated-session-play", resumed);
+        externalCommand("recreated-session-pause", "pause", false, 0);
+        controller.dispatchMediaButtonEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN,
+                android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE));
+        controller.dispatchMediaButtonEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_UP,
+                android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE));
+        result("recreated-media-key-play", await(value -> value.getBoolean("playing")));
+        assertNativeOutput(true);
+        controller.dispatchMediaButtonEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN,
+                android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE));
+        controller.dispatchMediaButtonEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_UP,
+                android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE));
+        result("recreated-media-key-pause", await(value -> !value.getBoolean("playing")));
+        assertNativeOutput(false);
+        long pauseMs = Long.parseLong(InstrumentationRegistry.getArguments().getString("pauseMs", "1000"));
+        shell("input keyevent KEYCODE_HOME");
+        shell("input keyevent KEYCODE_SLEEP");
+        long deadline = SystemClock.uptimeMillis() + pauseMs;
+        while (SystemClock.uptimeMillis() < deadline) {
+            assertFalse("Extended Pause must remain silent", state().getBoolean("playing"));
+            SystemClock.sleep(1000);
+        }
+        externalCommand("extended-pause-resume", "play", true, 0);
+        controller.getTransportControls().stop();
+        shell("input keyevent KEYCODE_WAKEUP");
+        shell("wm dismiss-keyguard");
     }
 
     private void assertNativeOutput(boolean playing) throws Exception {
@@ -315,11 +474,13 @@ public class MediaControlDeliveryTest {
         result("foreground-final-pause", state());
     }
 
-    @Test public void nativeDeliveryAndActualSystemTouches() throws Exception {
+    @Test public void nativeDeliveryAndSystemUiControls() throws Exception {
         assertEquals("Only the isolated test package is allowed", PACKAGE, context.getPackageName());
         audio = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
         AccessibilityServiceInfo info = automation.getServiceInfo();
-        info.flags |= AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
+        info.flags |= AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+                | AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
+                | AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS;
         automation.setServiceInfo(info);
         Intent launch = new Intent().setComponent(new ComponentName(PACKAGE,
                 "com.example.audiobook_app.MainActivity")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -360,7 +521,10 @@ public class MediaControlDeliveryTest {
                 assertNativeOutput(true);
             }
             result("seek-pause-play-no-deadlock", state());
-            shell("input keyevent KEYCODE_HOME");
+            openNotificationShade();
+            command("shade-ui-pause", "Pause", "pause", false, 0, true);
+            command("shade-ui-play", "Play", "play", true, 0, true);
+            shell("cmd statusbar collapse");
             externalCommand("background-session-pause", "pause", false, 0);
             externalCommand("background-session-play", "play", true, 0);
             externalCommand("background-rewind", "rewind", null, -1);
@@ -379,6 +543,8 @@ public class MediaControlDeliveryTest {
                 SystemClock.sleep(100);
             }
             assertTrue("Lock-screen check requires a locked emulator", keyguard.isKeyguardLocked());
+            command("lock-ui-pause", "Pause", "pause", false, 0, true);
+            command("lock-ui-play", "Play", "play", true, 0, true);
             externalCommand("lock-session-pause", "pause", false, 0);
             externalCommand("lock-session-play", "play", true, 0);
 
@@ -390,7 +556,7 @@ public class MediaControlDeliveryTest {
             shell("input keyevent KEYCODE_HOME");
             externalCommand("restart-background-pause", "pause", false, 0);
             externalCommand("restart-background-play", "play", true, 0);
-            assertEquals("Every transport/touch/focus check must run", 17, checks);
+            assertEquals("Every transport/UI/focus check must run", 21, checks);
         } finally {
             shell("cmd statusbar collapse");
             if (controller != null) controller.getTransportControls().stop();
