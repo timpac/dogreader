@@ -38,6 +38,24 @@ jobs:
           artifact-ids: '14046276930'
           path: evidence
           merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 43441602097
+          artifact-ids: '14047415290'
+          path: compiled
+          merge-multiple: true
+      - name: Inspect retained APK media resources without compilation or inference
+        run: |
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import os,re,json,subprocess
+          tools=sorted(Path(os.environ['ANDROID_HOME']).glob('build-tools/*/aapt'),key=lambda p:[int(n) for n in re.findall(r'\d+',p.parent.name)])[-1]
+          apk=Path('compiled/build/app/outputs/flutter-apk/app-release.apk')
+          text=subprocess.check_output([str(tools),'dump','resources',str(apk)],text=True)
+          names=['audio_service_play_arrow','audio_service_pause','audio_service_stop','audio_service_fast_rewind','audio_service_fast_forward','audio_service_skip_next','audio_service_skip_previous']
+          print('APK_MEDIA_RESOURCE_CHECK='+json.dumps({'packageNamePresent':'com.dogreader.v3' in text,'launcherPresent':'mipmap/ic_launcher' in text,'mediaResources':{n:bool(re.search(r':drawable/'+n+r'\b',text)) for n in names}}))
+          PYTHON
       - name: Read prior picker hierarchy and import errors; no app execution
         run: |
           python3 - <<'PYTHON'
