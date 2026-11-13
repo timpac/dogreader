@@ -167,6 +167,17 @@ jobs:
           artifact-ids: '14028671883'
           path: experiments/kokoro_probe
           merge-multiple: true
+      - name: Restore license receipts for retained APK (no build)
+        if: inputs.retained_background_build
+        run: |
+          python3 experiments/kokoro_probe/tool/prepare_frontend.py
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import zipfile
+          root = Path('experiments/kokoro_probe')
+          with zipfile.ZipFile(root/'build/app/outputs/flutter-apk/app-release.apk') as apk:
+              assert apk.read('assets/flutter_assets/frontend-notices.txt') == (root/'frontend-notices.txt').read_bytes()
+          PYTHON
       - name: Verify identity, signature and 16 KB native alignment
         run: |
           set -euo pipefail
