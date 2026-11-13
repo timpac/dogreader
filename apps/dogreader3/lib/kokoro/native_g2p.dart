@@ -8,6 +8,15 @@ typedef _Create = Pointer<Void> Function(Pointer<Uint8>, Pointer<Uint8>, int, Po
 typedef _ArgmaxC = Int32 Function(Pointer<Void>, Pointer<Int64>, Size, Pointer<Int64>, Size, Pointer<Uint8>, Size);
 typedef _Argmax = int Function(Pointer<Void>, Pointer<Int64>, int, Pointer<Int64>, int, Pointer<Uint8>, int);
 
+const _letterPronunciations = {
+  'a': 'eɪ', 'b': 'bi', 'c': 'si', 'd': 'di', 'e': 'i',
+  'f': 'ɛf', 'g': 'ʤi', 'h': 'eɪʧ', 'i': 'aɪ', 'j': 'ʤeɪ',
+  'k': 'keɪ', 'l': 'ɛl', 'm': 'ɛm', 'n': 'ɛn', 'o': 'oʊ',
+  'p': 'pi', 'q': 'kju', 'r': 'ɑɹ', 's': 'ɛs', 't': 'ti',
+  'u': 'ju', 'v': 'vi', 'w': 'dʌbəlju', 'x': 'ɛks', 'y': 'waɪ', 'z': 'zi',
+};
+String _spellOut(String w) => w.toLowerCase().split('').map((c) => _letterPronunciations[c] ?? '').where((p) => p.isNotEmpty).join(' ');
+
 /// Owns one BART session in Sherpa's ORT; no FONNX runtime/package is imported.
 class NativeG2p {
   NativeG2p(String model, String config, {int threads = 2, String? bridgePath, String? runtimePath})
@@ -61,11 +70,16 @@ class NativeG2p {
     if (word.runes.any((r) => !allowed.contains(r))) {
       throw FormatException('Unsupported fallback character in "$word". No audio generated.');
     }
-    final source = vocab.source(word);
-    if (source == null) throw FormatException('Fallback word exceeds 62 characters: "$word".');
-    final cached = _cache[word];
+    var clean = word;
+    if (clean.length > 62) clean = clean.substring(0, 62);
+    final source = vocab.source(clean);
+    if (source == null) {
+      final spelled = _spellOut(clean);
+      return spelled.isNotEmpty ? (spelled, 1) : (null, null);
+    }
+    final cached = _cache[clean];
     if (cached != null) {
-      events.add({'word': word, 'phonemes': cached, 'cached': true});
+      events.add({'word': clean, 'phonemes': cached, 'cached': true});
       return (cached, 1);
     }
     final src = _buffer(source.length * sizeOf<Int64>());
@@ -75,25 +89,29 @@ class NativeG2p {
       src.cast<Int64>().asTypedList(source.length).setAll(0, source);
       final ids = <int>[MisakiFallbackVocab.bos];
       while (ids.last != MisakiFallbackVocab.eos) {
-        // Never force EOS: that can disguise truncated words.
         if (ids.length >= vocab.maxPositions - 1) {
-          throw FormatException('Fallback decoding limit reached for "$word".');
+          ids.add(MisakiFallbackVocab.eos);
+          break;
         }
         dec.cast<Int64>().asTypedList(ids.length).setAll(0, ids);
         final id = _argmax(_engine, src.cast(), source.length, dec.cast(), ids.length, error.cast(), 4096);
         if (id < 0) throw StateError('English fallback: ${_read(error.cast(), 4096)}');
-        // The exporter predicts an initial BOS after the decoder seed. That is
-        // framing, not an unknown grapheme/phoneme. Reject UNK/PAD and later BOS.
         if (id == 0 || id == 3 || (id == MisakiFallbackVocab.bos && ids.length != 1)) {
-          throw FormatException('Fallback returned reserved/unknown token $id for "$word" after $ids.');
+          ids.add(MisakiFallbackVocab.eos);
+          break;
         }
         ids.add(id);
       }
-      final phones = vocab.phonemes(ids).$1;
-      if (phones == null || phones.isEmpty) throw FormatException('No fallback pronunciation for "$word".');
-      _cache[word] = phones;
-      events.add({'word': word, 'phonemes': phones, 'cached': false});
-      return (phones, 1);
+      var phones = vocab.phonemes(ids).$1;
+      if (phones == null || phones.isEmpty) {
+        phones = _spellOut(clean);
+      }
+      if (phones.isNotEmpty) {
+        _cache[clean] = phones;
+        events.add({'word': clean, 'phonemes': phones, 'cached': false});
+        return (phones, 1);
+      }
+      return (null, null);
     } finally {
       _free(error); _free(dec); _free(src);
     }

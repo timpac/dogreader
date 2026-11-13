@@ -29,22 +29,34 @@ class OfflineBridge(private val activity: MainActivity) : ContextWrapper(activit
     private var pendingExport: MethodChannel.Result? = null
     private var exportFile: File? = null
 
+    private fun isNotificationAllowed(): Boolean {
+        val notifications = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
+        if (!notifications.areNotificationsEnabled()) return false
+        if (Build.VERSION.SDK_INT >= 26) {
+            val channel = notifications.getNotificationChannel(GenerationService.CHANNEL)
+            if (channel != null && channel.importance == android.app.NotificationManager.IMPORTANCE_NONE) return false
+        }
+        return Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+    }
+
     fun attach(flutterEngine: FlutterEngine) {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dogreader3.kokoro")
             .setMethodCallHandler { call, result ->
                 try {
                     when (call.method) {
                         "notificationPermission" -> {
-                            if (Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) result.success(true)
-                            else {
+                            if (isNotificationAllowed()) result.success(true)
+                            else if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                                 check(notificationReply == null) { "Permission request already active" }
                                 notificationReply = result
                                 activity.requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 42)
+                            } else {
+                                result.success(false)
                             }
                         }
                         "startGeneration" -> {
                             check(resumed) { "Start generation from visible Dogreader 3.0" }
-                            check(Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) { "Allow notifications before background generation" }
+                            check(isNotificationAllowed()) { "Enable Offline narration notifications in Android settings before background generation" }
                             val existing = generationState()
                             if (existing?.optBoolean("active") == true) result.success(existing.getString("jobId"))
                             else {

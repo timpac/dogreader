@@ -73,15 +73,17 @@ class GenerationService : Service() {
             request!!.optJSONObject("chapter")?.let { state.put("chapter", it) }
             active = true
             val notifications = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-            notifications.createNotificationChannel(NotificationChannel(CHANNEL, "Dogreader 3.0 offline narration", NotificationManager.IMPORTANCE_LOW))
-            check(notifications.areNotificationsEnabled() && notifications.getNotificationChannel(CHANNEL).importance != NotificationManager.IMPORTANCE_NONE) {
-                "Enable Offline narration notifications in Android settings"
+            if (Build.VERSION.SDK_INT >= 26) {
+                notifications.createNotificationChannel(NotificationChannel(CHANNEL, "Dogreader 3.0 offline narration", NotificationManager.IMPORTANCE_LOW))
             }
             val notification = notification()
             when {
                 Build.VERSION.SDK_INT >= 35 -> startForeground(NOTIFICATION, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING)
                 Build.VERSION.SDK_INT >= 29 -> startForeground(NOTIFICATION, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
                 else -> startForeground(NOTIFICATION, notification)
+            }
+            check(notifications.areNotificationsEnabled() && (Build.VERSION.SDK_INT < 26 || notifications.getNotificationChannel(CHANNEL)?.importance != NotificationManager.IMPORTANCE_NONE)) {
+                "Offline narration notifications are disabled in Android settings"
             }
             wakeLock = (getSystemService(POWER_SERVICE) as PowerManager)
                 .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:LocalGeneration").apply {

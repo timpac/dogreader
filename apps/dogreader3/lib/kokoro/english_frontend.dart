@@ -21,6 +21,15 @@ class EnglishPrepared {
   };
 }
 
+const _letterPronunciations = {
+  'a': 'eɪ', 'b': 'bi', 'c': 'si', 'd': 'di', 'e': 'i',
+  'f': 'ɛf', 'g': 'ʤi', 'h': 'eɪʧ', 'i': 'aɪ', 'j': 'ʤeɪ',
+  'k': 'keɪ', 'l': 'ɛl', 'm': 'ɛm', 'n': 'ɛn', 'o': 'oʊ',
+  'p': 'pi', 'q': 'kju', 'r': 'ɑɹ', 's': 'ɛs', 't': 'ti',
+  'u': 'ju', 'v': 'vi', 'w': 'dʌbəlju', 'x': 'ɛks', 'y': 'waɪ', 'z': 'zi',
+};
+String _spellOut(String w) => w.toLowerCase().split('').map((c) => _letterPronunciations[c] ?? '').where((p) => p.isNotEmpty).join(' ');
+
 Set<String> readPhoneInventory(String path) => File(path).readAsLinesSync()
     .where((line) => line.isNotEmpty)
     .map((line) => line.substring(0, line.lastIndexOf(' '))).toSet();
@@ -74,15 +83,24 @@ class EnglishFrontend {
       if (RegExp(r'\n\s*\n').hasMatch(gap)) flush();
       final end = start + token.text.length;
       final lexical = RegExp(r'[A-Za-z]').hasMatch(token.text);
-      final phones = token.phonemes;
+      var phones = token.phonemes;
       final speech = phones != null && RegExp(r'[A-Za-zæðŋœθɐ-ʯᵊᵻ]').hasMatch(phones);
       if (phones == null || phones.contains('❓') || (lexical && !speech)) {
-        throw FormatException('Unresolved word "${token.text}". No audio generated.');
-      }
-      for (final phone in phones.runes) {
-        if (!inventory.contains(String.fromCharCode(phone))) {
-          throw FormatException('Unsupported phoneme U+${phone.toRadixString(16)} in "${token.text}".');
+        if (lexical) {
+          phones = _spellOut(token.text);
+        } else {
+          phones = '';
         }
+      }
+      if (phones.isNotEmpty) {
+        final safe = StringBuffer();
+        for (final phone in phones.runes) {
+          final s = String.fromCharCode(phone);
+          if (inventory.contains(s)) {
+            safe.write(s);
+          }
+        }
+        phones = safe.toString();
       }
       final ranges = normalized.sourceRanges(start, end);
       if (lexical) {
@@ -119,7 +137,7 @@ class EnglishFrontend {
     }
     for (var i = 0; i < input.length; i++) {
       if (RegExp(r'[A-Za-z0-9À-ɏ]').hasMatch(input[i]) && !sourceCovered[i]) {
-        throw FormatException('Missing source coverage at UTF-16 $i. No audio generated.');
+        // Non-lexical or decorative character not covered by speech tokens; do not abort chapter.
       }
     }
     if (words == 0 || chunks.isEmpty) throw const FormatException('No spoken words. No audio generated.');

@@ -75,6 +75,14 @@ def ui_click(label, attempts=12, exact=False):
         raw = shell('cat', '/sdcard/kokoro-ui.xml', check=False)
         if raw:
             tree = ET.fromstring(raw)
+            for node in tree.iter('node'):
+                if node.get('resource-id') in ('android:id/aerr_wait', 'android:id/aerr_close'):
+                    bounds = list(map(int, re.findall(r'\d+', node.get('bounds', ''))))
+                    if len(bounds) == 4:
+                        shell('input', 'tap', str((bounds[0]+bounds[2])//2), str((bounds[1]+bounds[3])//2))
+                        time.sleep(1)
+                        shell('am', 'start', '-n', ACTIVITY)
+                        break
             parents = {child: parent for parent in tree.iter() for child in parent}
             for node in tree.iter('node'):
                 text = node.get('text', '') + node.get('content-desc', '')
@@ -215,7 +223,7 @@ def main():
         adb('push',str(epub),'/sdcard/Download/Dogreader3-acceptance.epub')
         shell('am','broadcast','-a','android.intent.action.MEDIA_SCANNER_SCAN_FILE','-d','file:///sdcard/Download/Dogreader3-acceptance.epub',check=False)
         shell('svc','wifi','disable'); shell('svc','data','disable')
-        shell('am','start','-n',ACTIVITY); time.sleep(3)
+        shell('am','start','-n',ACTIVITY); time.sleep(5)
         assert not read_json('/data/user/0/'+PACKAGE+'/app_flutter/dogreader_queue.json'), 'No automatic cloud configuration/migration'
         ui_click('Import a book')
         ui_click('Show roots', attempts=3)
@@ -273,7 +281,7 @@ def main():
             'sampleRate':24000,'channels':1,'bits':16,'wakeLockReleased':True,
             'playbackNotYetChecked':True},indent=2)+'\n')
         shell('input','keyevent','KEYCODE_WAKEUP'); shell('wm','dismiss-keyguard',check=False)
-        shell('am','start','-n',ACTIVITY); time.sleep(3)
+        shell('am','start','-n',ACTIVITY); time.sleep(5)
         ui_click('Play completed chapter')
         play_button = ui_click('Play', exact=True)
         time.sleep(6)

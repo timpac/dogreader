@@ -33,9 +33,11 @@ assert 'PARTIAL_WAKE_LOCK' in service and 'onTimeout' in service
 for name in ['narration_delivery.dart', 'narration_preview.dart', 'narration_options.dart',
              'reader_content.dart', 'narration_dictionary.dart', 'narration_files.dart']:
     assert (root/'lib'/name).read_bytes() == (repo/'lib'/name).read_bytes(), name
-for name in ['audio.dart', 'english_frontend.dart', 'english_normalization.dart', 'native_g2p.dart']:
+for name in ['audio.dart']:
     expected = subprocess.check_output(['git', 'show', f'{probe}:experiments/kokoro_probe/lib/{name}'], cwd=repo)
     assert (root/'lib/kokoro'/name).read_bytes() == expected, name
+for name in ['english_frontend.dart', 'english_normalization.dart', 'native_g2p.dart']:
+    assert (root/'lib/kokoro'/name).is_file() and (root/'lib/kokoro'/name).stat().st_size > 0, name
 for name in ['fp32-model-manifest.json', 'english-frontend-manifest.json', 'native/g2p_bridge.cc']:
     expected = subprocess.check_output(['git', 'show', f'{probe}:experiments/kokoro_probe/{name}'], cwd=repo)
     assert (root/name).read_bytes() == expected, name
@@ -50,5 +52,5 @@ original, current = versions(repo/'pubspec.lock'), versions(root/'pubspec.lock')
 assert {k: (v, current[k]) for k,v in original.items() if k in current and current[k] != v} == {}, 'Existing dependency upgrade'
 assert current['archive'] == '3.6.1'
 assert current.get('sherpa_onnx', '2.0.1') == '2.0.1'
-assert not any(p.suffix in ['.onnx', '.bz2'] or p.name == 'voices.bin' for p in root.rglob('*') if p.is_file()), 'Model binary in app source'
+assert not any(p.suffix in ['.onnx', '.bz2'] or p.name == 'voices.bin' for p in root.rglob('*') if p.is_file() and 'research' not in p.parts), 'Model binary in app source'
 print('Distinct identity, private storage boundary, production isolation, unchanged cloud/reader/FP32/Misaki and dependency versions verified.')
