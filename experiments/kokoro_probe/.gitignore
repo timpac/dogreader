@@ -1,9 +1,8 @@
+# Pinned, generated upstream source/header files; see tool/prepare_frontend.py.
+lib/third_party/fonnx_misaki/
+native/ort_headers/
+frontend-notices.txt
+frontend-vendor-receipts.json
+research/test-data/
 android/
-.metadata
-README.md
-*.onnx
-*.bin
-*.tar*
-*.wav
-*.part
-benchmark-*.json
+test-results/
