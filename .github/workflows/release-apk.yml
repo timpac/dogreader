@@ -22,6 +22,11 @@ on:
         type: boolean
         default: false
 
+      inspect_dogreader3:
+        description: Read retained failed-device evidence only; no APK or inference
+        type: boolean
+        default: false
+
 permissions:
   contents: read
 concurrency:
@@ -40,6 +45,7 @@ jobs:
       build_number: ${{ inputs.build_number }}
       publish: ${{ inputs.publish }}
       retained_build: ${{ inputs.retained_dogreader3 }}
+      inspect_evidence: ${{ inputs.inspect_dogreader3 }}
     secrets: inherit
   apk:
     if: github.ref == 'refs/heads/dogreader-oct22-update' && github.actor == github.repository_owner

@@ -14,14 +14,46 @@ on:
       retained_build:
         type: boolean
         default: false
+      inspect_evidence:
+        type: boolean
+        default: false
     secrets:
       DOGREADER_KEYSTORE_B64:
         required: true
 permissions:
   contents: read
 jobs:
+  evidence:
+    if: github.ref == 'refs/heads/feature/dogreader-3-offline' && github.actor == github.repository_owner && inputs.inspect_evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 43426395920
+          artifact-ids: '14038266817'
+          path: evidence
+          merge-multiple: true
+      - name: Read prior picker hierarchy and import errors; no app execution
+        run: |
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import re
+          print('RETAINED_DEVICE_UI_BEGIN')
+          print(Path('evidence/ui.xml').read_text())
+          print('RETAINED_DEVICE_UI_END')
+          lines=Path('evidence/logcat.txt').read_text().splitlines()
+          selected=[line for line in lines if re.search(r'flutter|Exception|epub|Import|FilePicker|file_picker|audiobook|dogreader',line,re.I)]
+          print('RETAINED_IMPORT_LOG_BEGIN')
+          print('\n'.join(selected[-250:]))
+          print('RETAINED_IMPORT_LOG_END')
+          PYTHON
   independent:
-    if: github.ref == 'refs/heads/feature/dogreader-3-offline' && github.actor == github.repository_owner
+    if: github.ref == 'refs/heads/feature/dogreader-3-offline' && github.actor == github.repository_owner && !inputs.inspect_evidence
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
