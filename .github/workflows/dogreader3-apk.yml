@@ -34,20 +34,22 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           github-token: ${{ github.token }}
-          run-id: 43426395920
-          artifact-ids: '14038266817'
+          run-id: 43435620609
+          artifact-ids: '14041889433'
           path: evidence
           merge-multiple: true
       - name: Read prior picker hierarchy and import errors; no app execution
         run: |
           python3 - <<'PYTHON'
           from pathlib import Path
-          import re
+          import re,json,xml.etree.ElementTree as ET
           print('RETAINED_DEVICE_UI_BEGIN')
-          print(Path('evidence/ui.xml').read_text())
+          for node in ET.fromstring(Path('evidence/ui.xml').read_text()).iter('node'):
+              if node.get('text') or node.get('content-desc'):
+                  print(json.dumps({k:node.get(k) for k in ['text','content-desc','enabled','clickable','bounds']}))
           print('RETAINED_DEVICE_UI_END')
           lines=Path('evidence/logcat.txt').read_text().splitlines()
-          selected=[line for line in lines if re.search(r'flutter|Exception|epub|Import|FilePicker|file_picker|audiobook|dogreader',line,re.I)]
+          selected=[line for line in lines if 'AccessibilityNodeInfoDumper' not in line and re.search(r'flutter|FATAL EXCEPTION|sherpa|onnx|kokoro|OfflineBridge|GenerationService',line,re.I)]
           print('RETAINED_IMPORT_LOG_BEGIN')
           print('\n'.join(selected[-250:]))
           print('RETAINED_IMPORT_LOG_END')
