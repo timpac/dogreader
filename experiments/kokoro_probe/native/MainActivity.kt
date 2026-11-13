@@ -74,6 +74,9 @@ class MainActivity : FlutterActivity() {
                             }
                         }
                         "generationStatus" -> result.success(generationState()?.toString())
+                        "generationRecordings" -> result.success(try {
+                            android.util.AtomicFile(File(filesDir, "generation-recordings.json")).openRead().use { it.readBytes().toString(Charsets.UTF_8) }
+                        } catch (_: Exception) { null })
                         "cancelGeneration" -> {
                             val current = generationState()
                             if (current?.optBoolean("active") == true) startService(Intent(this, GenerationService::class.java).apply {
@@ -143,9 +146,9 @@ class MainActivity : FlutterActivity() {
         val value = GenerationService.readState(this) ?: return null
         val age = SystemClock.elapsedRealtime() - value.optLong("startedElapsedMs")
         val processes = (getSystemService(ACTIVITY_SERVICE) as ActivityManager).runningAppProcesses.orEmpty()
-        if (value.optBoolean("active") && age > 15000 && processes.none { it.processName == "$packageName:kokoro_generation" }) {
+        if (value.optBoolean("active") && (age < 0 || age > 15000) && processes.none { it.processName == "$packageName:kokoro_generation" }) {
             value.put("active", false).put("outcome", "interrupted").put("phase", "interrupted")
-                .put("message", "Generation process ended; no automatic restart")
+                .put("message", "Generation process ended; no automatic restart").put("wakeLockHeld", false)
             GenerationService.writeState(this, value)
             val dir = File(filesDir, "generation-jobs/${value.getString("jobId")}")
             val report = JSONObject().put("completed", false).put("outcome", "interrupted")
@@ -158,18 +161,34 @@ class MainActivity : FlutterActivity() {
                 report.put("${kind}Events", events)
             }
             File(value.getString("reportPath")).writeText(report.toString(2))
+            try {
+                val request = JSONObject(File(dir, "request.json").readText())
+                File(request.getString("output")).listFiles()?.filter {
+                    it.name.contains(value.getString("jobId")) && it.name.endsWith(".part")
+                }?.forEach { it.delete() }
+            } catch (_: Exception) {}
         }
         return value
+    }
+
+    private fun visibility(value: Boolean) {
+        val file = android.util.AtomicFile(File(filesDir, "generation-ui-visible.json"))
+        try {
+            val stream = file.startWrite()
+            try { stream.write(JSONObject().put("visible", value).toString().toByteArray()); file.finishWrite(stream) }
+            catch (e: Exception) { file.failWrite(stream) }
+        } catch (_: Exception) {}
+        sendBroadcast(Intent(GenerationService.VISIBILITY).setPackage(packageName).putExtra("visible", value))
     }
 
     override fun onResume() {
         super.onResume(); resumed = true
         permissionDecision?.let { notificationReply?.success(it); notificationReply = null; permissionDecision = null }
-        sendBroadcast(Intent(GenerationService.VISIBILITY).setPackage(packageName).putExtra("visible", true))
+        visibility(true)
     }
     override fun onPause() {
         resumed = false
-        sendBroadcast(Intent(GenerationService.VISIBILITY).setPackage(packageName).putExtra("visible", false))
+        visibility(false)
         super.onPause()
     }
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {

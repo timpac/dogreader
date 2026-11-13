@@ -46,7 +46,9 @@ class _ProbeState extends State<Probe> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState(); WidgetsBinding.instance.addObserver(this); initialize();
-    servicePoll = Timer.periodic(const Duration(seconds: 1), (_) => unawaited(pollGeneration()));
+    servicePoll = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) unawaited(pollGeneration());
+    });
   }
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -63,6 +65,12 @@ class _ProbeState extends State<Probe> with WidgetsBindingObserver {
       final paths = Map<String, dynamic>.from(await native.invokeMethod('paths'));
       root = paths['files'] as String;
       output = paths['output'] as String;
+      await pollGeneration();
+      final saved = await native.invokeMethod<String>('generationRecordings');
+      if (saved != null) {
+        final index = jsonDecode(saved) as Map<String, dynamic>;
+        for (final item in index.entries) { recordings[item.key] = Map<String, dynamic>.from(item.value as Map); }
+      }
       for (final entry in manifests.entries) {
         final spec = jsonDecode(entry.value);
         final marker = File('$root/${spec['directory']}/READY');
@@ -144,6 +152,7 @@ class _ProbeState extends State<Probe> with WidgetsBindingObserver {
     final receive = ReceivePort();
     Isolate? isolate;
     try {
+      await native.invokeMethod('stop');
       await native.invokeMethod('keepAwake', true);
       isolate = await Isolate.spawn(worker, {'port': receive.sendPort, 'operation': 'install',
         'manifest': manifest, 'root': root}, onError: receive.sendPort, onExit: receive.sendPort);

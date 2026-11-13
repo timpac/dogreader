@@ -110,7 +110,7 @@ class GenerationService : Service() {
                                 if (active) {
                                     val event = JSONObject(call.arguments as String)
                                     for (key in listOf("phase", "run", "chunk", "totalChunks", "status")) {
-                                        if (event.has(key)) state.put(if (key == "status") "message" else key, event.get(key))
+                                        if (state.optString("phase") != "cancelling" && event.has(key)) state.put(if (key == "status") "message" else key, event.get(key))
                                     }
                                     state.put("lastWorkerEvent", event)
                                     persist(); record("progress", event); notifications.notify(NOTIFICATION, notification())
@@ -144,11 +144,14 @@ class GenerationService : Service() {
             action = CANCEL; putExtra("jobId", state.optString("jobId"))
         }, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val total = state.optInt("totalChunks", 0)
-        return Notification.Builder(this, CHANNEL).setSmallIcon(android.R.drawable.stat_sys_download)
+        val builder = Notification.Builder(this, CHANNEL).setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle("Kokoro offline generation").setContentText(state.optString("message"))
             .setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true)
             .setProgress(total, state.optInt("chunk", 0), total == 0)
-            .addAction(Notification.Action.Builder(null, "Cancel", cancel).build()).build()
+            .setCategory(Notification.CATEGORY_PROGRESS)
+            .addAction(Notification.Action.Builder(null, "Cancel", cancel).build())
+        if (Build.VERSION.SDK_INT >= 31) builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+        return builder.build()
     }
 
     private fun persist() {
@@ -158,11 +161,16 @@ class GenerationService : Service() {
     }
 
     private fun record(name: String, detail: JSONObject? = null) {
+        // Persisted Activity state also covers a pause that raced service startup.
+        try { uiVisible = JSONObject(AtomicFile(File(filesDir, "generation-ui-visible.json")).openRead().use {
+            it.readBytes().toString(Charsets.UTF_8)
+        }).getBoolean("visible") } catch (_: Exception) {}
         val power = getSystemService(POWER_SERVICE) as PowerManager
         val keyguard = getSystemService(KEYGUARD_SERVICE) as KeyguardManager
         val event = JSONObject().put("event", name).put("unixMs", System.currentTimeMillis())
             .put("elapsedRealtimeMs", SystemClock.elapsedRealtime()).put("uptimeMs", SystemClock.uptimeMillis())
             .put("interactive", power.isInteractive).put("keyguardLocked", keyguard.isKeyguardLocked)
+            .put("deviceIdleMode", power.isDeviceIdleMode).put("batteryOptimizationExempt", power.isIgnoringBatteryOptimizations(packageName))
             .put("uiVisible", uiVisible).put("wakeLockHeld", wakeLock?.isHeld == true).put("pid", Process.myPid())
         if (detail != null) event.put("worker", detail)
         File(jobDir, "service-events.jsonl").appendText(event.toString() + "\n")
@@ -197,6 +205,19 @@ class GenerationService : Service() {
         val stream = atomic.startWrite()
         try { stream.write(summary.toString(2).toByteArray()); atomic.finishWrite(stream) }
         catch (e: Exception) { atomic.failWrite(stream) }
+        val indexFile = AtomicFile(File(filesDir, "generation-recordings.json"))
+        val index = try { JSONObject(indexFile.openRead().use { it.readBytes().toString(Charsets.UTF_8) }) } catch (_: Exception) { JSONObject() }
+        val results = summary.optJSONArray("results") ?: JSONArray()
+        for (i in 0 until results.length()) {
+            val item = results.getJSONObject(i)
+            if (File(item.getString("path")).isFile) {
+                item.put("report", report.absolutePath)
+                index.put(item.getString("modelVariant"), item)
+            }
+        }
+        val saved = indexFile.startWrite()
+        try { saved.write(index.toString().toByteArray()); indexFile.finishWrite(saved) }
+        catch (e: Exception) { indexFile.failWrite(saved) }
         request?.let {
             File(it.getString("output")).listFiles()?.filter { file ->
                 file.name.contains(state.getString("jobId")) && file.name.endsWith(".part")
@@ -223,7 +244,9 @@ class GenerationService : Service() {
     private fun killOwnProcess() {
         // Never kill the UI process if a future manifest is accidentally changed.
         val manager = getSystemService(ACTIVITY_SERVICE) as ActivityManager
-        if (manager.runningAppProcesses?.any { it.pid == Process.myPid() && it.processName == "$packageName:kokoro_generation" } == true)
+        val name = if (Build.VERSION.SDK_INT >= 28) Application.getProcessName()
+            else manager.runningAppProcesses?.find { it.pid == Process.myPid() }?.processName
+        if (name == "$packageName:kokoro_generation")
             Process.killProcess(Process.myPid())
     }
 }

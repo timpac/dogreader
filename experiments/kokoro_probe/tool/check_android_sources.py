@@ -10,8 +10,18 @@ import subprocess
 import tempfile
 import urllib.request
 import zipfile
+import xml.etree.ElementTree as ET
 
 root = Path(__file__).resolve().parents[1]
+manifest = ET.parse(root/'android/app/src/main/AndroidManifest.xml').getroot()
+android = '{http://schemas.android.com/apk/res/android}'
+service = next(e for e in manifest.findall('application/service') if e.get(android+'name') == '.GenerationService')
+assert service.get(android+'process') == ':kokoro_generation'
+assert service.get(android+'exported') == 'false' and service.get(android+'stopWithTask') == 'false'
+assert set(service.get(android+'foregroundServiceType').split('|')) == {'mediaProcessing', 'dataSync'}
+permissions = {e.get(android+'name') for e in manifest.findall('uses-permission')}
+assert all('android.permission.'+p in permissions for p in ['WAKE_LOCK', 'POST_NOTIFICATIONS',
+           'FOREGROUND_SERVICE', 'FOREGROUND_SERVICE_MEDIA_PROCESSING', 'FOREGROUND_SERVICE_DATA_SYNC'])
 flutter = Path(os.environ['FLUTTER_ROOT'])
 sdk = Path(os.environ['ANDROID_HOME'])
 platforms = sorted((p for p in sdk.glob('platforms/android-*/android.jar') if re.fullmatch(r'android-\d+', p.parent.name)), key=lambda p: int(p.parent.name.split('-')[-1]))

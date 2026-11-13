@@ -17,6 +17,7 @@ object ProbeTelemetry {
         return mapOf(
             "elapsedRealtimeMs" to SystemClock.elapsedRealtime(), "cpuMs" to Process.getElapsedCpuTime(),
             "pssKb" to memory.totalPss, "pid" to Process.myPid(), "interactive" to power.isInteractive,
+            "deviceIdleMode" to power.isDeviceIdleMode, "batteryOptimizationExempt" to power.isIgnoringBatteryOptimizations(context.packageName),
             "batteryTemperatureDeciC" to battery?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1),
             "batteryLevel" to battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1),
             "batteryScale" to battery?.getIntExtra(BatteryManager.EXTRA_SCALE, -1),

@@ -17,8 +17,14 @@ with zipfile.ZipFile(sys.argv[1]) as apk, tempfile.TemporaryDirectory() as temp:
     # FFI dependencies may still package unused libraries for other ABIs.
     assert 'lib/arm64-v8a/libflutter.so' in libs
     assert 'lib/arm64-v8a/libapp.so' in libs
+    supported = ['arm64-v8a', 'x86_64'] if '--background' in sys.argv[2:] else ['arm64-v8a']
     assert not any(n.endswith(('/libflutter.so', '/libapp.so')) and
-                   not n.startswith('lib/arm64-v8a/') for n in libs)
+                   n.split('/')[1] not in supported for n in libs)
+    if '--background' in sys.argv[2:]:
+        assert 'lib/x86_64/libapp.so' in libs and 'lib/x86_64/libflutter.so' in libs
+        assert 'lib/x86_64/libkokoro_g2p.so' in libs
+        assert hashlib.sha256(apk.read('lib/x86_64/libonnxruntime.so')).hexdigest() == 'b626c070616d88bd643a6e63dc996d8d478d061176b056d52ce44c961bd355aa'
+        assert hashlib.sha256(apk.read('lib/x86_64/libsherpa-onnx-c-api.so')).hexdigest() == 'ac4321f36bdf60249d450bbce81fec6d9269a007d3c4b050bf670995c0a9dbb1'
     arm64 = [n for n in libs if n.startswith('lib/arm64-v8a/')]
     if '--frontend' in sys.argv[2:]:
         # Exactly the original Sherpa runtime, with one new helper and no ORT
