@@ -43,11 +43,13 @@ class OfflineBridge(private val activity: MainActivity) : ContextWrapper(activit
                             }
                         }
                         "startGeneration" -> {
-                            check(resumed) { "Start generation from the visible probe" }
+                            check(resumed) { "Start generation from visible Dogreader 3.0" }
                             check(Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) { "Allow notifications before background generation" }
                             val existing = generationState()
                             if (existing?.optBoolean("active") == true) result.success(existing.getString("jobId"))
                             else {
+                                check((getSystemService(ACTIVITY_SERVICE) as ActivityManager).runningAppProcesses.orEmpty()
+                                    .none { it.processName == "$packageName:kokoro_generation" }) { "Previous offline engine is finishing; retry in a moment" }
                                 val args = JSONObject(call.arguments as Map<*, *>)
                                 val id = args.getString("id")
                                 check(Regex("[A-Za-z0-9._-]{1,80}").matches(id))
@@ -113,7 +115,7 @@ class OfflineBridge(private val activity: MainActivity) : ContextWrapper(activit
                     }
                 } catch (error: Exception) {
                     if (call.method == "export") { pendingExport = null; exportFile = null }
-                    result.error("probe", error.message, null)
+                    result.error("offline", error.message, null)
                 }
             }
     }

@@ -1,0 +1,186 @@
+name: Independent Dogreader 3.0 APK
+on:
+  workflow_call:
+    inputs:
+      release_commit:
+        required: true
+        type: string
+      build_number:
+        required: true
+        type: string
+      publish:
+        required: true
+        type: boolean
+    secrets:
+      DOGREADER_KEYSTORE_B64:
+        required: true
+permissions:
+  contents: read
+jobs:
+  independent:
+    if: github.ref == 'refs/heads/feature/dogreader-3-offline' && github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+      actions: read
+    env:
+      SOURCE: ${{ inputs.release_commit }}
+      BUILD_NUMBER: ${{ inputs.build_number }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: apps/dogreader3
+    steps:
+      - name: Require reviewed source, successful checks and unused global build number
+        uses: actions/github-script@v7
+        with:
+          script: |
+            if (context.sha !== process.env.SOURCE || !/^[a-f0-9]{40}$/.test(process.env.SOURCE)) throw Error('Exact reviewed feature tip required');
+            if (process.env.GITHUB_RUN_ATTEMPT !== '1') throw Error('Inspect retained APK; never rebuild blindly');
+            const checks = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {...context.repo, head_sha: context.sha, status: 'success', per_page:100});
+            if (!checks.some(r => r.name === 'Dogreader 3.0 targeted checks (no APK)' && r.head_sha === context.sha)) throw Error('Targeted checks must pass on exact source');
+            const releases = await github.paginate(github.rest.repos.listReleases, {...context.repo, per_page:100});
+            const tags = await github.paginate(github.rest.repos.listTags, {...context.repo, per_page:100});
+            let highest = 135;
+            for (const name of [...tags.map(x=>x.name), ...releases.flatMap(x=>[x.tag_name,...x.assets.map(a=>a.name)])]) {
+              const m=/^(?:v|Dogreader-|build-)([0-9]+)(?:$|[-.])/.exec(name);
+              if (m) highest=Math.max(highest,Number(m[1]));
+            }
+            if (process.env.BUILD_NUMBER !== String(highest+1)) throw Error(`Next unused number is ${highest+1}`);
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.7'
+          channel: stable
+          cache: true
+      - name: Prepare isolated target and verify signing and source boundaries
+        env:
+          DOGREADER_KEYSTORE_B64: ${{ secrets.DOGREADER_KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+          test -e /dev/kvm
+          test -n "$DOGREADER_KEYSTORE_B64"
+          mkdir -p "$HOME/.android"
+          printf '%s' "$DOGREADER_KEYSTORE_B64" | base64 --decode > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+          keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey > /tmp/signing.txt
+          grep -Fqi 'C5:CC:08:D9:75:7C:0E:92:89:3A:71:62:04:A2:6F:EB:61:57:F5:35:0A:00:DB:B0:B7:96:20:49:D6:D9:D1:77' /tmp/signing.txt
+          python3 tool/prepare_frontend.py
+          python3 tool/prepare_android.py
+          flutter pub get --enforce-lockfile
+          python3 tool/check_isolation.py
+      - name: Build one independent ARM64 and x86_64 release APK
+        run: |
+          flutter build apk --release --no-pub --target-platform android-arm64,android-x64 --build-name 3.0.0 --build-number "$BUILD_NUMBER" --dart-define="DOGREADER_BUILD=$BUILD_NUMBER" > /tmp/dogreader3-build.txt 2>&1 || { tail -100 /tmp/dogreader3-build.txt; exit 1; }
+      - name: Retain compiled bytes before device checks; no models
+        uses: actions/upload-artifact@v4
+        with:
+          name: dogreader3-${{ inputs.build_number }}-build-output
+          path: |
+            apps/dogreader3/build/app/outputs/flutter-apk/app-release.apk
+            apps/dogreader3/pubspec.lock
+          retention-days: 14
+      - name: Verify distinct package, visible name, certificate and unchanged runtime bytes
+        run: |
+          set -euo pipefail
+          APK=build/app/outputs/flutter-apk/app-release.apk
+          TOOLS="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          "$TOOLS/apksigner" verify --verbose --print-certs "$APK" > /tmp/dogreader3-cert.txt
+          grep -Fqi c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177 /tmp/dogreader3-cert.txt
+          "$TOOLS/aapt" dump badging "$APK" > /tmp/dogreader3-identity.txt
+          grep -Fq "package: name='com.dogreader.v3' versionCode='$BUILD_NUMBER' versionName='3.0.0'" /tmp/dogreader3-identity.txt
+          grep -Fq "application-label:'Dogreader 3.0'" /tmp/dogreader3-identity.txt
+          "$TOOLS/zipalign" -c -P 16 -v 4 "$APK" > /tmp/dogreader3-alignment.txt
+          python3 tool/verify_apk.py "$APK" --frontend --background
+          mkdir -p dist
+          cp "$APK" "dist/Dogreader-${BUILD_NUMBER}-3.0-Offline.apk"
+          cp pubspec.lock dist/dependencies.lock
+      - name: Enable KVM; release Gradle resources before focused device acceptance
+        run: |
+          printf '%s\n' 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm-dogreader3.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          cd android
+          ./gradlew --stop
+      - name: Co-install existing apps, import EPUB, generate locked-screen chapter and play it
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_7_pro
+          disable-animations: true
+          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -memory 4096 -cores 2 -no-snapshot
+          script: python3 apps/dogreader3/tool/test_milestone_device.py apps/dogreader3/build/app/outputs/flutter-apk/app-release.apk apps/dogreader3/test-results/milestone
+      - name: Retain focused device evidence without models
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dogreader3-milestone-evidence
+          path: |
+            apps/dogreader3/test-results/milestone/*.json
+            apps/dogreader3/test-results/milestone/*.txt
+            apps/dogreader3/test-results/milestone/*.xml
+          retention-days: 14
+          if-no-files-found: warn
+      - name: Prepare provenance and license notices
+        run: |
+          set -euo pipefail
+          cp test-results/milestone/MILESTONE.json dist/MILESTONE.json
+          cp ../../docs/DOGREADER_3_INTEGRATION.md dist/TESTING.md
+          cat LICENSES.txt frontend-notices.txt > dist/LICENSES.txt
+          curl -fsSL https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/v2.0.1/LICENSE >> dist/LICENSES.txt
+          curl -fsSL https://raw.githubusercontent.com/microsoft/onnxruntime/v1.28.2/LICENSE >> dist/LICENSES.txt
+          curl -fsSL https://raw.githubusercontent.com/microsoft/onnxruntime/v1.28.2/ThirdPartyNotices.txt >> dist/LICENSES.txt
+          printf 'Dogreader 3.0 experimental build %s\nSource: %s\nRun: %s/%s/actions/runs/%s\nPackage: com.dogreader.v3\nFP32 / Misaki / Sherpa-ONNX 2.0.1 / ORT 1.28.2\nTargeted checks passed on exact source before this single APK build. Emulator evidence is not Pixel measurement. No production change, merge or cloud deployment.\n' "$BUILD_NUMBER" "$SOURCE" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > dist/BUILD.txt
+          cat /tmp/dogreader3-cert.txt >> dist/BUILD.txt
+          head -1 /tmp/dogreader3-identity.txt >> dist/BUILD.txt
+          (cd dist && sha256sum *.apk *.txt *.md *.json dependencies.lock > SHA256SUMS)
+      - name: Retain complete publication assets for recovery without any rebuild or repeated inference
+        uses: actions/upload-artifact@v4
+        with:
+          name: dogreader3-${{ inputs.build_number }}-publication-assets
+          path: apps/dogreader3/dist/
+          retention-days: 14
+      - name: Upload, download-verify and publish one numbered experimental release
+        uses: actions/github-script@v7
+        env:
+          PUBLISH: ${{ inputs.publish }}
+        with:
+          script: |
+            const fs=require('fs'), crypto=require('crypto');
+            const {owner,repo}=context.repo, number=process.env.BUILD_NUMBER;
+            const tag=`v${number}-dogreader3`, name=`Dogreader-${number}-3.0-Offline.apk`;
+            for (const request of [()=>github.rest.repos.getReleaseByTag({owner,repo,tag}), ()=>github.rest.git.getRef({owner,repo,ref:`tags/${tag}`})]) {
+              try { await request(); } catch(e) { if(e.status===404) continue; throw e; }
+              throw Error('Release/tag already exists; do not overwrite');
+            }
+            const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
+            const directory='apps/dogreader3/dist/';
+            const body=`Independent Dogreader 3.0 experiment. Installs as com.dogreader.v3 beside production Dogreader and Kokoro Offline Probe. No automatic data migration.\n\nOpen Assets and install ${name}. Import an EPUB, open Chapters and narration, Generate narration, then Kokoro Offline. Download offline files once (372 MB; allow 1.5 GB during setup). Select af_heart / two threads. Allow notifications, enable airplane mode with Wi-Fi off, generate one chapter, and lock the screen. Return when finished and tap Play completed chapter. Save the WAV and generation diagnostics.\n\nPreserves the existing EPUB reader, library, playback, Chirp HD and cloud Kokoro. Configure cloud credentials manually if wanted. FP32/Misaki generation runs in a separate foreground-service process with progress notification, active-only CPU wake lock and Cancel. Completed PCM checkpoints are verified on explicit retry; no automatic restart. Local audio and metadata cannot overwrite cloud MP3s.\n\nThe same APK passed the focused Android 15 emulator milestone; see MILESTONE.json. This is not a Pixel listening, speed, memory, battery, heat or endurance result. Android quotas and Doze restrictions still apply. See TESTING.md.\n\nSource: ${process.env.SOURCE}\nAPK SHA-256: ${hash(fs.readFileSync(directory+name))}\n\nOne APK compilation; no model binaries bundled. No production merge or cloud deployment.`;
+            const release=(await github.rest.repos.createRelease({owner,repo,tag_name:tag,target_commitish:process.env.SOURCE,name:`Dogreader ${number} — Dogreader 3.0 offline chapter experiment`,body,draft:true,prerelease:true,make_latest:'false'})).data;
+            for (const filename of fs.readdirSync(directory)) {
+              const data=fs.readFileSync(directory+filename);
+              const asset=(await github.rest.repos.uploadReleaseAsset({owner,repo,release_id:release.id,name:filename,data,headers:{'content-type':filename.endsWith('.apk')?'application/vnd.android.package-archive':'text/plain','content-length':data.length}})).data;
+              if(asset.state!=='uploaded'||asset.size!==data.length||!asset.size) throw Error('Incomplete asset');
+              const downloaded=await github.rest.repos.getReleaseAsset({owner,repo,asset_id:asset.id,headers:{accept:'application/octet-stream'}});
+              if(hash(Buffer.from(downloaded.data))!==hash(data)) throw Error('Asset hash mismatch');
+            }
+            if(process.env.PUBLISH==='true') await github.rest.repos.updateRelease({owner,repo,release_id:release.id,draft:false,prerelease:true,make_latest:'false'});
+            const final=(await github.rest.repos.getRelease({owner,repo,release_id:release.id})).data;
+            if(!final.assets.some(a=>a.name===name&&a.size>0&&a.state==='uploaded')) throw Error('APK absent');
+            if(process.env.PUBLISH==='true'&&final.draft) throw Error('Not published');
+            if(!final.draft) {
+              const ref=(await github.rest.git.getRef({owner,repo,ref:`tags/${tag}`})).data;
+              if(ref.object.sha!==process.env.SOURCE) throw Error('Release/source mismatch');
+            }
+            await core.summary.addLink('Verified Dogreader 3.0 release',final.html_url).write();

@@ -125,6 +125,7 @@ class _OfflineNarrationScreenState extends State<OfflineNarrationScreen> {
           TextButton(onPressed: starting ? null : () => action(() => controller.export(current!['reportPath'] as String)),
             child: const Text('Save generation diagnostics')),
         if (error != null) Text(error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+        TextButton(onPressed: () => showLicensePage(context: context, applicationName: 'Dogreader 3.0'), child: const Text('Offline component licenses')),
         const SizedBox(height: 16),
         const Text('You can switch apps or lock the screen during generation. The progress notification offers Cancel. Android time quotas and battery restrictions still apply. Names are best-effort; unresolved input reports an error. Completed PCM chunks are retained for retry; no automatic restart.'),
       ]));

@@ -13,7 +13,7 @@ void main() {
     final port = ReceivePort();
     final data = utf8.encode('tiny model fixture; no actual model');
     final archive = Archive()..addFile(ArchiveFile('fixture/model.onnx', data.length, data));
-    final packed = BZip2Encoder().encode(TarEncoder().encode(archive)!);
+    final packed = BZip2Encoder().encode(TarEncoder().encode(archive));
     server.listen((request) async {
       request.response.contentLength = packed.length;
       request.response.add(packed);

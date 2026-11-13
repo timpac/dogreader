@@ -24,6 +24,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  dogreader3:
+    if: github.ref == 'refs/heads/feature/dogreader-3-offline' && github.actor == github.repository_owner
+    uses: ./.github/workflows/dogreader3-apk.yml
+    permissions:
+      contents: write
+      actions: read
+    with:
+      release_commit: ${{ inputs.release_commit }}
+      build_number: ${{ inputs.build_number }}
+      publish: ${{ inputs.publish }}
+    secrets: inherit
   apk:
     if: github.ref == 'refs/heads/dogreader-oct22-update' && github.actor == github.repository_owner
     runs-on: ubuntu-latest

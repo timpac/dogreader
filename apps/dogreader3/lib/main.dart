@@ -10,6 +10,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:epubx/epubx.dart' hide Image;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter/foundation.dart' show LicenseRegistry, LicenseEntryWithLineBreaks;
 import 'package:google_fonts/google_fonts.dart';
 import 'package:audio_service/audio_service.dart';
 
@@ -50,6 +52,10 @@ final narrationDelivery = NarrationDelivery(
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  LicenseRegistry.addLicense(() async* {
+    yield LicenseEntryWithLineBreaks(['Kokoro Offline / Misaki'],
+      '${await rootBundle.loadString('LICENSES.txt')}\n\n${await rootBundle.loadString('frontend-notices.txt')}');
+  });
 
   final diagnostics = MediaDiagnostics(directory: () async {
     final root = await getApplicationSupportDirectory();

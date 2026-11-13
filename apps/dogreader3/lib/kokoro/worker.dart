@@ -175,7 +175,7 @@ Future<void> generate(Map<String, dynamic> args, SendPort port) async {
       journal?.checkCancellation();
       port.send({'runStart': run});
       final timer = Stopwatch()..start();
-      final path = '${args['output']}/probe-$variant-${args['id']}-$run.wav';
+      final path = '${args['output']}/chapter-$variant-${args['id']}-$run.wav';
       final partial = File('$path.part');
       final wav = partial.openSync(mode: FileMode.write);
       var frames = 0;

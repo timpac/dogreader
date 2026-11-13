@@ -1,6 +1,6 @@
-Dogreader Kokoro Offline Probe — isolated feasibility experiment
+Dogreader 3.0 — offline component notices
 
-Prototype source in this directory: Copyright 2026 Dogreader contributors.
+Offline source ported from the Kokoro probe: Copyright 2026 Dogreader contributors.
 Licensed under Apache License 2.0, https://www.apache.org/licenses/LICENSE-2.0
 The build adds the full Apache license below. No Dogreader application source
 outside this experimental directory is relicensed by this notice.
@@ -16,7 +16,7 @@ https://github.com/microsoft/onnxruntime/tree/v1.28.2
 The release build appends the full MIT license and upstream ThirdPartyNotices.
 
 Flutter/Dart: Copyright The Flutter Authors / The Dart project authors. BSD-3-Clause.
-archive 4.0.9: Copyright Brendan Duncan and contributors. MIT.
+archive 3.6.1: Copyright Brendan Duncan and contributors. MIT.
 crypto 3.0.7: Copyright The Dart project authors. BSD-3-Clause.
 Other resolved Flutter/Dart dependency notices are available in the app's
 Flutter dependency notices screen. The resolved lockfile is attached to the release.
