@@ -11,6 +11,7 @@ import 'audio.dart';
 import 'english_frontend.dart';
 import 'native_g2p.dart';
 import 'frontend_install.dart';
+import 'generation_journal.dart';
 
 Future<String> fileHash(File file) async =>
     (await sha256.bind(file.openRead()).first).toString();
@@ -27,6 +28,8 @@ void worker(Map<String, dynamic> args) async {
       await generate(args, port);
     }
     port.send({'done': true});
+  } on GenerationCancelled {
+    port.send({'cancelled': true});
   } catch (error, stack) {
     port.send({'error': '$error', 'stack': '$stack'});
   }
@@ -113,6 +116,10 @@ Future<void> install(Map<String, dynamic> args, SendPort port) async {
 
 Future<void> generate(Map<String, dynamic> args, SendPort port) async {
   final root = args['model'] as String;
+  final journal = args['journalPath'] == null ? null :
+      GenerationJournal(args['journalPath'] as String, args['cancelPath'] as String);
+  journal?.record('workerStarted');
+  journal?.checkCancellation();
   final variant = args['variant'] as String;
   final modelFile = args['modelFile'] as String;
   final lexiconName = args['british'] == true ? 'lexicon-gb-en.txt' : 'lexicon-us-en.txt';
@@ -148,6 +155,8 @@ Future<void> generate(Map<String, dynamic> args, SendPort port) async {
     }
   }
   frontendTimer.stop();
+  await Future<void>.delayed(Duration.zero);
+  journal?.checkCancellation();
   final loadTimer = Stopwatch()..start();
   final tts = sherpa.OfflineTts(sherpa.OfflineTtsConfig(
     model: sherpa.OfflineTtsModelConfig(
@@ -162,6 +171,7 @@ Future<void> generate(Map<String, dynamic> args, SendPort port) async {
   loadTimer.stop();
   try {
     for (var run = 1; run <= (args['repeats'] as int); run++) {
+      journal?.checkCancellation();
       port.send({'runStart': run});
       final timer = Stopwatch()..start();
       final path = '${args['output']}/probe-$variant-${args['id']}-$run.wav';
@@ -173,13 +183,21 @@ Future<void> generate(Map<String, dynamic> args, SendPort port) async {
       var clipped = 0, fullScale = 0;
       int? previousPcm;
       final boundaries = <Map<String, dynamic>>[];
+      var complete = false;
       try {
         wav.writeFromSync(Uint8List(44));
         for (var i = 0; i < prepared.chunks.length; i++) {
+          await Future<void>.delayed(Duration.zero);
+          journal?.checkCancellation();
+          journal?.record('chunkStart', {'run': run, 'chunk': i + 1, 'totalChunks': prepared.chunks.length});
+          port.send({'phase': 'generating', 'run': run, 'chunk': i + 1,
+            'totalChunks': prepared.chunks.length, 'status': 'Run $run: generating chunk ${i + 1}/${prepared.chunks.length}'});
           final audio = useMisaki
               ? tts.generateWithConfig(text: '', config: sherpa.OfflineTtsGenerationConfig(
                   sid: args['sid'] as int, speed: 1.0, phonemeCodepoints: [prepared.chunks[i].runes.toList()]))
               : tts.generate(text: prepared.chunks[i], sid: args['sid'] as int, speed: 1.0);
+          journal?.record('chunkInferenceEnd', {'run': run, 'chunk': i + 1, 'frames': audio.samples.length});
+          journal?.checkCancellation();
           if (audio.sampleRate != 24000 || audio.samples.isEmpty) throw StateError('Empty or unexpected audio');
           if (i == 0) firstAudioMs = timer.elapsedMilliseconds;
           final pcm = encodePcm16(audio.samples);
@@ -192,12 +210,19 @@ Future<void> generate(Map<String, dynamic> args, SendPort port) async {
           previousPcm = pcm.lastPcm;
           wav.writeFromSync(pcm.bytes);
           frames += audio.samples.length;
-          port.send({'status': 'Run $run: ${i + 1}/${prepared.chunks.length} chunks'});
+          journal?.record('chunkWritten', {'run': run, 'chunk': i + 1, 'totalFrames': frames});
+          port.send({'phase': 'generating', 'run': run, 'chunk': i + 1,
+            'totalChunks': prepared.chunks.length, 'status': 'Run $run: ${i + 1}/${prepared.chunks.length} chunks'});
         }
         wav.setPositionSync(0);
         wav.writeFromSync(wavHeader(frames, 24000));
         wav.flushSync();
-      } finally { wav.closeSync(); }
+        journal?.checkCancellation();
+        complete = true;
+      } finally {
+        wav.closeSync();
+        if (!complete && partial.existsSync()) partial.deleteSync();
+      }
       partial.renameSync(path);
       timer.stop();
       final audioSeconds = frames / 24000;
@@ -224,5 +249,5 @@ Future<void> generate(Map<String, dynamic> args, SendPort port) async {
         'wavBytes': File(path).lengthSync(), 'wavSha256': await fileHash(File(path)),
       }});
     }
-  } finally { tts.free(); }
+  } finally { tts.free(); journal?.record('nativeResourcesReleased'); }
 }

@@ -1,6 +1,11 @@
 package com.dogreader.kokoro_probe
 
+import android.Manifest
 import android.app.Activity
+import android.app.ActivityManager
+import android.content.pm.PackageManager
+import org.json.JSONObject
+import org.json.JSONArray
 import android.content.Intent
 import android.content.IntentFilter
 import android.media.MediaPlayer
@@ -17,6 +22,9 @@ import io.flutter.plugin.common.MethodChannel
 import java.io.File
 
 class MainActivity : FlutterActivity() {
+    private var resumed = false
+    private var notificationReply: MethodChannel.Result? = null
+    private var permissionDecision: Boolean? = null
     private var player: MediaPlayer? = null
     private var pendingExport: MethodChannel.Result? = null
     private var exportFile: File? = null
@@ -27,6 +35,52 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 try {
                     when (call.method) {
+                        "notificationPermission" -> {
+                            if (Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) result.success(true)
+                            else {
+                                check(notificationReply == null) { "Permission request already active" }
+                                notificationReply = result
+                                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 42)
+                            }
+                        }
+                        "startGeneration" -> {
+                            check(resumed) { "Start generation from the visible probe" }
+                            check(Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) { "Allow notifications before background generation" }
+                            val existing = generationState()
+                            if (existing?.optBoolean("active") == true) result.success(existing.getString("jobId"))
+                            else {
+                                val args = JSONObject(call.arguments as Map<*, *>)
+                                val id = args.getString("id")
+                                check(Regex("[A-Za-z0-9._-]{1,80}").matches(id))
+                                val dir = File(filesDir, "generation-jobs/$id").apply { mkdirs() }
+                                args.put("journalPath", File(dir, "worker-events.jsonl").absolutePath)
+                                    .put("cancelPath", File(dir, "cancel").absolutePath)
+                                    .put("reportPath", File(args.getString("output"), "benchmark-${args.getString("variant")}-$id.json").absolutePath)
+                                    .put("experimentalBuild", if (Build.VERSION.SDK_INT >= 28) packageManager.getPackageInfo(packageName, 0).longVersionCode else packageManager.getPackageInfo(packageName, 0).versionCode.toLong())
+                                File(dir, "request.json").writeText(args.toString())
+                                GenerationService.writeState(this, JSONObject().put("jobId", id).put("active", true)
+                                    .put("phase", "dispatching").put("message", "Starting foreground service")
+                                    .put("startedElapsedMs", SystemClock.elapsedRealtime()).put("reportPath", args.getString("reportPath")))
+                                try {
+                                    startForegroundService(Intent(this, GenerationService::class.java).apply {
+                                        action = GenerationService.START; putExtra("jobId", id)
+                                    })
+                                } catch (e: Exception) {
+                                    GenerationService.writeState(this, JSONObject().put("jobId", id).put("active", false)
+                                        .put("outcome", "error").put("message", e.message))
+                                    throw e
+                                }
+                                result.success(id)
+                            }
+                        }
+                        "generationStatus" -> result.success(generationState()?.toString())
+                        "cancelGeneration" -> {
+                            val current = generationState()
+                            if (current?.optBoolean("active") == true) startService(Intent(this, GenerationService::class.java).apply {
+                                action = GenerationService.CANCEL; putExtra("jobId", current.getString("jobId"))
+                            })
+                            result.success(null)
+                        }
                         "paths" -> result.success(mapOf(
                             "files" to filesDir.absolutePath,
                             "output" to (getExternalFilesDir(null) ?: filesDir).absolutePath
@@ -37,29 +91,7 @@ class MainActivity : FlutterActivity() {
                             result.success(null)
                         }
                         "telemetry" -> {
-                            val memory = Debug.MemoryInfo()
-                            Debug.getMemoryInfo(memory)
-                            val battery = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-                            val manager = getSystemService(BATTERY_SERVICE) as BatteryManager
-                            val power = getSystemService(POWER_SERVICE) as PowerManager
-                            val charge = manager.getLongProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER)
-                            val energy = manager.getLongProperty(BatteryManager.BATTERY_PROPERTY_ENERGY_COUNTER)
-                            result.success(mapOf(
-                                "elapsedRealtimeMs" to SystemClock.elapsedRealtime(),
-                                "cpuMs" to Process.getElapsedCpuTime(),
-                                "pssKb" to memory.totalPss,
-                                "batteryTemperatureDeciC" to battery?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1),
-                                "batteryLevel" to battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1),
-                                "batteryScale" to battery?.getIntExtra(BatteryManager.EXTRA_SCALE, -1),
-                                "plugged" to battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1),
-                                "voltageMv" to battery?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1),
-                                "chargeUah" to if (charge == Long.MIN_VALUE) null else charge,
-                                "energyNwh" to if (energy == Long.MIN_VALUE) null else energy,
-                                "thermalStatus" to if (Build.VERSION.SDK_INT >= 29) power.currentThermalStatus else null,
-                                "manufacturer" to Build.MANUFACTURER, "model" to Build.MODEL,
-                                "sdk" to Build.VERSION.SDK_INT, "fingerprint" to Build.FINGERPRINT,
-                                "supportedAbis" to Build.SUPPORTED_ABIS.toList()
-                            ))
+                            result.success(ProbeTelemetry.collect(this))
                         }
                         "play" -> {
                             stopPlayer()
@@ -105,6 +137,47 @@ class MainActivity : FlutterActivity() {
             } else reply.success(false)
         } catch (error: Exception) { reply.error("export", error.message, null) }
         finally { pendingExport = null; exportFile = null }
+    }
+
+    private fun generationState(): JSONObject? {
+        val value = GenerationService.readState(this) ?: return null
+        val age = SystemClock.elapsedRealtime() - value.optLong("startedElapsedMs")
+        val processes = (getSystemService(ACTIVITY_SERVICE) as ActivityManager).runningAppProcesses.orEmpty()
+        if (value.optBoolean("active") && age > 15000 && processes.none { it.processName == "$packageName:kokoro_generation" }) {
+            value.put("active", false).put("outcome", "interrupted").put("phase", "interrupted")
+                .put("message", "Generation process ended; no automatic restart")
+            GenerationService.writeState(this, value)
+            val dir = File(filesDir, "generation-jobs/${value.getString("jobId")}")
+            val report = JSONObject().put("completed", false).put("outcome", "interrupted")
+                .put("results", JSONArray()).put("serviceState", value)
+            for (kind in listOf("worker", "service")) {
+                val events = JSONArray()
+                File(dir, "$kind-events.jsonl").takeIf { it.exists() }?.forEachLine {
+                    try { events.put(JSONObject(it)) } catch (_: Exception) {}
+                }
+                report.put("${kind}Events", events)
+            }
+            File(value.getString("reportPath")).writeText(report.toString(2))
+        }
+        return value
+    }
+
+    override fun onResume() {
+        super.onResume(); resumed = true
+        permissionDecision?.let { notificationReply?.success(it); notificationReply = null; permissionDecision = null }
+        sendBroadcast(Intent(GenerationService.VISIBILITY).setPackage(packageName).putExtra("visible", true))
+    }
+    override fun onPause() {
+        resumed = false
+        sendBroadcast(Intent(GenerationService.VISIBILITY).setPackage(packageName).putExtra("visible", false))
+        super.onPause()
+    }
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 42) {
+            permissionDecision = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
+            if (resumed) { notificationReply?.success(permissionDecision); notificationReply = null; permissionDecision = null }
+        }
     }
 
     private fun stopPlayer() { player?.release(); player = null }
