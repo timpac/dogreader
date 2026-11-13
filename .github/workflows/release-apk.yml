@@ -17,6 +17,21 @@ on:
         type: boolean
         default: false
 
+      retained_dogreader3:
+        description: Verify and test retained build 151 without recompilation
+        type: boolean
+        default: false
+
+      publish_retained_dogreader3:
+        description: Publish already-tested build 151 assets only; no APK build or inference
+        type: boolean
+        default: false
+
+      inspect_dogreader3:
+        description: Read retained failed-device evidence only; no APK or inference
+        type: boolean
+        default: false
+
 permissions:
   contents: read
 concurrency:
@@ -24,6 +39,20 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  dogreader3:
+    if: github.ref == 'refs/heads/feature/dogreader-3-offline' && github.actor == github.repository_owner
+    uses: ./.github/workflows/dogreader3-apk.yml
+    permissions:
+      contents: write
+      actions: read
+    with:
+      release_commit: ${{ inputs.release_commit }}
+      build_number: ${{ inputs.build_number }}
+      publish: ${{ inputs.publish }}
+      retained_build: ${{ inputs.retained_dogreader3 }}
+      inspect_evidence: ${{ inputs.inspect_dogreader3 }}
+      publication_only: ${{ inputs.publish_retained_dogreader3 }}
+    secrets: inherit
   apk:
     if: github.ref == 'refs/heads/dogreader-oct22-update' && github.actor == github.repository_owner
     runs-on: ubuntu-latest
