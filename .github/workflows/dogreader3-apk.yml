@@ -91,16 +91,16 @@ jobs:
           if [ "$RETAINED" != true ]; then flutter pub get --enforce-lockfile; fi
           python3 tool/check_isolation.py
           if [ "$RETAINED" = true ]; then
-            python3 - <<'PYTHON'
-            from pathlib import Path
-            import os, subprocess
-            names=subprocess.check_output(['git','diff','--name-only',os.environ['SOURCE'],'HEAD'],text=True).splitlines()
-            allowed=lambda n: n.startswith(('.github/workflows/','docs/')) or n in ['apps/dogreader3/android/app/build.gradle.kts','apps/dogreader3/tool/test_milestone_device.py']
-            assert all(allowed(n) for n in names),names
-            path='apps/dogreader3/android/app/build.gradle.kts'
-            old=subprocess.check_output(['git','show',os.environ['SOURCE']+':'+path],text=True)
-            assert old.replace('signingConfig = signingConfigs.getByName("debug")','signingConfig = signingConfigs.getByName("originalDogreader")') == Path('android/app/build.gradle.kts').read_text()
-            PYTHON
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import os, subprocess
+          names=subprocess.check_output(['git','diff','--name-only',os.environ['SOURCE'],'HEAD'],text=True).splitlines()
+          allowed=lambda n: n.startswith(('.github/workflows/','docs/')) or n in ['apps/dogreader3/android/app/build.gradle.kts','apps/dogreader3/tool/test_milestone_device.py']
+          assert all(allowed(n) for n in names),names
+          path='apps/dogreader3/android/app/build.gradle.kts'
+          old=subprocess.check_output(['git','show',os.environ['SOURCE']+':'+path],text=True)
+          assert old.replace('signingConfig = signingConfigs.getByName("debug")','signingConfig = signingConfigs.getByName("originalDogreader")') == Path('android/app/build.gradle.kts').read_text()
+          PYTHON
           fi
       - name: Build one independent ARM64 and x86_64 release APK
         if: ${{ !inputs.retained_build }}
