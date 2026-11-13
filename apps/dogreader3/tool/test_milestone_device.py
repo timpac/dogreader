@@ -68,9 +68,14 @@ def ui_click(label, attempts=12, exact=False):
         shell('uiautomator', 'dump', '/sdcard/kokoro-ui.xml', check=False)
         raw = shell('cat', '/sdcard/kokoro-ui.xml', check=False)
         if raw:
-            for node in ET.fromstring(raw).iter('node'):
+            tree = ET.fromstring(raw)
+            parents = {child: parent for parent in tree.iter() for child in parent}
+            for node in tree.iter('node'):
                 text = node.get('text', '') + node.get('content-desc', '')
-                if (text == label if exact else label in text) and node.get('enabled') == 'true' and node.get('clickable') == 'true':
+                target = node
+                while target is not None and target.get('clickable') != 'true':
+                    target = parents.get(target)
+                if (text == label if exact else label in text) and node.get('enabled') == 'true' and target is not None:
                     bounds = list(map(int, re.findall(r'\d+', node.get('bounds', ''))))
                     if len(bounds) == 4:
                         x1, y1, x2, y2 = bounds
@@ -81,6 +86,7 @@ def ui_click(label, attempts=12, exact=False):
         else:
             shell('input', 'swipe', '500', '650', '500', '1600', '350')
         time.sleep(1)
+    print('UI control not found:', label, 'hierarchy:', raw, flush=True)
     raise AssertionError('UI control not found: ' + label)
 
 
