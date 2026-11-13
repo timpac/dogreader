@@ -77,3 +77,39 @@ jobs:
             experiments/kokoro_probe/frontend-vendor-receipts.json
           if-no-files-found: warn
           retention-days: 14
+
+  probe-analysis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    defaults:
+      run:
+        working-directory: experiments/kokoro_probe
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.7'
+          channel: stable
+          cache: true
+      - name: Prepare pinned source and standalone template without building an APK
+        run: |
+          set -euo pipefail
+          python3 tool/prepare_frontend.py
+          cp pubspec.lock "$RUNNER_TEMP/kokoro-probe-dependencies.lock"
+          flutter create --no-pub --platforms android --org com.dogreader --project-name kokoro_probe . > "$RUNNER_TEMP/template.log" 2>&1
+          cp "$RUNNER_TEMP/kokoro-probe-dependencies.lock" pubspec.lock
+          rm -f test/widget_test.dart
+          python3 tool/configure_android.py
+          flutter pub get --enforce-lockfile
+      - name: Analyze probe only and run its existing small safeguard suite
+        run: |
+          set -euo pipefail
+          flutter analyze --no-pub lib test
+          flutter test --no-pub test
+          git diff --exit-code -- pubspec.lock
+          git diff --check
+          test -f native/ort_headers/onnxruntime_c_api.h
+          test -f lib/third_party/fonnx_misaki/misaki.dart
+          grep -Fq 'ANDROID_STL=c++_static' android/app/build.gradle.kts
+          grep -Fq '../../native/CMakeLists.txt' android/app/build.gradle.kts

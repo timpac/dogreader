@@ -12,7 +12,7 @@ class EnglishPrepared {
   final List<Map<String, dynamic>> tokens, fallbacks;
   final String runtimeVersion, locale;
   Map<String, dynamic> toJson() => {
-    'id': 'misaki-fonnx-1.2.0-api28-v1', 'locale': locale,
+    'frontendId': 'misaki-fonnx-1.2.0-api28-v1', 'locale': locale,
     'runtimeVersion': runtimeVersion, 'normalizedText': normalized.text,
     'normalizationEdits': normalized.edits, 'tokens': tokens, 'fallbacks': fallbacks,
     'phonemeChunks': chunks, 'coverageChecked': true,
@@ -47,7 +47,14 @@ class EnglishFrontend {
   EnglishPrepared prepare(String input, {Map<String, dynamic>? dictionary}) {
     backend.events.clear();
     final normalized = normalizeEnglish(input, locale: locale, dictionary: dictionary);
-    final (_, items) = misaki.phonemizeWithTokens(normalized.text);
+    // Process paragraphs independently so whitespace never reaches neural G2P.
+    // Offsets still refer to the complete normalized text; gaps force chunk boundaries.
+    final items = <MToken>[];
+    for (final paragraph in normalized.text.split(RegExp(r'\n\s*\n'))) {
+      if (paragraph.trim().isNotEmpty) {
+        items.addAll(misaki.phonemizeWithTokens(paragraph.trim()).$2);
+      }
+    }
     final coverage = <Map<String, dynamic>>[];
     final sourceCovered = List.filled(input.length, false);
     final chunks = <String>[];
@@ -68,7 +75,7 @@ class EnglishFrontend {
       final end = start + token.text.length;
       final lexical = RegExp(r'[A-Za-z]').hasMatch(token.text);
       final phones = token.phonemes;
-      final speech = phones != null && RegExp(r'[A-Za-zɑ-ʯᵊᵻ]').hasMatch(phones);
+      final speech = phones != null && RegExp(r'[A-Za-zæðŋœθɐ-ʯᵊᵻ]').hasMatch(phones);
       if (phones == null || phones.contains('❓') || (lexical && !speech)) {
         throw FormatException('Unresolved word "${token.text}". No audio generated.');
       }
