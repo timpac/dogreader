@@ -82,8 +82,10 @@ class NativeG2p {
         dec.cast<Int64>().asTypedList(ids.length).setAll(0, ids);
         final id = _argmax(_engine, src.cast(), source.length, dec.cast(), ids.length, error.cast(), 4096);
         if (id < 0) throw StateError('English fallback: ${_read(error.cast(), 4096)}');
-        if (id != MisakiFallbackVocab.eos && id <= 3) {
-          throw FormatException('Fallback returned a reserved/unknown token for "$word".');
+        // The exporter predicts an initial BOS after the decoder seed. That is
+        // framing, not an unknown grapheme/phoneme. Reject UNK/PAD and later BOS.
+        if (id == 0 || id == 3 || (id == MisakiFallbackVocab.bos && ids.length != 1)) {
+          throw FormatException('Fallback returned reserved/unknown token $id for "$word" after $ids.');
         }
         ids.add(id);
       }

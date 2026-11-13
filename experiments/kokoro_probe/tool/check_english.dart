@@ -63,6 +63,15 @@ void main(List<String> args) {
         }
       }
     }
+    // Keep corpus evidence even if a subsequent native guard fails.
+    File(args[3]).writeAsStringSync(const JsonEncoder.withIndent('  ').convert({
+      'platform':'Linux host, NOT Android/Pixel', 'corpusCases':16,
+      'results':results, 'corpusPassed':failures.isEmpty,
+      'allPassed':false, 'guardStatus':'not_yet_completed', 'failures':failures,
+    }));
+    for (final r in results) {
+      print("${r['pass'] == true ? 'PASS' : 'FAIL'} ${r['id']} ${r['locale']} ${r['error'] ?? ''}");
+    }
     for (final word in ['Xylophonia', 'Quvenzhane']) {
       check(native.phonemize(word).$1!.isNotEmpty, 'Fallback empty');
     }
