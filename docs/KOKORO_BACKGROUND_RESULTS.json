@@ -1,0 +1,35 @@
+{
+  "platform": "Android emulator; NOT Pixel measurements",
+  "sdk": "35",
+  "abi": "x86_64",
+  "realFp32Inference": true,
+  "allPassed": true,
+  "tests": [
+    {
+      "test": "normal_completion",
+      "pass": true,
+      "frames": 298490
+    },
+    {
+      "test": "app_switch",
+      "pass": true,
+      "intervalStartUnixMs": 1794566174752,
+      "intervalEndUnixMs": 1794566204752,
+      "completedDuringInterval": 5,
+      "workerPid": 4726,
+      "uiProcessDeathTested": true,
+      "cancellation": "UI"
+    },
+    {
+      "test": "screen_lock",
+      "pass": true,
+      "intervalStartUnixMs": 1794566262548,
+      "intervalEndUnixMs": 1794566292548,
+      "completedDuringInterval": 11,
+      "workerPid": 5028,
+      "uiProcessDeathTested": false,
+      "cancellation": "notification service action"
+    }
+  ],
+  "limitations": "Short controlled intervals on a powered emulator; not prolonged Doze/OEM/battery validation."
+}
