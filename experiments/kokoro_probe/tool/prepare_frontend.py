@@ -61,7 +61,7 @@ def prepare():
     headers = ROOT / 'native/ort_headers'
     headers.mkdir(exist_ok=True)
     base = 'https://raw.githubusercontent.com/microsoft/onnxruntime/'+ORT_REV+'/'
-    for n in ['onnxruntime_c_api.h', 'onnxruntime_error_code.h']:
+    for n in ['onnxruntime_c_api.h', 'onnxruntime_error_code.h', 'onnxruntime_ep_c_api.h', 'onnxruntime_float16.h']:
         data = download(base+'include/onnxruntime/core/session/'+n)
         (headers/n).write_bytes(data)
     assert '#define ORT_API_VERSION 28' in (headers/'onnxruntime_c_api.h').read_text()
