@@ -8,7 +8,7 @@
 
 All 16 frontend corpus cases passed: 17 executions including both date locales, comprising 15 accepted inputs and two expected explicit errors. Probe analysis, the seven existing safeguards, host native compilation and Android ARM64 native compilation also passed. See [tracked results](KOKORO_MISAKI_ADAPTER_RESULTS.json) and [the successful workflow](https://github.com/timpac/dogreader/actions/runs/43355950797).
 
-**No APK was built, PR merged, or production/cloud file changed.** These are host/frontend and cross-compilation results. Android loading/inference, end-to-end device WAV generation, listening quality and new device resource costs remain unverified.
+**Release target: experimental build 147**, published through GitHub Actions as [v147-kokoro-offline](https://github.com/timpac/dogreader/releases/tag/v147-kokoro-offline) after APK verification. No PR is merged and production/cloud files remain unchanged. Android loading/inference, end-to-end device WAV generation, listening quality and new device resource costs remain unverified by host checks.
 
 ## Native compatibility proof
 
@@ -88,9 +88,17 @@ The managed environment disconnected after the initial native proof. Remaining c
 
 Full token/normalization diagnostics and source receipts are retained for 14 days in the workflow's `kokoro-frontend-checks` artifact. The committed summary preserves outcomes and exact source/run links.
 
-## Pixel instructions after an authorized APK build
+## FP32 synthesis acceptance before the APK build
 
-There is **no new APK/release yet**; build 146 does not contain this adapter. Its existing APK workflow needs a reviewed branch-routing update when a build is requested.
+The corpus was rerun locally with the actual native API-28 fallback. Its 15 accepted executions (the ambiguous date is checked twice) were then passed to Sherpa 2.0.1 using `GenerationConfig.phoneme_codepoints`, the same native phoneme-input facility used by the probe. The exact FP32 graph, voices and token inventory hashes were verified first. This closes the earlier gap between frontend-only acceptance and actual engine acceptance.
+
+**All 23 phoneme chunks produced finite, nonempty, non-silent audio**, totaling 74.58 seconds on the Linux host. Each WAV's frame count, 24 kHz rate, mono channel count and PCM16 encoding were read back and checked. The two expected error cases made no synthesis call. [Detailed results](KOKORO_MISAKI_SYNTHESIS_RESULTS.json) retain normalized text, supplied phonemes, frame counts, PCM level checks and WAV hashes; `tool/check_synthesis.py` reproduces the check with an already-installed FP32 model, without downloading or modifying it.
+
+Source-to-phoneme coverage and accepted phonemes are automated evidence against silent frontend omission. They do not prove pronunciation correctness or that a listener hears every intended word. This is not an Android speed, memory, battery or heat measurement. Audio acceptance did not require changing the frontend, Sherpa runtime, FP32 graph or audio conversion pipeline.
+
+## Pixel instructions for experimental build 147
+
+Open the release page and tap **Dogreader-147-Kokoro-Offline-Probe.apk** under **Assets** after the workflow publishes it. Build 146 remains an unchanged reference release. The update has the same probe package and signing certificate; it installs separately from production Dogreader.
 
 1. Install the future probe update in place. Do not uninstall or clear storage. Existing models and separate production Dogreader remain intact.
 2. Select **FP32**, **Misaki English**, **af_heart**, **2 threads**, **1 run**. Retain the existing FP32 download; download **English frontend** once (22.2 MB).

@@ -17,6 +17,9 @@ on:
       quality_comparison:
         type: boolean
         default: false
+      english_frontend:
+        type: boolean
+        default: false
     secrets:
       DOGREADER_KEYSTORE_B64:
         required: true
@@ -26,15 +29,17 @@ permissions:
 
 jobs:
   probe:
-    if: (github.ref == 'refs/heads/feature/local-kokoro-feasibility' || github.ref == 'refs/heads/feature/kokoro-quality-comparison') && github.actor == github.repository_owner
+    if: (github.ref == 'refs/heads/feature/local-kokoro-feasibility' || github.ref == 'refs/heads/feature/kokoro-quality-comparison' || github.ref == 'refs/heads/feature/kokoro-misaki-adapter') && github.actor == github.repository_owner
     runs-on: ubuntu-latest
     timeout-minutes: 35
     permissions:
       contents: write
+      actions: read
     env:
       SOURCE: ${{ inputs.release_commit }}
       BUILD_NUMBER: ${{ inputs.build_number }}
       QUALITY_COMPARISON: ${{ inputs.quality_comparison }}
+      ENGLISH_FRONTEND: ${{ inputs.english_frontend }}
     defaults:
       run:
         shell: bash
@@ -43,10 +48,16 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const expectedBranch = process.env.QUALITY_COMPARISON === 'true' ? 'feature/kokoro-quality-comparison' : 'feature/local-kokoro-feasibility';
+            const expectedBranch = process.env.ENGLISH_FRONTEND === 'true' ? 'feature/kokoro-misaki-adapter' : process.env.QUALITY_COMPARISON === 'true' ? 'feature/kokoro-quality-comparison' : 'feature/local-kokoro-feasibility';
             if (context.ref !== 'refs/heads/' + expectedBranch) throw Error('Wrong branch');
             if (process.env.GITHUB_RUN_ATTEMPT !== '1') throw Error('Inspect retained assets before another explicit dispatch');
             if (!/^[a-f0-9]{40}$/.test(process.env.SOURCE) || context.sha !== process.env.SOURCE) throw Error('Reviewed source must equal this feature tip');
+            if (process.env.ENGLISH_FRONTEND === 'true') {
+              const checks = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+                ...context.repo, head_sha: process.env.SOURCE, status: 'success', per_page: 100});
+              if (!checks.some(r => r.head_sha === process.env.SOURCE && r.name === 'Kokoro frontend targeted checks (no APK)'))
+                throw Error('Successful targeted frontend checks required on this source before APK compilation');
+            }
             const {owner, repo} = context.repo;
             const releases = await github.paginate(github.rest.repos.listReleases, {owner, repo, per_page: 100});
             const tags = await github.paginate(github.rest.repos.listTags, {owner, repo, per_page: 100});
@@ -125,13 +136,24 @@ jobs:
           head -10 /tmp/apk-identity.txt
           grep -Fq "package: name='com.dogreader.kokoro_probe' versionCode='$BUILD_NUMBER'" /tmp/apk-identity.txt
           "$TOOLS/zipalign" -c -P 16 -v 4 "$APK" > /tmp/alignment.txt || { tail -50 /tmp/alignment.txt; exit 1; }
-          python3 experiments/kokoro_probe/tool/verify_apk.py "$APK"
+          if [ "$ENGLISH_FRONTEND" = true ]; then
+            python3 experiments/kokoro_probe/tool/verify_apk.py "$APK" --frontend
+          else
+            python3 experiments/kokoro_probe/tool/verify_apk.py "$APK"
+          fi
           mkdir -p dist
           cp "$APK" "dist/Dogreader-${BUILD_NUMBER}-Kokoro-Offline-Probe.apk"
           cp experiments/kokoro_probe/pubspec.lock dist/prototype-pubspec.lock
           cp docs/LOCAL_KOKORO_FEASIBILITY.md dist/FEASIBILITY.md
           if [ "$QUALITY_COMPARISON" = true ]; then cp docs/KOKORO_QUALITY_COMPARISON.md dist/COMPARISON.md; fi
+          if [ "$ENGLISH_FRONTEND" = true ]; then
+            cp docs/KOKORO_MISAKI_ADAPTER.md dist/FRONTEND.md
+            cp docs/KOKORO_MISAKI_ADAPTER_RESULTS.json dist/CORPUS.json
+            cp docs/KOKORO_MISAKI_SYNTHESIS_RESULTS.json dist/SYNTHESIS.json
+            cp experiments/kokoro_probe/frontend-vendor-receipts.json dist/frontend-vendor-receipts.json
+          fi
           cp experiments/kokoro_probe/LICENSES.txt dist/LICENSES.txt
+          if [ "$ENGLISH_FRONTEND" = true ]; then cat experiments/kokoro_probe/frontend-notices.txt >> dist/LICENSES.txt; fi
           curl -fsSL https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/v2.0.1/LICENSE >> dist/LICENSES.txt
           curl -fsSL https://raw.githubusercontent.com/microsoft/onnxruntime/v1.28.2/LICENSE >> dist/LICENSES.txt
           curl -fsSL https://raw.githubusercontent.com/microsoft/onnxruntime/v1.28.2/ThirdPartyNotices.txt >> dist/LICENSES.txt
@@ -139,6 +161,9 @@ jobs:
           cat /tmp/analysis.log /tmp/tests.log /tmp/apk-cert.txt >> dist/BUILD.txt
           head -1 /tmp/apk-identity.txt >> dist/BUILD.txt
           (cd dist && sha256sum *.apk prototype-pubspec.lock FEASIBILITY.md LICENSES.txt BUILD.txt > SHA256SUMS)
+          if [ "$ENGLISH_FRONTEND" = true ]; then
+            (cd dist && sha256sum FRONTEND.md CORPUS.json SYNTHESIS.json frontend-vendor-receipts.json >> SHA256SUMS)
+          fi
       - name: Retain, download-verify and publish numbered experimental release
         uses: actions/github-script@v7
         env:
@@ -160,9 +185,10 @@ jobs:
             }
             const body = `Isolated offline feasibility prototype; installs beside Dogreader as Kokoro Offline Probe (com.dogreader.kokoro_probe).\n\nOpen Assets and install ${name}. Download the model once (132.4 MB), then enable airplane mode and disable Wi-Fi. Use af_heart, two threads, one run for the first 1,000-word test. Tap Play latest WAV and Save measurements. See FEASIBILITY.md for the Pixel procedure and limitations. Unknown words are rejected.\n\nSource: ${source}\nAPK SHA-256: ${digest(fs.readFileSync('dist/' + name))}\n\nPixel inference, speed, RAM, heat and battery remain unmeasured. Existing Dogreader app and Google Cloud unchanged. No merge. Native/runtime license notices and dependency lockfile are attached. Source and build recipe are at this release tag. Downloads are public and require no API key.`;
             const comparisonBody = `INT8 versus FP32 audio-quality experiment. Update Kokoro Offline Probe in place; existing INT8 download is retained. Package: com.dogreader.kokoro_probe.\n\nOpen Assets and install ${name}. Select FP32 and download it optionally (349.9 MB; allow 1.5 GB free during installation). Then enable airplane mode and turn Wi-Fi off. Tap Load short comparison passage; use af_heart, two threads, one run. Generate INT8 and FP32 without changing text or settings. Both recordings have separate Play, Save WAV and Save measurements buttons. Confirm Comparison controls match. See COMPARISON.md for exact instructions, evidence and unresolved problems.\n\nModel precision is the comparison variable. No filter, denoiser, resampler or gain change is applied. Quantization as the hiss cause remains a hypothesis pending listening to both outputs. No model binaries in APK or Git.\n\nOwner-reported build-145 Pixel baseline: 1,000 words, 276 s audio, 402 s generation, RTF 1.46, two threads, approximately 658 MB sampled peak memory, no severe thermal pressure. FP32 Android metrics and quality improvement remain unmeasured. Short host results are not phone benchmarks.\n\nSource: ${source}\nAPK SHA-256: ${digest(fs.readFileSync('dist/' + name))}\n\nAnalysis, targeted tests, package, version, signing and 16 KB alignment verified. Assets are downloaded again and hash-checked before publication. Existing Dogreader/cloud/media/RSS/progress unchanged; no merge.`;
+            const englishBody = `Offline English frontend experiment; update Kokoro Offline Probe in place. Package: com.dogreader.kokoro_probe. Production Dogreader is unchanged.\n\nOpen Assets and install ${name}. Keep your existing FP32 download. Select FP32, Misaki English, af_heart, two threads and one run. Download English frontend once (22.22 MB), then enable airplane mode with Wi-Fi off. Paste an ordinary novel paragraph and generate. Use Play FP32, Save FP32 WAV and Save FP32 measurements. See FRONTEND.md for instructions and limitations.\n\nPreserves build 146's Sherpa-ONNX 2.0.1, ORT 1.28.2 and exact FP32 model. Build 146 lexicon reference mode and INT8 remain available. No model binaries are bundled. Unsupported input produces a visible error; words are not silently filtered. The native API-28 adapter shares the existing runtime.\n\nAutomated evidence: all 16 English frontend cases passed (17 locale executions, including two expected rejections). Their 15 accepted executions produced 23 finite, nonempty, non-silent audio chunks through the pinned FP32 engine on Linux. Every resulting WAV was verified as 24 kHz mono PCM16. Source/phoneme coverage, seven existing safeguards and Android ARM64 cross-compilation passed. SYNTHESIS.json and CORPUS.json distinguish host evidence from unmeasured Android behavior. These checks do not establish correct pronunciation of every word/name.\n\nAndroid runtime behavior, listening quality, speed, RAM, battery and heat for this frontend require Pixel testing. No new Android benchmark is claimed. The fallback declares Apache-2.0; detailed training-data provenance remains a production-review limitation. Component notices are included in the app and LICENSES.txt.\n\nSource: ${source}\nAPK SHA-256: ${digest(fs.readFileSync('dist/' + name))}\n\nSignature, package/version, 16 KB ELF/ZIP alignment, a single unchanged ARM64 ORT library and frontend helper packaging are verified. Uploaded release assets are downloaded again and hash-checked before publication. No production merge or cloud deployment.`;
             const release = (await github.rest.repos.createRelease({owner, repo, tag_name: tag,
               target_commitish: source, name: `Dogreader ${number} — Kokoro offline experiment`,
-              body: process.env.QUALITY_COMPARISON === 'true' ? comparisonBody : body,
+              body: process.env.ENGLISH_FRONTEND === 'true' ? englishBody : process.env.QUALITY_COMPARISON === 'true' ? comparisonBody : body,
               draft: true, prerelease: true, make_latest: 'false'})).data;
             for (const filename of fs.readdirSync('dist')) {
               const data = fs.readFileSync('dist/' + filename);

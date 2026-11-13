@@ -1,5 +1,6 @@
 """Check native ELF alignment and absence of model/GPL frontend binaries."""
 import re
+import hashlib
 import subprocess
 import struct
 import sys
@@ -19,6 +20,19 @@ with zipfile.ZipFile(sys.argv[1]) as apk, tempfile.TemporaryDirectory() as temp:
     assert not any(n.endswith(('/libflutter.so', '/libapp.so')) and
                    not n.startswith('lib/arm64-v8a/') for n in libs)
     arm64 = [n for n in libs if n.startswith('lib/arm64-v8a/')]
+    if '--frontend' in sys.argv[2:]:
+        # Exactly the original Sherpa runtime, with one new helper and no ORT
+        # from FONNX/native assets. Check bytes, not merely a library filename.
+        assert [n for n in arm64 if 'onnxruntime' in n.lower()] == ['lib/arm64-v8a/libonnxruntime.so']
+        # Android's packaging strips the pub archive's debug symbols. Compare
+        # against the already-shipped probe APK, not the unstripped source .so.
+        assert hashlib.sha256(apk.read('lib/arm64-v8a/libonnxruntime.so')).hexdigest() == '7a2fb92eb67037837c3f0e428bd732fd0d05ced0546d9e740090c07573d8249a'
+        assert hashlib.sha256(apk.read('lib/arm64-v8a/libsherpa-onnx-c-api.so')).hexdigest() == '8523d8044fb7336b945c8662821165f782103e4200a660b0ef097f6a41230e32'
+        assert 'lib/arm64-v8a/libkokoro_g2p.so' in arm64
+        assert not any('fonnx' in n.lower() for n in libs)
+        assert 'assets/flutter_assets/english-frontend-manifest.json' in apk.namelist()
+        notices = apk.read('assets/flutter_assets/frontend-notices.txt').decode()
+        assert 'Apache License' in notices and 'MIT License' in notices and 'Agilord' in notices
     for name in arm64:
         info = apk.getinfo(name)
         if info.compress_type == zipfile.ZIP_STORED:
@@ -28,6 +42,12 @@ with zipfile.ZipFile(sys.argv[1]) as apk, tempfile.TemporaryDirectory() as temp:
             assert (info.header_offset + 30 + filename_length + extra_length) % 16384 == 0, name
         target = Path(temp) / Path(name).name
         target.write_bytes(apk.read(name))
+        if name.endswith('/libkokoro_g2p.so'):
+            dynamic = subprocess.check_output(['readelf', '-d', str(target)], text=True)
+            assert not re.search(r'NEEDED.*(?:onnxruntime|fonnx|c\+\+_shared)', dynamic)
+            symbols = subprocess.check_output(['readelf', '-Ws', str(target)], text=True)
+            for symbol in ['create', 'argmax', 'version', 'destroy', 'alloc', 'free']:
+                assert f'kokoro_g2p_{symbol}' in symbols
         headers = subprocess.check_output(['readelf', '-lW', str(target)], text=True)
         loads = [line.split()[-1] for line in headers.splitlines() if re.match(r'\s*LOAD\s', line)]
         assert loads and all(int(value, 16) >= 16384 for value in loads), (name, loads)
