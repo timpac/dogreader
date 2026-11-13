@@ -268,10 +268,10 @@ jobs:
               const downloaded=await github.rest.repos.getReleaseAsset({owner,repo,asset_id:asset.id,headers:{accept:'application/octet-stream'}});
               if(hash(Buffer.from(downloaded.data))!==hash(data)) throw Error('Asset hash mismatch');
             }
-            if(process.env.PUBLISH==='true') await github.rest.repos.updateRelease({owner,repo,release_id:release.id,draft:false,prerelease:true,make_latest:'false'});
+            if(process.env.PUBLISH==='true') await github.rest.repos.updateRelease({owner,repo,release_id:release.id,tag_name:tag,target_commitish:process.env.SOURCE,draft:false,prerelease:true,make_latest:'false'});
             const final=(await github.rest.repos.getRelease({owner,repo,release_id:release.id})).data;
             if(!final.assets.some(a=>a.name===name&&a.size>0&&a.state==='uploaded')) throw Error('APK absent');
-            if(process.env.PUBLISH==='true'&&final.draft) throw Error('Not published');
+            if(process.env.PUBLISH==='true'&&(final.draft||final.tag_name!==tag)) throw Error('Not published under requested tag');
             if(!final.draft) {
               const ref=(await github.rest.git.getRef({owner,repo,ref:`tags/${tag}`})).data;
               if(ref.object.sha!==process.env.SOURCE) throw Error('Release/source mismatch');
@@ -359,10 +359,10 @@ jobs:
               const downloaded=await github.rest.repos.getReleaseAsset({owner,repo,asset_id:asset.id,headers:{accept:'application/octet-stream'}});
               if(hash(Buffer.from(downloaded.data))!==hash(data)) throw Error('Asset hash mismatch');
             }
-            if(process.env.PUBLISH==='true') await github.rest.repos.updateRelease({owner,repo,release_id:release.id,draft:false,prerelease:true,make_latest:'false'});
+            if(process.env.PUBLISH==='true') await github.rest.repos.updateRelease({owner,repo,release_id:release.id,tag_name:tag,target_commitish:process.env.SOURCE,draft:false,prerelease:true,make_latest:'false'});
             const final=(await github.rest.repos.getRelease({owner,repo,release_id:release.id})).data;
             if(!final.assets.some(a=>a.name===name&&a.size>0&&a.state==='uploaded')) throw Error('APK absent');
-            if(process.env.PUBLISH==='true'&&final.draft) throw Error('Not published');
+            if(process.env.PUBLISH==='true'&&(final.draft||final.tag_name!==tag)) throw Error('Not published under requested tag');
             if(!final.draft) {
               const ref=(await github.rest.git.getRef({owner,repo,ref:`tags/${tag}`})).data;
               if(ref.object.sha!==process.env.SOURCE) throw Error('Release/source mismatch');

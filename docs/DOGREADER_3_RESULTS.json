@@ -45,5 +45,15 @@
   },
   "playbackObservedPositionMs": 5912,
   "wakeLockReleased": true,
-  "limitations": "Powered emulator, no listening judgement or Pixel battery/heat/endurance result. No paid cloud generation."
+  "limitations": "Powered emulator, no listening judgement or Pixel battery/heat/endurance result. No paid cloud generation.",
+  "release": {
+    "url": "https://github.com/timpac/dogreader/releases/tag/v151-dogreader3",
+    "apk": "Dogreader-151-3.0-Offline.apk",
+    "bytes": 125842717,
+    "sha256": "c4c1ae8ed2da5f074dd35f86c4753c9caa3ab35dc9131f5e84f00674551140b4",
+    "publicationRun": "https://github.com/timpac/dogreader/actions/runs/43454894837",
+    "allAssetsUploadedAndDownloadVerified": true,
+    "finalTagMetadataCorrectedSeparately": true,
+    "publishedNumberedReleaseAndTagVerified": true
+  }
 }
