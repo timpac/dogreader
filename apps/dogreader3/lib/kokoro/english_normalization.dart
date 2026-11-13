@@ -108,7 +108,7 @@ EnglishText normalizeEnglish(String original, {String locale = 'en-US', Map<Stri
 
   out.replace(RegExp(r'[«»‹›„“”]'), (_) => '"', 'quotation-mark');
   out.replace(RegExp(r'[‘’ʼ‚]'), (_) => "'", 'apostrophe');
-  out.replace(RegExp(r'[\u00a0\u202f\u2000-\u200b\u3000]'), (_) => ' ', 'nonbreaking-space');
+  out.replace(RegExp(r'[\u00a0\u202f\u2000-\u200b]'), (_) => ' ', 'nonbreaking-space');
   out.replace(RegExp(r'\r\n?'), (_) => '\n', 'line-ending');
   out.replace(RegExp(r'\u00ad'), (_) => '', 'soft-hyphen');
   out.replace(RegExp(r'[ﬁﬂﬀﬃﬄ]'), (m) => const {'ﬁ':'fi','ﬂ':'fl','ﬀ':'ff','ﬃ':'ffi','ﬄ':'ffl'}[m[0]]!, 'ligature');
