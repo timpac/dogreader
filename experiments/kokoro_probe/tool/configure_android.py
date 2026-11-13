@@ -45,8 +45,17 @@ gradle.write_text(text)
 manifest = app / 'src/main/AndroidManifest.xml'
 text = manifest.read_text().replace('android:label="kokoro_probe"', 'android:label="Kokoro Offline Probe"')
 text = text.replace('<application', '<uses-permission android:name="android.permission.INTERNET"/>\n    <application', 1)
+permissions = ['FOREGROUND_SERVICE', 'FOREGROUND_SERVICE_MEDIA_PROCESSING',
+               'FOREGROUND_SERVICE_DATA_SYNC', 'WAKE_LOCK', 'POST_NOTIFICATIONS']
+text = text.replace('<application', ''.join(f'<uses-permission android:name="android.permission.{name}"/>\n' for name in permissions) + '<application', 1)
+text = text.replace('</application>', '''<service android:name=".GenerationService" android:exported="false"
+    android:process=":kokoro_generation" android:stopWithTask="false"
+    android:foregroundServiceType="mediaProcessing|dataSync"/>
+    </application>''')
 text = text.replace('android:label=', 'android:allowBackup="false" android:label=', 1)
 manifest.write_text(text)
 destination = app / 'src/main/kotlin/com/dogreader/kokoro_probe/MainActivity.kt'
 destination.parent.mkdir(parents=True, exist_ok=True)
 shutil.copyfile(root / 'native/MainActivity.kt', destination)
+for name in ['GenerationService.kt', 'ProbeTelemetry.kt']:
+    shutil.copyfile(root / 'native' / name, destination.parent / name)

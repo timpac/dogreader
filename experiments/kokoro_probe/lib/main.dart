@@ -6,9 +6,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show LicenseRegistry, LicenseEntryWithLineBreaks;
 import 'package:flutter/services.dart';
 import 'worker.dart';
+import 'service_runner.dart';
 
 const native = MethodChannel('dogreader.kokoro_probe');
 const experimentBuild = String.fromEnvironment('DOGREADER_BUILD', defaultValue: 'local');
+@pragma('vm:entry-point')
+void generationMain() => unawaited(runGenerationService());
+
 void main() {
   LicenseRegistry.addLicense(() async* {
     yield LicenseEntryWithLineBreaks(['Experimental Misaki frontend'],
@@ -23,7 +27,7 @@ class Probe extends StatefulWidget {
   State<Probe> createState() => _ProbeState();
 }
 
-class _ProbeState extends State<Probe> {
+class _ProbeState extends State<Probe> with WidgetsBindingObserver {
   final text = TextEditingController();
   String manifest = '', root = '', output = '', model = '', variant = 'fp32';
   String frontend = 'misaki', frontendManifest = '';
@@ -35,13 +39,21 @@ class _ProbeState extends State<Probe> {
   bool ready = false, busy = false;
   int threads = 2, repeats = 1, sid = 3;
   final results = <Map<String, dynamic>>[];
-  final samples = <Map<String, dynamic>>[];
-  Map<String, dynamic>? firstSample;
-  bool sampling = false;
-  int currentRun = 0;
+  Timer? servicePoll;
+  bool pollingService = false, serviceActive = false;
+  String? loadedReport, latestServiceReport;
 
   @override
-  void initState() { super.initState(); initialize(); }
+  void initState() {
+    super.initState(); WidgetsBinding.instance.addObserver(this); initialize();
+    servicePoll = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) unawaited(pollGeneration());
+    });
+  }
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) unawaited(pollGeneration());
+  }
 
   Future<void> initialize() async {
     try {
@@ -53,6 +65,12 @@ class _ProbeState extends State<Probe> {
       final paths = Map<String, dynamic>.from(await native.invokeMethod('paths'));
       root = paths['files'] as String;
       output = paths['output'] as String;
+      await pollGeneration();
+      final saved = await native.invokeMethod<String>('generationRecordings');
+      if (saved != null) {
+        final index = jsonDecode(saved) as Map<String, dynamic>;
+        for (final item in index.entries) { recordings[item.key] = Map<String, dynamic>.from(item.value as Map); }
+      }
       for (final entry in manifests.entries) {
         final spec = jsonDecode(entry.value);
         final marker = File('$root/${spec['directory']}/READY');
@@ -81,87 +99,73 @@ class _ProbeState extends State<Probe> {
     if (mounted) setState(() => text.text = passage);
   }
 
-  Future<void> sample() async {
-    if (sampling) return;
-    sampling = true;
+  Future<void> pollGeneration() async {
+    if (pollingService || !mounted || (busy && !serviceActive)) return;
+    pollingService = true;
     try {
-      final value = Map<String, dynamic>.from(await native.invokeMethod('telemetry'));
-      value['run'] = currentRun;
-      samples.add(value);
-    } finally { sampling = false; }
+      final raw = await native.invokeMethod<String>('generationStatus');
+      if (raw == null) return;
+      final value = jsonDecode(raw) as Map<String, dynamic>;
+      final active = value['active'] == true;
+      if (active || serviceActive) {
+        if (mounted) setState(() { serviceActive = active; busy = active; status = value['message'] as String? ?? status; });
+      }
+      final report = value['reportPath'] as String?;
+      if (!active && report != null && report != loadedReport && File(report).existsSync()) {
+        final summary = jsonDecode(await File(report).readAsString()) as Map<String, dynamic>;
+        results.clear();
+        for (final item in summary['results'] as List? ?? []) {
+          final result = Map<String, dynamic>.from(item as Map)..['report'] = report;
+          results.add(result); recordings[result['modelVariant'] as String] = result;
+        }
+        loadedReport = report; latestServiceReport = report;
+        if (mounted) setState(() { busy = false; serviceActive = false; status = summary['status'] as String? ?? value['message'] as String? ?? 'Generation stopped'; });
+      }
+    } catch (e) { if (mounted && serviceActive) setState(() => status = 'Generation status: $e'); }
+    finally { pollingService = false; }
   }
 
-  Future<void> operate(bool installing) async {
-    setState(() { busy = true; status = installing ? 'Connecting to model download…' : 'Checking text and loading model…'; });
-    final receive = ReceivePort();
-    Isolate? isolate;
-    Timer? timer;
-    var succeeded = false;
-    final selectedVariant = variant;
-    final spec = jsonDecode(manifest) as Map<String, dynamic>;
-    final graph = variant == 'int8' ? 'model.int8.onnx' : 'model.onnx';
-    final id = DateTime.now().toUtc().toIso8601String().replaceAll(':', '-');
+  Future<void> startGeneration() async {
+    setState(() { busy = true; status = 'Starting background generation…'; });
     try {
-      await native.invokeMethod('stop');
-      await native.invokeMethod('keepAwake', true);
-      if (!installing) {
-        results.clear(); samples.clear(); currentRun = 0;
-        await sample(); firstSample = samples.first;
-        timer = Timer.periodic(const Duration(seconds: 1), (_) {
-          unawaited(sample().catchError((Object error) {
-            // Telemetry failure is recorded, not mistaken for a successful measurement.
-            samples.add({'telemetryError': '$error'});
-          }));
-        });
+      if (await native.invokeMethod<bool>('notificationPermission') != true) {
+        throw StateError('Allow notifications in Android settings to track and cancel background generation.');
       }
-      isolate = await Isolate.spawn(worker, <String, dynamic>{
-        'port': receive.sendPort, 'operation': installing ? 'install' : 'generate',
-        'manifest': manifest, 'root': root, 'model': model, 'output': output,
+      await native.invokeMethod('stop');
+      final spec = jsonDecode(manifest) as Map<String, dynamic>;
+      final graph = variant == 'int8' ? 'model.int8.onnx' : 'model.onnx';
+      final id = DateTime.now().toUtc().toIso8601String().replaceAll(':', '-');
+      await native.invokeMethod('startGeneration', {
+        'operation': 'generate', 'manifest': manifest, 'root': root, 'model': model, 'output': output,
         'frontend': frontend, 'frontendManifest': frontendManifest,
         'id': id, 'text': text.text, 'threads': threads, 'repeats': repeats,
         'sid': sid, 'british': sid == 21, 'modelSha': spec['archiveSha256'],
-        'variant': selectedVariant, 'modelFile': graph, 'modelFileSha': spec['files'][graph]['sha256'],
-      }, onError: receive.sendPort, onExit: receive.sendPort);
-      await for (final message in receive) {
-        if (message is! Map) throw StateError('Worker stopped unexpectedly: $message');
-        if (message['error'] != null) throw StateError(message['error'] as String);
-        if (message['done'] == true) { succeeded = true; break; }
-        if (message['installed'] == true) { ready = true; installed[selectedVariant] = true; }
-        if (message['runStart'] != null) currentRun = message['runStart'] as int;
-        if (message['result'] != null) {
-          final result = Map<String, dynamic>.from(message['result'] as Map);
-          results.add(result);
-          recordings[selectedVariant] = result;
-        }
-        if (mounted) setState(() => status = message['status'] as String? ?? status);
+        'variant': variant, 'modelFile': graph, 'modelFileSha': spec['files'][graph]['sha256'],
+      });
+      results.clear(); serviceActive = true;
+      await pollGeneration();
+    } catch (e) { if (mounted) setState(() { busy = false; serviceActive = false; status = '$e'; }); }
+  }
+
+  Future<void> downloadModel() async {
+    setState(() { busy = true; status = 'Connecting to model download…'; });
+    final receive = ReceivePort();
+    Isolate? isolate;
+    try {
+      await native.invokeMethod('stop');
+      await native.invokeMethod('keepAwake', true);
+      isolate = await Isolate.spawn(worker, {'port': receive.sendPort, 'operation': 'install',
+        'manifest': manifest, 'root': root}, onError: receive.sendPort, onExit: receive.sendPort);
+      await for (final event in receive) {
+        if (event is! Map) throw StateError('Installer stopped unexpectedly');
+        if (event['error'] != null) throw StateError(event['error']);
+        if (event['installed'] == true) { ready = true; installed[variant] = true; }
+        if (event['status'] != null && mounted) setState(() => status = event['status'] as String);
+        if (event['done'] == true) break;
       }
-      if (mounted) setState(() => status = installing ? 'Model verified. Enable airplane mode before generating.' : 'Generation finished. Audio and measurements saved.');
-    } catch (error) {
-      if (mounted) setState(() => status = '$error');
-    } finally {
-      timer?.cancel();
-      receive.close(); isolate?.kill();
-      try {
-        if (!installing) {
-          await sample();
-          final summary = <String, dynamic>{
-            'experimentalBuild': experimentBuild, 'completed': succeeded,
-            'modelVariant': selectedVariant, 'modelArchiveSha256': spec['archiveSha256'],
-            'frontend': frontend,
-            'status': status, 'results': results, 'samples': samples,
-            'sampledPeakPssKb': samples.map((s) => (s['pssKb'] as num?) ?? 0).fold<num>(0, (a, b) => a > b ? a : b),
-            'sessionProcessCpuMs': (samples.last['cpuMs'] as num?) != null && firstSample?['cpuMs'] != null
-                ? (samples.last['cpuMs'] as num) - (firstSample!['cpuMs'] as num) : null,
-            'note': 'PSS sampled once/second, not a guaranteed peak. Battery temperature is not CPU temperature. '
-                'Battery deltas include screen, OS and sampling overhead. Generation timing includes WAV writes. '
-                'Run one is engine-cold; later runs reuse the engine. Each session loads a new engine.',
-          };
-          final report = '$output/benchmark-$selectedVariant-$id.json';
-          await File(report).writeAsString(const JsonEncoder.withIndent('  ').convert(summary), flush: true);
-          if (results.isNotEmpty) recordings[selectedVariant]!['report'] = report;
-        }
-      } catch (error) { status = '$status\nReport error: $error'; }
-      await native.invokeMethod('keepAwake', false);
+    } catch (e) { if (mounted) setState(() => status = '$e'); }
+    finally {
+      receive.close(); isolate?.kill(); await native.invokeMethod('keepAwake', false);
       if (mounted) setState(() => busy = false);
     }
   }
@@ -198,7 +202,7 @@ class _ProbeState extends State<Probe> {
   }
 
   @override
-  void dispose() { text.dispose(); super.dispose(); }
+  void dispose() { servicePoll?.cancel(); WidgetsBinding.instance.removeObserver(this); text.dispose(); super.dispose(); }
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -206,7 +210,7 @@ class _ProbeState extends State<Probe> {
     body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text('Separate experimental app. No cloud calls or API keys. Keep this screen open during generation.'),
+        const Text('Separate experimental app. No cloud calls or API keys. Generation continues with a progress notification while you switch apps or lock the screen.'),
         Text('Build $experimentBuild · Sherpa-ONNX 2.0.1 · CPU · 24 kHz WAV'),
         const SizedBox(height: 12),
         DropdownButton<String>(value: variant, isExpanded: true,
@@ -220,7 +224,7 @@ class _ProbeState extends State<Probe> {
             'FP32: quality baseline. Allow 1.5 GB free during installation.'),
         const Text('Downloads are optional and separate. Existing INT8 stays installed. '
             'Then enable airplane mode, with Wi-Fi off. Only Download buttons use the network.'),
-        FilledButton(onPressed: busy || root.isEmpty ? null : () => operate(true),
+        FilledButton(onPressed: busy || root.isEmpty ? null : downloadModel,
             child: Text('${ready ? 'Re-download' : 'Download'} ${variant.toUpperCase()} model')),
         DropdownButton<String>(value: frontend, isExpanded: true,
           items: const [
@@ -254,8 +258,10 @@ class _ProbeState extends State<Probe> {
               DropdownMenuItem(value: 16, child: Text('am_michael · American')),
               DropdownMenuItem(value: 21, child: Text('bf_emma · British'))],
             onChanged: busy ? null : (n) => setState(() => sid = n!)),
-        FilledButton(onPressed: busy || !ready || (frontend == 'misaki' && !frontendReady) ? null : () => operate(false), child: Text('Generate ${variant.toUpperCase()} offline audio')),
+        FilledButton(onPressed: busy || !ready || (frontend == 'misaki' && !frontendReady) ? null : startGeneration, child: Text('Generate ${variant.toUpperCase()} offline audio')),
         if (busy) const LinearProgressIndicator(),
+        if (serviceActive) OutlinedButton(onPressed: () => action('cancelGeneration'), child: const Text('Cancel generation')),
+        if (latestServiceReport != null) OutlinedButton(onPressed: busy ? null : () => action('export', latestServiceReport), child: const Text('Save generation diagnostics…')),
         SelectableText(status),
         for (final r in results) Text('Run ${r['run']}: ${(r['generationAndWriteMs'] / 1000).toStringAsFixed(1)} s '
             'for ${(r['audioSeconds'] as num).toStringAsFixed(1)} s audio; '

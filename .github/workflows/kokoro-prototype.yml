@@ -20,6 +20,12 @@ on:
       english_frontend:
         type: boolean
         default: false
+      background_generation:
+        type: boolean
+        default: false
+      retained_background_build:
+        type: boolean
+        default: false
     secrets:
       DOGREADER_KEYSTORE_B64:
         required: true
@@ -29,9 +35,9 @@ permissions:
 
 jobs:
   probe:
-    if: (github.ref == 'refs/heads/feature/local-kokoro-feasibility' || github.ref == 'refs/heads/feature/kokoro-quality-comparison' || github.ref == 'refs/heads/feature/kokoro-misaki-adapter') && github.actor == github.repository_owner
+    if: (github.ref == 'refs/heads/feature/local-kokoro-feasibility' || github.ref == 'refs/heads/feature/kokoro-quality-comparison' || github.ref == 'refs/heads/feature/kokoro-misaki-adapter' || github.ref == 'refs/heads/feature/kokoro-background-generation') && github.actor == github.repository_owner
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: ${{ inputs.background_generation && 45 || 35 }}
     permissions:
       contents: write
       actions: read
@@ -40,6 +46,8 @@ jobs:
       BUILD_NUMBER: ${{ inputs.build_number }}
       QUALITY_COMPARISON: ${{ inputs.quality_comparison }}
       ENGLISH_FRONTEND: ${{ inputs.english_frontend }}
+      BACKGROUND_GENERATION: ${{ inputs.background_generation }}
+      RETAINED_BACKGROUND: ${{ inputs.retained_background_build }}
     defaults:
       run:
         shell: bash
@@ -48,10 +56,28 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const expectedBranch = process.env.ENGLISH_FRONTEND === 'true' ? 'feature/kokoro-misaki-adapter' : process.env.QUALITY_COMPARISON === 'true' ? 'feature/kokoro-quality-comparison' : 'feature/local-kokoro-feasibility';
+            const expectedBranch = process.env.BACKGROUND_GENERATION === 'true' ? 'feature/kokoro-background-generation' : process.env.ENGLISH_FRONTEND === 'true' ? 'feature/kokoro-misaki-adapter' : process.env.QUALITY_COMPARISON === 'true' ? 'feature/kokoro-quality-comparison' : 'feature/local-kokoro-feasibility';
             if (context.ref !== 'refs/heads/' + expectedBranch) throw Error('Wrong branch');
             if (process.env.GITHUB_RUN_ATTEMPT !== '1') throw Error('Inspect retained assets before another explicit dispatch');
-            if (!/^[a-f0-9]{40}$/.test(process.env.SOURCE) || context.sha !== process.env.SOURCE) throw Error('Reviewed source must equal this feature tip');
+            if (!/^[a-f0-9]{40}$/.test(process.env.SOURCE)) throw Error('Full source SHA required');
+            if (process.env.RETAINED_BACKGROUND === 'true') {
+              if (process.env.BACKGROUND_GENERATION !== 'true' || process.env.SOURCE !== '57042ff146f8363b6bcc555e2b713e1a4228ec8b' || process.env.BUILD_NUMBER !== '148') throw Error('Wrong retained build');
+              const run = (await github.rest.actions.getWorkflowRun({...context.repo, run_id: 43408345801})).data;
+              if (run.head_sha !== process.env.SOURCE || run.head_branch !== expectedBranch) throw Error('Wrong original build provenance');
+              const artifact = (await github.rest.actions.getArtifact({...context.repo, artifact_id: 14028671883})).data;
+              if (artifact.expired || artifact.name !== 'kokoro-probe-148-build-output' || artifact.workflow_run.head_sha !== process.env.SOURCE || artifact.digest !== 'sha256:91cf5ae68e31956889c26e06bd9d4203fdb81142da7a802869e493acdf9cd747') throw Error('Retained artifact mismatch');
+              const proof = (await github.rest.actions.getArtifact({...context.repo, artifact_id: 14029362211})).data;
+              if (proof.expired || proof.name !== 'kokoro-background-device-checks' || proof.workflow_run.id !== 43409543061 || proof.digest !== 'sha256:e406ee4d34747d0caa2d85866b33b1d6b0b39b2a7e5fbadfe01e75ec412bc331') throw Error('Device evidence artifact mismatch');
+              const tested = (await github.rest.actions.listJobsForWorkflowRun({...context.repo, run_id: 43409543061})).data.jobs;
+              if (!tested.find(j => j.name === 'kokoro-background / probe')?.steps.some(s => s.name === 'Test real FP32 generation while switching apps and locking the screen separately' && s.conclusion === 'success')) throw Error('Real device checks did not pass');
+              const reserved = (await github.rest.repos.getRelease({...context.repo, release_id: 444103871})).data;
+              if (!reserved.draft || !reserved.prerelease || reserved.tag_name !== 'v148-kokoro-offline' || reserved.target_commitish !== process.env.SOURCE || reserved.assets.length) throw Error('Reserved draft changed');
+              const jobs = (await github.rest.actions.listJobsForWorkflowRun({...context.repo, run_id: run.id})).data.jobs;
+              const steps = jobs.find(j => j.name === 'kokoro-background / probe')?.steps || [];
+              for (const name of ['Targeted analysis and frontend safeguards', 'Build one ARM64 AOT prototype APK without any model binaries', 'Verify identity, signature and 16 KB native alignment']) {
+                if (!steps.some(s => s.name === name && s.conclusion === 'success')) throw Error('Original checks/build/verification missing');
+              }
+            } else if (context.sha !== process.env.SOURCE) throw Error('Reviewed source must equal this feature tip');
             if (process.env.ENGLISH_FRONTEND === 'true') {
               const checks = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
                 ...context.repo, head_sha: process.env.SOURCE, status: 'success', per_page: 100});
@@ -67,28 +93,38 @@ jobs:
               const m = /^(?:v|dogreader-|build-|Dogreader-)([0-9]+)(?:$|[-.])/.exec(name);
               if (m) highest = Math.max(highest, Number(m[1]));
             }
-            if (process.env.BUILD_NUMBER !== String(highest + 1)) throw Error(`Next unused build is ${highest + 1}`);
+            if (process.env.RETAINED_BACKGROUND !== 'true' && process.env.BUILD_NUMBER !== String(highest + 1)) throw Error(`Next unused build is ${highest + 1}`);
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.release_commit }}
+          ref: ${{ inputs.retained_background_build && github.sha || inputs.release_commit }}
           fetch-depth: 0
           persist-credentials: false
       - name: Check provenance and isolation
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$SOURCE"
+          if [ "$RETAINED_BACKGROUND" = true ]; then
+            # Recovery may change only verification/recipe/docs, never compiled app code.
+            git diff --name-only "$SOURCE" HEAD | python3 -c 'import sys,re; names=sys.stdin.read().splitlines(); assert all(re.match(r"^(?:\.github/workflows/|docs/|experiments/kokoro_probe/tool/test_background_device\.py$)", n) for n in names), names'
+            printf 'Targeted analysis passed in original compile run 43408345801; reused without recompilation.\n' > /tmp/analysis.log
+            printf 'Nine probe safeguards passed before compilation; frontend/native checks passed on original source.\n' > /tmp/tests.log
+          else
+            test "$(git rev-parse HEAD)" = "$SOURCE"
+          fi
           git merge-base --is-ancestor 30e92ca871bad697b19637488b085a8ecd03f1a3 HEAD
           git diff --exit-code 30e92ca871bad697b19637488b085a8ecd03f1a3 HEAD -- lib android pubspec.yaml pubspec.lock third_party test
+          if [ "$BACKGROUND_GENERATION" = true ]; then test -e /dev/kvm; fi
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
       - uses: subosito/flutter-action@v2
+        if: ${{ !inputs.retained_background_build }}
         with:
           flutter-version: '3.47.7'
           channel: stable
           cache: true
       - name: Prepare standalone Android template and original signing key
+        if: ${{ !inputs.retained_background_build }}
         env:
           DOGREADER_KEYSTORE_B64: ${{ secrets.DOGREADER_KEYSTORE_B64 }}
         run: |
@@ -108,15 +144,20 @@ jobs:
           python3 tool/configure_android.py
           flutter pub get --enforce-lockfile > /tmp/dependencies.log 2>&1 || { tail -60 /tmp/dependencies.log; exit 1; }
       - name: Targeted analysis and frontend safeguards
+        if: ${{ !inputs.retained_background_build }}
         working-directory: experiments/kokoro_probe
         run: |
           flutter analyze --no-pub lib test > /tmp/analysis.log 2>&1 || { cat /tmp/analysis.log; exit 1; }
           flutter test --no-pub test > /tmp/tests.log 2>&1 || { cat /tmp/tests.log; exit 1; }
       - name: Build one ARM64 AOT prototype APK without any model binaries
+        if: ${{ !inputs.retained_background_build }}
         working-directory: experiments/kokoro_probe
         run: |
-          flutter build apk --release --no-pub --target-platform android-arm64 --build-number "$BUILD_NUMBER" --dart-define="DOGREADER_BUILD=$BUILD_NUMBER" > /tmp/build.log 2>&1 || { tail -100 /tmp/build.log; exit 1; }
+          PROBE_TARGETS=android-arm64
+          if [ "$BACKGROUND_GENERATION" = true ]; then PROBE_TARGETS=android-arm64,android-x64; fi
+          flutter build apk --release --no-pub --target-platform "$PROBE_TARGETS" --build-number "$BUILD_NUMBER" --dart-define="DOGREADER_BUILD=$BUILD_NUMBER" > /tmp/build.log 2>&1 || { tail -100 /tmp/build.log; exit 1; }
       - name: Retain compiled bytes before verification to allow recovery without rebuilding
+        if: ${{ !inputs.retained_background_build }}
         uses: actions/upload-artifact@v4
         with:
           name: kokoro-probe-${{ inputs.build_number }}-build-output
@@ -124,6 +165,25 @@ jobs:
             experiments/kokoro_probe/build/app/outputs/flutter-apk/app-release.apk
             experiments/kokoro_probe/pubspec.lock
           retention-days: 14
+      - uses: actions/download-artifact@v4
+        if: inputs.retained_background_build
+        with:
+          github-token: ${{ github.token }}
+          run-id: 43408345801
+          artifact-ids: '14028671883'
+          path: experiments/kokoro_probe
+          merge-multiple: true
+      - name: Restore license receipts for retained APK (no build)
+        if: inputs.retained_background_build
+        run: |
+          python3 experiments/kokoro_probe/tool/prepare_frontend.py
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import zipfile
+          root = Path('experiments/kokoro_probe')
+          with zipfile.ZipFile(root/'build/app/outputs/flutter-apk/app-release.apk') as apk:
+              assert apk.read('assets/flutter_assets/frontend-notices.txt') == (root/'frontend-notices.txt').read_bytes()
+          PYTHON
       - name: Verify identity, signature and 16 KB native alignment
         run: |
           set -euo pipefail
@@ -136,7 +196,9 @@ jobs:
           head -10 /tmp/apk-identity.txt
           grep -Fq "package: name='com.dogreader.kokoro_probe' versionCode='$BUILD_NUMBER'" /tmp/apk-identity.txt
           "$TOOLS/zipalign" -c -P 16 -v 4 "$APK" > /tmp/alignment.txt || { tail -50 /tmp/alignment.txt; exit 1; }
-          if [ "$ENGLISH_FRONTEND" = true ]; then
+          if [ "$BACKGROUND_GENERATION" = true ]; then
+            python3 experiments/kokoro_probe/tool/verify_apk.py "$APK" --frontend --background
+          elif [ "$ENGLISH_FRONTEND" = true ]; then
             python3 experiments/kokoro_probe/tool/verify_apk.py "$APK" --frontend
           else
             python3 experiments/kokoro_probe/tool/verify_apk.py "$APK"
@@ -152,17 +214,80 @@ jobs:
             cp docs/KOKORO_MISAKI_SYNTHESIS_RESULTS.json dist/SYNTHESIS.json
             cp experiments/kokoro_probe/frontend-vendor-receipts.json dist/frontend-vendor-receipts.json
           fi
+      - name: Enable KVM for focused same-APK device checks
+        if: inputs.background_generation && !inputs.retained_background_build
+        run: |
+          printf '%s\n' 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm-kokoro.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          if [ "$RETAINED_BACKGROUND" != true ]; then
+            cd experiments/kokoro_probe/android
+            ./gradlew --stop
+          fi
+      - name: Test real FP32 generation while switching apps and locking the screen separately
+        if: inputs.background_generation && !inputs.retained_background_build
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_7_pro
+          disable-animations: true
+          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -memory 4096 -cores 2 -no-snapshot
+          script: python3 experiments/kokoro_probe/tool/test_background_device.py experiments/kokoro_probe/build/app/outputs/flutter-apk/app-release.apk experiments/kokoro_probe/test-results/background-device
+      - uses: actions/download-artifact@v4
+        if: inputs.retained_background_build
+        with:
+          github-token: ${{ github.token }}
+          run-id: 43409543061
+          artifact-ids: '14029362211'
+          path: experiments/kokoro_probe/test-results/background-device
+          merge-multiple: true
+      - name: Verify retained passing device evidence
+        if: inputs.retained_background_build
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          from pathlib import Path
+          proof = json.loads(Path('experiments/kokoro_probe/test-results/background-device/background-tests.json').read_text())
+          assert proof['allPassed'] and proof['realFp32Inference']
+          assert {t['test'] for t in proof['tests'] if t['pass']} == {'normal_completion', 'app_switch', 'screen_lock'}
+          print(json.dumps(proof, indent=2))
+          PYTHON
+      - name: Retain background evidence without model binaries
+        if: always() && inputs.background_generation
+        uses: actions/upload-artifact@v4
+        with:
+          name: kokoro-background-device-checks
+          path: |
+            experiments/kokoro_probe/test-results/background-device/*.json
+            experiments/kokoro_probe/test-results/background-device/*.txt
+            experiments/kokoro_probe/test-results/background-device/completion.wav
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Prepare release notices, provenance and test evidence
+        run: |
           cp experiments/kokoro_probe/LICENSES.txt dist/LICENSES.txt
           if [ "$ENGLISH_FRONTEND" = true ]; then cat experiments/kokoro_probe/frontend-notices.txt >> dist/LICENSES.txt; fi
           curl -fsSL https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/v2.0.1/LICENSE >> dist/LICENSES.txt
           curl -fsSL https://raw.githubusercontent.com/microsoft/onnxruntime/v1.28.2/LICENSE >> dist/LICENSES.txt
           curl -fsSL https://raw.githubusercontent.com/microsoft/onnxruntime/v1.28.2/ThirdPartyNotices.txt >> dist/LICENSES.txt
-          printf 'Experimental Dogreader Kokoro probe %s\nSource: %s\nRun: %s/%s/actions/runs/%s\nPackage: com.dogreader.kokoro_probe\nARM64 release/AOT. No Android inference or Pixel measurements performed in CI.\n' "$BUILD_NUMBER" "$SOURCE" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > dist/BUILD.txt
+          PROBE_EVIDENCE='ARM64 release/AOT. No Android inference or Pixel measurements performed in CI.'
+          if [ "$BACKGROUND_GENERATION" = true ]; then PROBE_EVIDENCE='ARM64+x86_64 release/AOT. Same-APK Android emulator checks ran real FP32 inference. Pixel measurements remain unperformed.'; fi
+          printf 'Experimental Dogreader Kokoro probe %s\nSource: %s\nRun: %s/%s/actions/runs/%s\nPackage: com.dogreader.kokoro_probe\n%s\n' "$BUILD_NUMBER" "$SOURCE" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$PROBE_EVIDENCE" > dist/BUILD.txt
+          if [ "$RETAINED_BACKGROUND" = true ]; then
+            printf 'Retained APK from run 43408345801 / artifact 14028671883; no new compilation. Passing device checks: run 43409543061 / artifact 14029362211. Verification recipe: %s\n' "$GITHUB_SHA" >> dist/BUILD.txt
+          fi
           cat /tmp/analysis.log /tmp/tests.log /tmp/apk-cert.txt >> dist/BUILD.txt
           head -1 /tmp/apk-identity.txt >> dist/BUILD.txt
           (cd dist && sha256sum *.apk prototype-pubspec.lock FEASIBILITY.md LICENSES.txt BUILD.txt > SHA256SUMS)
           if [ "$ENGLISH_FRONTEND" = true ]; then
             (cd dist && sha256sum FRONTEND.md CORPUS.json SYNTHESIS.json frontend-vendor-receipts.json >> SHA256SUMS)
+          fi
+          if [ "$BACKGROUND_GENERATION" = true ]; then
+            cp experiments/kokoro_probe/test-results/background-device/background-tests.json dist/BACKGROUND.json
+            cp docs/KOKORO_BACKGROUND_GENERATION.md dist/BACKGROUND.md
+            (cd dist && sha256sum BACKGROUND.json BACKGROUND.md >> SHA256SUMS)
           fi
       - name: Retain, download-verify and publish numbered experimental release
         uses: actions/github-script@v7
@@ -176,7 +301,7 @@ jobs:
             const tag = `v${number}-kokoro-offline`;
             const name = `Dogreader-${number}-Kokoro-Offline-Probe.apk`;
             const digest = data => crypto.createHash('sha256').update(data).digest('hex');
-            for (const request of [
+            if (process.env.RETAINED_BACKGROUND !== 'true') for (const request of [
               () => github.rest.repos.getReleaseByTag({owner, repo, tag}),
               () => github.rest.git.getRef({owner, repo, ref: `tags/${tag}`})
             ]) {
@@ -186,10 +311,12 @@ jobs:
             const body = `Isolated offline feasibility prototype; installs beside Dogreader as Kokoro Offline Probe (com.dogreader.kokoro_probe).\n\nOpen Assets and install ${name}. Download the model once (132.4 MB), then enable airplane mode and disable Wi-Fi. Use af_heart, two threads, one run for the first 1,000-word test. Tap Play latest WAV and Save measurements. See FEASIBILITY.md for the Pixel procedure and limitations. Unknown words are rejected.\n\nSource: ${source}\nAPK SHA-256: ${digest(fs.readFileSync('dist/' + name))}\n\nPixel inference, speed, RAM, heat and battery remain unmeasured. Existing Dogreader app and Google Cloud unchanged. No merge. Native/runtime license notices and dependency lockfile are attached. Source and build recipe are at this release tag. Downloads are public and require no API key.`;
             const comparisonBody = `INT8 versus FP32 audio-quality experiment. Update Kokoro Offline Probe in place; existing INT8 download is retained. Package: com.dogreader.kokoro_probe.\n\nOpen Assets and install ${name}. Select FP32 and download it optionally (349.9 MB; allow 1.5 GB free during installation). Then enable airplane mode and turn Wi-Fi off. Tap Load short comparison passage; use af_heart, two threads, one run. Generate INT8 and FP32 without changing text or settings. Both recordings have separate Play, Save WAV and Save measurements buttons. Confirm Comparison controls match. See COMPARISON.md for exact instructions, evidence and unresolved problems.\n\nModel precision is the comparison variable. No filter, denoiser, resampler or gain change is applied. Quantization as the hiss cause remains a hypothesis pending listening to both outputs. No model binaries in APK or Git.\n\nOwner-reported build-145 Pixel baseline: 1,000 words, 276 s audio, 402 s generation, RTF 1.46, two threads, approximately 658 MB sampled peak memory, no severe thermal pressure. FP32 Android metrics and quality improvement remain unmeasured. Short host results are not phone benchmarks.\n\nSource: ${source}\nAPK SHA-256: ${digest(fs.readFileSync('dist/' + name))}\n\nAnalysis, targeted tests, package, version, signing and 16 KB alignment verified. Assets are downloaded again and hash-checked before publication. Existing Dogreader/cloud/media/RSS/progress unchanged; no merge.`;
             const englishBody = `Offline English frontend experiment; update Kokoro Offline Probe in place. Package: com.dogreader.kokoro_probe. Production Dogreader is unchanged.\n\nOpen Assets and install ${name}. Keep your existing FP32 download. Select FP32, Misaki English, af_heart, two threads and one run. Download English frontend once (22.22 MB), then enable airplane mode with Wi-Fi off. Paste an ordinary novel paragraph and generate. Use Play FP32, Save FP32 WAV and Save FP32 measurements. See FRONTEND.md for instructions and limitations.\n\nPreserves build 146's Sherpa-ONNX 2.0.1, ORT 1.28.2 and exact FP32 model. Build 146 lexicon reference mode and INT8 remain available. No model binaries are bundled. Unsupported input produces a visible error; words are not silently filtered. The native API-28 adapter shares the existing runtime.\n\nAutomated evidence: all 16 English frontend cases passed (17 locale executions, including two expected rejections). Their 15 accepted executions produced 23 finite, nonempty, non-silent audio chunks through the pinned FP32 engine on Linux. Every resulting WAV was verified as 24 kHz mono PCM16. Source/phoneme coverage, seven existing safeguards and Android ARM64 cross-compilation passed. SYNTHESIS.json and CORPUS.json distinguish host evidence from unmeasured Android behavior. These checks do not establish correct pronunciation of every word/name.\n\nAndroid runtime behavior, listening quality, speed, RAM, battery and heat for this frontend require Pixel testing. No new Android benchmark is claimed. The fallback declares Apache-2.0; detailed training-data provenance remains a production-review limitation. Component notices are included in the app and LICENSES.txt.\n\nSource: ${source}\nAPK SHA-256: ${digest(fs.readFileSync('dist/' + name))}\n\nSignature, package/version, 16 KB ELF/ZIP alignment, a single unchanged ARM64 ORT library and frontend helper packaging are verified. Uploaded release assets are downloaded again and hash-checked before publication. No production merge or cloud deployment.`;
-            const release = (await github.rest.repos.createRelease({owner, repo, tag_name: tag,
+            const backgroundBody = `Background-generation experiment; update Kokoro Offline Probe in place. Production Dogreader and build 147 are unchanged.\n\nOpen Assets and install ${name}. Keep the existing FP32 and English frontend downloads. Select FP32 / Misaki English / af_heart / two threads / one run. Allow notifications when asked, then test with airplane mode and Wi-Fi off. The foreground service owns an independent Flutter engine/process and an active-only partial CPU wake lock. Its progress notification offers cancellation. Switching apps or closing the UI does not own the inference engine.\n\nTest app switching and screen locking separately on your Pixel. Save generation diagnostics after each run: per-chunk timestamps are flushed by the inference isolate during generation, plus native screen/UI/wake-lock events. Cancellation is cooperative at a chunk boundary with a 15-second process-stop bound; incomplete WAVs are not promoted. See BACKGROUND.md and BACKGROUND.json for procedure, actual emulator observations and limits.\n\nThe exact same universal ARM64+x86_64 APK passed real-FP32 Android 15 emulator checks for normal completion, app switching, UI-process loss, a separate screen-off interval, cancellation, prior-WAV preservation and wake-lock release. The APK contains no model binaries. FP32, Misaki, ORT 1.28.2 and PCM/WAV conversion remain unchanged. Pixel background endurance, Doze/battery behavior and performance remain unmeasured. Android's mediaProcessing six-hour quota applies; no automatic restart, battery exemption or fake playback is used.\n\nSource: ${source}\nAPK SHA-256: ${digest(fs.readFileSync('dist/' + name))}\n\nPackage/signature, native alignment and unchanged runtime bytes verified. All uploaded assets were downloaded and hash-checked before publication. No production merge or cloud deployment.`;
+            const release = process.env.RETAINED_BACKGROUND === 'true' ? (await github.rest.repos.getRelease({owner, repo, release_id: 444103871})).data : (await github.rest.repos.createRelease({owner, repo, tag_name: tag,
               target_commitish: source, name: `Dogreader ${number} — Kokoro offline experiment`,
-              body: process.env.ENGLISH_FRONTEND === 'true' ? englishBody : process.env.QUALITY_COMPARISON === 'true' ? comparisonBody : body,
+              body: process.env.BACKGROUND_GENERATION === 'true' ? backgroundBody : process.env.ENGLISH_FRONTEND === 'true' ? englishBody : process.env.QUALITY_COMPARISON === 'true' ? comparisonBody : body,
               draft: true, prerelease: true, make_latest: 'false'})).data;
+            if (!release.draft || release.assets.length || release.target_commitish !== source || release.tag_name !== tag) throw Error('Expected empty matching draft');
             for (const filename of fs.readdirSync('dist')) {
               const data = fs.readFileSync('dist/' + filename);
               const asset = (await github.rest.repos.uploadReleaseAsset({owner, repo, release_id: release.id,
