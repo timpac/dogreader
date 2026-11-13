@@ -118,4 +118,54 @@ void main() {
     expect(await File('${root.path}/narration_state.json').exists(), isFalse);
     controller.dispose();
   });
+
+  test('automatic promotion does not interrupt actively playing chapter', () async {
+    final wav = File('${root.path}/chapter.wav');
+    await wav.writeAsBytes([...wavHeader(600, 24000), ...List.filled(1200, 0)]);
+    await File('${root.path}/offline-recordings.json').writeAsString(jsonEncode({
+      'book:0': {
+        'key': 'book:0',
+        'bookId': 'book',
+        'chapterIndex': 0,
+        'jobId': 'job-42',
+        'engine': 'kokoro_offline',
+        'voice': 'af_heart',
+        'result': {'path': wav.path, 'wavBytes': await wav.length()},
+      }
+    }));
+
+    var playing = true;
+    var unloads = 0;
+    final controller = OfflineNarration(
+      beforeSelect: (book, index) async { unloads++; },
+      documentsDirectory: () async => root,
+      isChapterPlaying: (book, index) => playing && book == 'book' && index == 0,
+    );
+    controller.root = root.path;
+
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(offlineChannel, (call) async {
+      if (call.method == 'generationStatus') {
+        return jsonEncode({
+          'active': false,
+          'outcome': 'completed',
+          'jobId': 'job-42',
+          'chapter': {'key': 'book:0', 'bookId': 'book', 'chapterIndex': 0},
+        });
+      }
+      return null;
+    });
+
+    // While chapter is playing, poll() must NOT unload or promote
+    await controller.poll();
+    expect(unloads, 0, reason: 'Active playback must not be interrupted by promotion');
+    expect(File('${root.path}/offline-promoted-job.txt').existsSync(), isFalse);
+
+    // When playback stops, subsequent poll() safely promotes
+    playing = false;
+    await controller.poll();
+    expect(unloads, 1, reason: 'Promotion proceeds once playback is no longer active');
+    expect(await File('${root.path}/offline-promoted-job.txt').readAsString(), 'job-42');
+
+    controller.dispose();
+  });
 }

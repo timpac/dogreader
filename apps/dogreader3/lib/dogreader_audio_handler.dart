@@ -550,6 +550,11 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     });
   }
 
+  bool isChapterPlaying(String bookId, int index) {
+    if (_recording?.key != '$bookId:$index') return false;
+    return player.playing || playbackState.value.playing;
+  }
+
   Future<void> unloadChapter(String bookId, int index) async {
     if (_recording?.key != '$bookId:$index') return;
     recordDiagnostic(MediaDiagnosticEvent.chapterUnloaded);

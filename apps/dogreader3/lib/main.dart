@@ -74,7 +74,10 @@ Future<void> main() async {
   );
 
   await audioHandler.initializeAudioSession();
-  offlineNarration = OfflineNarration(beforeSelect: (book, index) => audioHandler.unloadChapter(book, index));
+  offlineNarration = OfflineNarration(
+    beforeSelect: (book, index) => audioHandler.unloadChapter(book, index),
+    isChapterPlaying: (book, index) => audioHandler.isChapterPlaying(book, index),
+  );
   unawaited(offlineNarration.initialize());
   unawaited(NativeMediaDiagnostics.start(diagnostics));
 

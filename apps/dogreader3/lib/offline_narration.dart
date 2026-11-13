@@ -17,9 +17,14 @@ const offlineVoices = {3: 'af_heart', 16: 'am_michael', 21: 'bf_emma'};
 
 /// Separate from the cloud queue: no local request can become a cloud job.
 class OfflineNarration extends ChangeNotifier with WidgetsBindingObserver {
-  OfflineNarration({required this.beforeSelect, this.documentsDirectory = getApplicationDocumentsDirectory});
+  OfflineNarration({
+    required this.beforeSelect,
+    this.documentsDirectory = getApplicationDocumentsDirectory,
+    this.isChapterPlaying,
+  });
   final Future<Directory> Function() documentsDirectory;
   final Future<void> Function(String, int) beforeSelect;
+  final bool Function(String bookId, int index)? isChapterPlaying;
   String root = '', output = '', modelManifest = '', frontendManifest = '';
   bool ready = false, installing = false, _polling = false;
   String status = 'Checking offline files…';
@@ -80,7 +85,15 @@ class OfflineNarration extends ChangeNotifier with WidgetsBindingObserver {
         final chapter = job!['chapter'];
         if (!active && job!['outcome'] == 'completed' && chapter is Map) {
           final item = recordings[chapter['key']];
-          if (item is Map && item['jobId'] == job!['jobId'] && _selectedJob != item['jobId']) {
+          final bookId = chapter['bookId'] as String?;
+          final chapterIndex = chapter['chapterIndex'] as int?;
+          final isPlayingCurrent = bookId != null &&
+              chapterIndex != null &&
+              (isChapterPlaying?.call(bookId, chapterIndex) ?? false);
+          if (item is Map &&
+              item['jobId'] == job!['jobId'] &&
+              _selectedJob != item['jobId'] &&
+              !isPlayingCurrent) {
             await select(Map<String, dynamic>.from(item));
             _selectedJob = item['jobId'] as String;
             await File('$root/offline-promoted-job.txt').writeAsString(_selectedJob!, flush: true);
