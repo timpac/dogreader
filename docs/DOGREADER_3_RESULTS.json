@@ -1,0 +1,49 @@
+{
+  "build": 151,
+  "compiledSource": "d9eb8926d2945296f4f1351825c8816d08f2e9e4",
+  "verificationRecipe": "d6a6dc987ca50d1f7ca07e4174c48532064c3359",
+  "acceptanceRun": "https://github.com/timpac/dogreader/actions/runs/43453714650",
+  "platform": "Android 15 x86_64 emulator; NOT Pixel measurements",
+  "allPassed": true,
+  "singleCompiledApk": true,
+  "package": "com.dogreader.v3",
+  "coinstalled": {
+    "com.example.audiobook_app": "10209",
+    "com.dogreader.kokoro_probe": "10210",
+    "com.dogreader.v3": "10211"
+  },
+  "existingReleaseApks": {
+    "com.example.audiobook_app": {
+      "tag": "v135",
+      "sha256": "48af8661b9287c225479a5dafb0a786b2c2fad4343f0b8d3b0bd432368351d1b",
+      "bytes": 171410635
+    },
+    "com.dogreader.kokoro_probe": {
+      "tag": "v148-kokoro-offline",
+      "sha256": "b101e58ccd819df8f354ae31b8231f869864ee32b0bc303afe3dd47def051275",
+      "bytes": 114763461
+    }
+  },
+  "epubImportedThroughSystemPicker": true,
+  "fixturePassageSha256": "980bbb7b1670c96215dc06d29460b1d80f045ddf0b984240e0ca6b3f96dc24cb",
+  "fixtureWords": 391,
+  "chapterEngine": "kokoro_offline",
+  "modelFileSha256": "b40f62b166ac8164b0627ef48a0b358eda0985e272fb03ef5252e7206305da11",
+  "chunkCount": 29,
+  "completedWhileScreenOff": true,
+  "measuredScreenOffInterval": {
+    "startUnixMs": 1794584201242,
+    "endUnixMs": 1794584231242,
+    "nativeChunkCompletions": 17
+  },
+  "wav": {
+    "sha256": "89efff819a895d5e8a2c2435744ed97d36a801eb93608b4abfc2534384399bfc",
+    "sampleFrames": 2525499,
+    "sampleRate": 24000,
+    "channels": 1,
+    "bits": 16
+  },
+  "playbackObservedPositionMs": 5912,
+  "wakeLockReleased": true,
+  "limitations": "Powered emulator, no listening judgement or Pixel battery/heat/endurance result. No paid cloud generation."
+}
