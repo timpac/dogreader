@@ -86,7 +86,7 @@ def ui_click(label, attempts=12, exact=False):
                     if len(bounds) == 4:
                         x1, y1, x2, y2 = bounds
                         shell('input', 'tap', str((x1+x2)//2), str((y1+y2)//2))
-                        return
+                        return ((x1+x2)//2, (y1+y2)//2)
         if _ < attempts//2:
             shell('input', 'swipe', '500', '1600', '500', '650', '350')
         else:
@@ -174,6 +174,11 @@ def media_session_playing(sessions):
     # Inspect our package's session, never a Bluetooth/assistant session.
     match = re.search(r'^\s*package=' + re.escape(PACKAGE) + r'\s*\n(.*?)(?=^\s*package=|\Z)', sessions, re.M|re.S)
     return bool(match and re.search(r'\bstate=(?:3\b|PLAYING\(3\))', match[1]))
+
+
+def media_session_paused(sessions):
+    match = re.search(r'^\s*package=' + re.escape(PACKAGE) + r'\s*\n(.*?)(?=^\s*package=|\Z)', sessions, re.M|re.S)
+    return bool(match and re.search(r'\bstate=(?:2\b|PAUSED\(2\))', match[1]))
 
 def main():
     parser = argparse.ArgumentParser()
@@ -270,11 +275,15 @@ def main():
         shell('input','keyevent','KEYCODE_WAKEUP'); shell('wm','dismiss-keyguard',check=False)
         shell('am','start','-n',ACTIVITY); time.sleep(3)
         ui_click('Play completed chapter')
-        ui_click('Play', exact=True)
+        play_button = ui_click('Play', exact=True)
         time.sleep(6)
         sessions = shell('dumpsys','media_session')
         assert media_session_playing(sessions), sessions
-        ui_click('Pause', exact=True)  # Persists observed playback position.
+        # UIAutomator waits for idle; a live position slider can keep it busy
+        # until the entire chapter ends. Play/Pause occupies the same centered
+        # button, so use the coordinates captured before playback started.
+        shell('input','tap',str(play_button[0]),str(play_button[1]))
+        wait_for(lambda: media_session_paused(shell('dumpsys','media_session')), 10)
         selected = wait_for(lambda: e if (d:=read_json('/data/user/0/'+PACKAGE+'/app_flutter/narration_state.json')) and (e:=d.get(job['chapter']['key'])) and e.get('positionMs',0)>1000 else None, 15)
         assert selected['engine']=='kokoro_offline' and selected['path']==result['path']
         assert selected['positionMs']>1000, selected

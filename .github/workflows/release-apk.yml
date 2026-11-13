@@ -18,7 +18,7 @@ on:
         default: false
 
       retained_dogreader3:
-        description: Verify, re-sign and test retained build 149 without recompilation
+        description: Verify and test retained build 151 without recompilation
         type: boolean
         default: false
 
