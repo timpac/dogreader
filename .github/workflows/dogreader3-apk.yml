@@ -11,6 +11,9 @@ on:
       publish:
         required: true
         type: boolean
+      retained_build:
+        type: boolean
+        default: false
     secrets:
       DOGREADER_KEYSTORE_B64:
         required: true
@@ -27,6 +30,7 @@ jobs:
     env:
       SOURCE: ${{ inputs.release_commit }}
       BUILD_NUMBER: ${{ inputs.build_number }}
+      RETAINED: ${{ inputs.retained_build }}
     defaults:
       run:
         shell: bash
@@ -36,10 +40,17 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            if (context.sha !== process.env.SOURCE || !/^[a-f0-9]{40}$/.test(process.env.SOURCE)) throw Error('Exact reviewed feature tip required');
+            if (!/^[a-f0-9]{40}$/.test(process.env.SOURCE)) throw Error('Full compiled source required');
+            if(process.env.RETAINED==='true') {
+              if(process.env.SOURCE!=='639e7c5815d4bbf8f400661d1436b9d9d5621690'||process.env.BUILD_NUMBER!=='149') throw Error('Wrong retained build');
+              const artifact=(await github.rest.actions.getArtifact({...context.repo,artifact_id:14034779051})).data;
+              if(artifact.expired||artifact.name!=='dogreader3-149-build-output'||artifact.workflow_run.id!==43422966671||artifact.workflow_run.head_sha!==process.env.SOURCE||artifact.digest!=='sha256:1dcfc5b418b7d02fca4a64545d4cf655964bd8437ab6b308ce1940760a5aa32c') throw Error('Wrong retained artifact');
+              const jobs=(await github.rest.actions.listJobsForWorkflowRun({...context.repo,run_id:43422966671})).data.jobs;
+              if(!jobs.find(j=>j.name==='dogreader3 / independent')?.steps.some(s=>s.name==='Build one independent ARM64 and x86_64 release APK'&&s.conclusion==='success')) throw Error('Compilation evidence missing');
+            } else if(context.sha!==process.env.SOURCE) throw Error('Exact feature tip required');
             if (process.env.GITHUB_RUN_ATTEMPT !== '1') throw Error('Inspect retained APK; never rebuild blindly');
-            const checks = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {...context.repo, head_sha: context.sha, status: 'success', per_page:100});
-            if (!checks.some(r => r.name === 'Dogreader 3.0 targeted checks (no APK)' && r.head_sha === context.sha)) throw Error('Targeted checks must pass on exact source');
+            const checks = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {...context.repo, head_sha: process.env.SOURCE, status: 'success', per_page:100});
+            if (!checks.some(r => r.name === 'Dogreader 3.0 targeted checks (no APK)' && r.head_sha === process.env.SOURCE)) throw Error('Targeted checks must pass on exact source');
             const releases = await github.paginate(github.rest.repos.listReleases, {...context.repo, per_page:100});
             const tags = await github.paginate(github.rest.repos.listTags, {...context.repo, per_page:100});
             let highest = 135;
@@ -47,10 +58,10 @@ jobs:
               const m=/^(?:v|Dogreader-|build-)([0-9]+)(?:$|[-.])/.exec(name);
               if (m) highest=Math.max(highest,Number(m[1]));
             }
-            if (process.env.BUILD_NUMBER !== String(highest+1)) throw Error(`Next unused number is ${highest+1}`);
+            if (process.env.RETAINED !== 'true' && process.env.BUILD_NUMBER !== String(highest+1)) throw Error(`Next unused number is ${highest+1}`);
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.release_commit }}
+          ref: ${{ inputs.retained_build && github.sha || inputs.release_commit }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-java@v4
@@ -58,6 +69,7 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: subosito/flutter-action@v2
+        if: ${{ !inputs.retained_build }}
         with:
           flutter-version: '3.47.7'
           channel: stable
@@ -76,12 +88,26 @@ jobs:
           grep -Fqi 'C5:CC:08:D9:75:7C:0E:92:89:3A:71:62:04:A2:6F:EB:61:57:F5:35:0A:00:DB:B0:B7:96:20:49:D6:D9:D1:77' /tmp/signing.txt
           python3 tool/prepare_frontend.py
           python3 tool/prepare_android.py
-          flutter pub get --enforce-lockfile
+          if [ "$RETAINED" != true ]; then flutter pub get --enforce-lockfile; fi
           python3 tool/check_isolation.py
+          if [ "$RETAINED" = true ]; then
+            python3 - <<'PYTHON'
+            from pathlib import Path
+            import os, subprocess
+            names=subprocess.check_output(['git','diff','--name-only',os.environ['SOURCE'],'HEAD'],text=True).splitlines()
+            allowed=lambda n: n.startswith(('.github/workflows/','docs/')) or n in ['apps/dogreader3/android/app/build.gradle.kts','apps/dogreader3/tool/test_milestone_device.py']
+            assert all(allowed(n) for n in names),names
+            path='apps/dogreader3/android/app/build.gradle.kts'
+            old=subprocess.check_output(['git','show',os.environ['SOURCE']+':'+path],text=True)
+            assert old.replace('signingConfig = signingConfigs.getByName("debug")','signingConfig = signingConfigs.getByName("originalDogreader")') == Path('android/app/build.gradle.kts').read_text()
+            PYTHON
+          fi
       - name: Build one independent ARM64 and x86_64 release APK
+        if: ${{ !inputs.retained_build }}
         run: |
           flutter build apk --release --no-pub --target-platform android-arm64,android-x64 --build-name 3.0.0 --build-number "$BUILD_NUMBER" --dart-define="DOGREADER_BUILD=$BUILD_NUMBER" > /tmp/dogreader3-build.txt 2>&1 || { tail -100 /tmp/dogreader3-build.txt; exit 1; }
       - name: Retain compiled bytes before device checks; no models
+        if: ${{ !inputs.retained_build }}
         uses: actions/upload-artifact@v4
         with:
           name: dogreader3-${{ inputs.build_number }}-build-output
@@ -89,14 +115,47 @@ jobs:
             apps/dogreader3/build/app/outputs/flutter-apk/app-release.apk
             apps/dogreader3/pubspec.lock
           retention-days: 14
+      - uses: actions/download-artifact@v4
+        if: inputs.retained_build
+        with:
+          github-token: ${{ github.token }}
+          run-id: 43422966671
+          artifact-ids: '14034779051'
+          path: apps/dogreader3
+          merge-multiple: true
+      - name: Inspect and re-sign retained bytes; verify every code/resource entry unchanged
+        if: inputs.retained_build
+        run: |
+          set -euo pipefail
+          TOOLS="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          APK=build/app/outputs/flutter-apk/app-release.apk
+          "$TOOLS/apksigner" verify --verbose --print-certs "$APK"
+          "$TOOLS/aapt" dump badging "$APK" > /tmp/dogreader3-original-identity.txt
+          head -12 /tmp/dogreader3-original-identity.txt
+          "$TOOLS/apksigner" sign --ks "$HOME/.android/debug.keystore" --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android --out /tmp/dogreader3-resigned.apk "$APK"
+          python3 - <<'PYTHON'
+          import hashlib,json,re,zipfile,shutil
+          from pathlib import Path
+          old=Path('build/app/outputs/flutter-apk/app-release.apk'); new=Path('/tmp/dogreader3-resigned.apk')
+          def entries(path):
+              with zipfile.ZipFile(path) as z:
+                  return {n:hashlib.sha256(z.read(n)).hexdigest() for n in z.namelist() if not re.match(r'^META-INF/(?:MANIFEST\.MF|[^/]+\.(?:SF|RSA|DSA|EC))$',n)}
+          assert entries(old)==entries(new),'Compiled entries changed'
+          proof={'compiledSource':'639e7c5815d4bbf8f400661d1436b9d9d5621690','artifactId':14034779051,
+                 'originalApkSha256':hashlib.sha256(old.read_bytes()).hexdigest(),'signedApkSha256':hashlib.sha256(new.read_bytes()).hexdigest(),
+                 'allCodeResourceAndNativeEntriesUnchanged':True,'recompiled':False}
+          Path('APK-SIGNING.json').write_text(json.dumps(proof,indent=2)+'\n')
+          print(json.dumps(proof,indent=2))
+          shutil.copyfile(new,old)
+          PYTHON
       - name: Verify distinct package, visible name, certificate and unchanged runtime bytes
         run: |
           set -euo pipefail
           APK=build/app/outputs/flutter-apk/app-release.apk
           TOOLS="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
-          "$TOOLS/apksigner" verify --verbose --print-certs "$APK" > /tmp/dogreader3-cert.txt
+          "$TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee /tmp/dogreader3-cert.txt
           grep -Fqi c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177 /tmp/dogreader3-cert.txt
-          "$TOOLS/aapt" dump badging "$APK" > /tmp/dogreader3-identity.txt
+          "$TOOLS/aapt" dump badging "$APK" | tee /tmp/dogreader3-identity.txt
           grep -Fq "package: name='com.dogreader.v3' versionCode='$BUILD_NUMBER' versionName='3.0.0'" /tmp/dogreader3-identity.txt
           grep -Fq "application-label:'Dogreader 3.0'" /tmp/dogreader3-identity.txt
           "$TOOLS/zipalign" -c -P 16 -v 4 "$APK" > /tmp/dogreader3-alignment.txt
@@ -104,13 +163,14 @@ jobs:
           mkdir -p dist
           cp "$APK" "dist/Dogreader-${BUILD_NUMBER}-3.0-Offline.apk"
           cp pubspec.lock dist/dependencies.lock
+          if [ -f APK-SIGNING.json ]; then cp APK-SIGNING.json dist/; fi
       - name: Enable KVM; release Gradle resources before focused device acceptance
         run: |
           printf '%s\n' 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm-dogreader3.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
           cd android
-          ./gradlew --stop
+          if [ "$RETAINED" != true ]; then ./gradlew --stop; fi
       - name: Co-install existing apps, import EPUB, generate locked-screen chapter and play it
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -142,6 +202,7 @@ jobs:
           curl -fsSL https://raw.githubusercontent.com/microsoft/onnxruntime/v1.28.2/LICENSE >> dist/LICENSES.txt
           curl -fsSL https://raw.githubusercontent.com/microsoft/onnxruntime/v1.28.2/ThirdPartyNotices.txt >> dist/LICENSES.txt
           printf 'Dogreader 3.0 experimental build %s\nSource: %s\nRun: %s/%s/actions/runs/%s\nPackage: com.dogreader.v3\nFP32 / Misaki / Sherpa-ONNX 2.0.1 / ORT 1.28.2\nTargeted checks passed on exact source before this single APK build. Emulator evidence is not Pixel measurement. No production change, merge or cloud deployment.\n' "$BUILD_NUMBER" "$SOURCE" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > dist/BUILD.txt
+          if [ "$RETAINED" = true ]; then printf "Retained original compilation run 43422966671; re-signed without changing code/resource/native entries. Verification recipe: %s\n" "$GITHUB_SHA" >> dist/BUILD.txt; fi
           cat /tmp/dogreader3-cert.txt >> dist/BUILD.txt
           head -1 /tmp/dogreader3-identity.txt >> dist/BUILD.txt
           (cd dist && sha256sum *.apk *.txt *.md *.json dependencies.lock > SHA256SUMS)
@@ -160,14 +221,16 @@ jobs:
             const fs=require('fs'), crypto=require('crypto');
             const {owner,repo}=context.repo, number=process.env.BUILD_NUMBER;
             const tag=`v${number}-dogreader3`, name=`Dogreader-${number}-3.0-Offline.apk`;
-            for (const request of [()=>github.rest.repos.getReleaseByTag({owner,repo,tag}), ()=>github.rest.git.getRef({owner,repo,ref:`tags/${tag}`})]) {
+            if(process.env.RETAINED!=='true') for (const request of [()=>github.rest.repos.getReleaseByTag({owner,repo,tag}), ()=>github.rest.git.getRef({owner,repo,ref:`tags/${tag}`})]) {
               try { await request(); } catch(e) { if(e.status===404) continue; throw e; }
               throw Error('Release/tag already exists; do not overwrite');
             }
             const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
             const directory='apps/dogreader3/dist/';
             const body=`Independent Dogreader 3.0 experiment. Installs as com.dogreader.v3 beside production Dogreader and Kokoro Offline Probe. No automatic data migration.\n\nOpen Assets and install ${name}. Import an EPUB, open Chapters and narration, Generate narration, then Kokoro Offline. Download offline files once (372 MB; allow 1.5 GB during setup). Select af_heart / two threads. Allow notifications, enable airplane mode with Wi-Fi off, generate one chapter, and lock the screen. Return when finished and tap Play completed chapter. Save the WAV and generation diagnostics.\n\nPreserves the existing EPUB reader, library, playback, Chirp HD and cloud Kokoro. Configure cloud credentials manually if wanted. FP32/Misaki generation runs in a separate foreground-service process with progress notification, active-only CPU wake lock and Cancel. Completed PCM checkpoints are verified on explicit retry; no automatic restart. Local audio and metadata cannot overwrite cloud MP3s.\n\nThe same APK passed the focused Android 15 emulator milestone; see MILESTONE.json. This is not a Pixel listening, speed, memory, battery, heat or endurance result. Android quotas and Doze restrictions still apply. See TESTING.md.\n\nSource: ${process.env.SOURCE}\nAPK SHA-256: ${hash(fs.readFileSync(directory+name))}\n\nOne APK compilation; no model binaries bundled. No production merge or cloud deployment.`;
-            const release=(await github.rest.repos.createRelease({owner,repo,tag_name:tag,target_commitish:process.env.SOURCE,name:`Dogreader ${number} — Dogreader 3.0 offline chapter experiment`,body,draft:true,prerelease:true,make_latest:'false'})).data;
+            const release=process.env.RETAINED==='true' ? (await github.rest.repos.getReleaseByTag({owner,repo,tag})).data : (await github.rest.repos.createRelease({owner,repo,tag_name:tag,target_commitish:process.env.SOURCE,name:`Dogreader ${number} — Dogreader 3.0 offline chapter experiment`,body,draft:true,prerelease:true,make_latest:'false'})).data;
+            if(!release.draft||!release.prerelease||release.tag_name!==tag||release.target_commitish!==process.env.SOURCE||release.assets.length) throw Error('Expected matching empty draft');
+            await github.rest.repos.updateRelease({owner,repo,release_id:release.id,body:body+(process.env.RETAINED==='true'?'\n\nSigning recovery reused the original compiled APK; all code/resource/native entries match. See APK-SIGNING.json. No recompilation.':'')});
             for (const filename of fs.readdirSync(directory)) {
               const data=fs.readFileSync(directory+filename);
               const asset=(await github.rest.repos.uploadReleaseAsset({owner,repo,release_id:release.id,name:filename,data,headers:{'content-type':filename.endsWith('.apk')?'application/vnd.android.package-archive':'text/plain','content-length':data.length}})).data;
