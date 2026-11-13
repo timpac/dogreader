@@ -44,6 +44,16 @@ jobs:
           flutter analyze --no-pub --no-fatal-infos lib test > /tmp/dogreader3-analysis.txt 2>&1 || { cat /tmp/dogreader3-analysis.txt; exit 1; }
           flutter test --no-pub test > /tmp/dogreader3-tests.txt 2>&1 || { tail -100 /tmp/dogreader3-tests.txt; exit 1; }
           python3 tool/check_android_sources.py
+      - name: Reproduce reader indentation failure and verify the real Misaki boundary fix
+        run: |
+          set -euo pipefail
+          mkdir -p research/test-data test-results
+          python3 tool/prepare_frontend.py --test-data
+          python3 -m venv "$RUNNER_TEMP/dogreader3-frontend"
+          "$RUNNER_TEMP/dogreader3-frontend/bin/pip" install --disable-pip-version-check sherpa-onnx==2.0.1 > /tmp/dogreader3-host-dependencies.txt
+          ORT_PATH="$("$RUNNER_TEMP/dogreader3-frontend/bin/python" -c 'from pathlib import Path; import sherpa_onnx; print(Path(sherpa_onnx.__file__).parent / "lib/libonnxruntime.so")')"
+          g++ -std=c++17 -O2 -fPIC -fvisibility=hidden -shared -Wall -Wextra -Werror -I native/ort_headers native/g2p_bridge.cc -ldl -o test-results/libkokoro_g2p-host.so
+          dart tool/check_reader_frontend.dart "$PWD/research/test-data" "$PWD/test-results/libkokoro_g2p-host.so" "$ORT_PATH" test-results/reader-frontend.json
       - name: Retain small check evidence and resolved lockfile; no APK or models
         if: always()
         uses: actions/upload-artifact@v4
@@ -51,6 +61,7 @@ jobs:
           name: dogreader3-targeted-checks
           path: |
             apps/dogreader3/pubspec.lock
+            apps/dogreader3/test-results/reader-frontend.json
             /tmp/dogreader3-analysis.txt
             /tmp/dogreader3-tests.txt
           retention-days: 14

@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:audiobook_app/offline_narration.dart';
 import 'package:audiobook_app/chapter_recording_path.dart';
 import 'package:audiobook_app/reader_content.dart';
+import 'package:audiobook_app/offline_reader_text.dart';
 import 'package:audiobook_app/kokoro/audio.dart';
 import 'package:audiobook_app/kokoro/chunk_store.dart';
 
@@ -14,6 +15,15 @@ void main() {
   tearDown(() async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(offlineChannel, null);
     await root.delete(recursive: true);
+  });
+
+  test('reader indentation becomes whitespace without dropping text or changing offsets', () {
+    const raw = 'Alice read.\n　The children don’t leave.\n\n　There are 12 books.';
+    final spoken = offlineReaderText(raw);
+    expect(spoken, 'Alice read.\n The children don’t leave.\n\n There are 12 books.');
+    expect(spoken.length, raw.length);
+    expect(spoken.indexOf('The'), raw.indexOf('The'));
+    expect(spoken.indexOf('12'), raw.indexOf('12'));
   });
 
   test('PCM checkpoints preserve exact bytes and reject corruption or different settings', () {
@@ -47,8 +57,11 @@ void main() {
       ..modelManifest = File('fp32-model-manifest.json').readAsStringSync()
       ..frontendManifest = File('english-frontend-manifest.json').readAsStringSync();
     await controller.generate(bookId: 'book', bookTitle: 'A novel', index: 2,
-      chapter: const ReaderChapter('Chapter 3', '“Hello,” Alice said. There were 12 birds.', []), sid: 3, threads: 2);
+      chapter: const ReaderChapter('Chapter 3', '“Hello,” Alice said.\n　There were 12 birds.', []), sid: 3, threads: 2);
     expect(request!['text'], contains('Alice'));
+    expect(request!['text'], contains('\n There were 12 birds.'));
+    expect(request!['text'], isNot(contains('\u3000')));
+    expect(request!['chapter']['readerWhitespaceNormalization'], 'u3000-to-ascii-v1');
     expect(request!['variant'], 'fp32');
     expect(request!['frontend'], 'misaki');
     expect(request!['chapter']['engine'], 'kokoro_offline');

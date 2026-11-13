@@ -10,6 +10,7 @@ import 'kokoro/worker.dart';
 import 'narration_dictionary.dart';
 import 'narration_storage.dart';
 import 'reader_content.dart';
+import 'offline_reader_text.dart';
 
 const offlineChannel = MethodChannel('dogreader3.kokoro');
 const offlineVoices = {3: 'af_heart', 16: 'am_michael', 21: 'bf_emma'};
@@ -132,6 +133,7 @@ class OfflineNarration extends ChangeNotifier with WidgetsBindingObserver {
     }
     final dictionary = narrationDictionary.effective(bookId);
     final spoken = dictionary.transform(chapter);
+    final engineText = offlineReaderText(spoken.text);
     if (spoken.text.trim().isEmpty) throw StateError('Chapter is silent under the current dictionary.');
     final model = jsonDecode(modelManifest) as Map;
     final id = DateTime.now().microsecondsSinceEpoch.toString();
@@ -143,7 +145,8 @@ class OfflineNarration extends ChangeNotifier with WidgetsBindingObserver {
       'frontend': 'misaki-fonnx-1.2.0-api28-v1',
       'settings': {'threads': threads, 'sid': sid, 'speed': 1.0, 'runtime': 'sherpa_onnx 2.0.1 CPU'},
       'sourceSha256': sha256.convert(utf8.encode(chapter.text)).toString(),
-      'spokenSha256': sha256.convert(utf8.encode(spoken.text)).toString(),
+      'readerWhitespaceNormalization': 'u3000-to-ascii-v1',
+      'spokenSha256': sha256.convert(utf8.encode(engineText)).toString(),
       'narration_dictionary': dictionary.toJson(), 'narration_offsets': spoken.offsets,
     };
     await offlineChannel.invokeMethod('startGeneration', {
@@ -151,7 +154,7 @@ class OfflineNarration extends ChangeNotifier with WidgetsBindingObserver {
       'variant': 'fp32', 'modelFile': 'model.onnx', 'modelSha': model['archiveSha256'],
       'modelFileSha': model['files']['model.onnx']['sha256'],
       'frontend': 'misaki', 'frontendManifest': frontendManifest,
-      'text': spoken.text, 'sid': sid, 'british': sid == 21, 'threads': threads,
+      'text': engineText, 'sid': sid, 'british': sid == 21, 'threads': threads,
       'repeats': 1, 'chapter': metadata,
     });
     await poll();
@@ -184,7 +187,7 @@ class OfflineNarration extends ChangeNotifier with WidgetsBindingObserver {
         'path': wav.path, 'positionMs': same ? previous['positionMs'] ?? 0 : 0,
         'offlineJobId': item['jobId'],
         for (final key in ['engine', 'voice', 'model_version', 'modelSha256', 'frontend', 'settings',
-          'sourceSha256', 'spokenSha256', 'narration_dictionary', 'narration_offsets']) key: item[key],
+          'sourceSha256', 'spokenSha256', 'readerWhitespaceNormalization', 'narration_dictionary', 'narration_offsets']) key: item[key],
       };
     });
   }
