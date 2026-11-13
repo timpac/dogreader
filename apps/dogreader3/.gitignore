@@ -1,0 +1,16 @@
+.dart_tool/
+.flutter-plugins*
+.packages
+build/
+android/.gradle/
+android/local.properties
+android/key.properties
+android/app/src/main/kotlin/com/example/audiobook_app/GenerationService.kt
+android/app/src/main/kotlin/com/example/audiobook_app/ProbeTelemetry.kt
+native/ort_headers/
+lib/kokoro/third_party/
+frontend-notices.txt
+frontend-vendor-receipts.json
+research/
+test-results/
+*.iml

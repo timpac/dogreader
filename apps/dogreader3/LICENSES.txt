@@ -1,0 +1,34 @@
+Dogreader Kokoro Offline Probe — isolated feasibility experiment
+
+Prototype source in this directory: Copyright 2026 Dogreader contributors.
+Licensed under Apache License 2.0, https://www.apache.org/licenses/LICENSE-2.0
+The build adds the full Apache license below. No Dogreader application source
+outside this experimental directory is relicensed by this notice.
+
+Sherpa-ONNX 2.0.1: Copyright Xiaomi Corporation and contributors. Apache-2.0.
+https://github.com/k2-fsa/sherpa-onnx/tree/v2.0.1
+https://pub.dev/packages/sherpa_onnx/versions/2.0.1
+This version removed eSpeak-NG and piper-phonemize. The APK does not contain them.
+
+ONNX Runtime: Copyright Microsoft Corporation. MIT.
+Sherpa's pinned Android source selects ONNX Runtime 1.28.2.
+https://github.com/microsoft/onnxruntime/tree/v1.28.2
+The release build appends the full MIT license and upstream ThirdPartyNotices.
+
+Flutter/Dart: Copyright The Flutter Authors / The Dart project authors. BSD-3-Clause.
+archive 4.0.9: Copyright Brendan Duncan and contributors. MIT.
+crypto 3.0.7: Copyright The Dart project authors. BSD-3-Clause.
+Other resolved Flutter/Dart dependency notices are available in the app's
+Flutter dependency notices screen. The resolved lockfile is attached to the release.
+
+Kokoro-82M v1.0 model and voice package: Apache-2.0 per hexgrad model card.
+https://huggingface.co/hexgrad/Kokoro-82M
+Model package conversion/quantization: k2-fsa/sherpa-onnx tts-models release.
+The optional FP32 comparison uses the matching kokoro-multi-lang-v1_0 package
+under the same Apache-2.0 grant. Both packages retain their own LICENSE/README.
+Model binaries are not distributed inside the APK. Model installation retains
+the package LICENSE and README, and excludes unused eSpeak-NG data, Chinese
+normalization rules, and dictionary directories. Upstream training-data credits:
+https://huggingface.co/hexgrad/Kokoro-82M#creative-commons-attribution
+Koniwa (CC BY 3.0) and SIWIS (CC BY 4.0); see upstream for original links.
+No separate per-voice license manifest is published by the official model.
