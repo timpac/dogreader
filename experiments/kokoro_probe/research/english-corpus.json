@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "status": "proposed_acceptance_corpus_not_executed",
+  "baseline": "Kokoro Offline Probe 146 / 7ea52004bbfa193ba0b5eaad6ba25788798bd876",
+  "license_note": "Literary excerpts are public domain; other examples were constructed for this investigation.",
+  "contract": {
+    "coverage": "Every lexical source span maps to spoken text/phonemes, or an explicit frozen dictionary suppression. Unresolved spans abort the job visibly.",
+    "normalization": "Persist original UTF-16 -> normalized spoken -> phoneme span mappings, including number expansions and punctuation transformations.",
+    "phoneme_inventory": "All output phonemes must map to the existing Kokoro token inventory; do not silently filter unknown symbols.",
+    "success": "Nonempty finite 24 kHz audio plus coverage checks. Generation success alone is not pronunciation correctness.",
+    "manual_review": "Listen for names, homographs, dates, abbreviations, dialogue phrasing, quality and chunk joins.",
+    "failure": "Do not promote partial/empty audio to a successful recording or overwrite an existing successful WAV."
+  },
+  "cases": [
+    {
+      "id": "austen-prose",
+      "category": "public_domain_prose",
+      "source": "Jane Austen, Pride and Prejudice (1813), chapter 1",
+      "source_url": "https://www.gutenberg.org/ebooks/1342",
+      "text": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife.",
+      "check": "Every lexical source span must have a spoken mapping; preserve the sentence boundary."
+    },
+    {
+      "id": "carroll-prose",
+      "category": "public_domain_prose",
+      "source": "Lewis Carroll, Alice's Adventures in Wonderland (1865), chapter 1; quotation typography adapted",
+      "source_url": "https://www.gutenberg.org/ebooks/11",
+      "text": "Alice was beginning to get very tired of sitting by her sister on the bank, and of having nothing to do: once or twice she had peeped into the book her sister was reading, but it had no pictures or conversations in it, “and what is the use of a book,” thought Alice “without pictures or conversations?”",
+      "check": "All narration and dialogue must be represented. Curly quote characters need not be spoken."
+    },
+    {
+      "id": "curly-contractions",
+      "category": "curly_quotes_contractions",
+      "text": "“I can’t believe it’s John’s,” she said. ‘Don’t leave—wait…’",
+      "check": "Retain the meanings of can't, it's, John's and don't; preserve dialogue and pause boundaries."
+    },
+    {
+      "id": "morphology",
+      "category": "inflections",
+      "text": "She arrived, opened the boxes, and carried the books. The children’s toys were scattered.",
+      "check": "Inflected and possessive words must all yield nonempty phoneme coverage."
+    },
+    {
+      "id": "names-oov",
+      "category": "names_unfamiliar_vocabulary",
+      "text": "Dr. Siobhán O’Connor met Quvenzhané near Worcestershire; Xylophonia was their destination.",
+      "check": "No name may be omitted. Approximate name pronunciations require listening review; expose neural/fallback use."
+    },
+    {
+      "id": "numbers-money",
+      "category": "numbers_currency",
+      "text": "She bought 3 books for $1,234.50, saved 12.5%, and walked 2.5 km.",
+      "check": "Each numeric expression must have a normalized spoken expansion with original-span mapping; never discard its digits."
+    },
+    {
+      "id": "date-time",
+      "category": "dates_times",
+      "text": "On November 13, 2026, at 9:05 a.m., Mr. Jones returned.",
+      "check": "Document date/year/time expansion; retain month, day, year, hour and minute. Do not mistake abbreviation periods for sentence endings."
+    },
+    {
+      "id": "ambiguous-date",
+      "category": "dates_locale_policy",
+      "text": "The appointment is on 03/04/2026.",
+      "check": "Require a declared locale policy or explicit ambiguity handling. US and UK expectations differ; no universal pronunciation is asserted.",
+      "locales": [
+        "en-US",
+        "en-GB"
+      ]
+    },
+    {
+      "id": "abbreviations",
+      "category": "abbreviations",
+      "text": "Mrs. Brown visited Dr. Smith at St. James’s; the U.S. team arrived at 5 p.m.",
+      "check": "Recognize titles and initialisms; manually review Saint/Street and time interpretation."
+    },
+    {
+      "id": "paragraph-dialogue",
+      "category": "paragraphs_dialogue",
+      "text": "“Will you return?” Anna asked.\n\n“Yes,” he replied. “Tomorrow.”",
+      "check": "Retain all spoken words and paragraph/dialogue boundaries. No model chunk may exceed 510 content tokens."
+    },
+    {
+      "id": "unicode-epub",
+      "category": "unicode_epub_formatting",
+      "input_kind": "extracted_epub_text",
+      "text": "The café was quiet—almost too quiet… A ﬁne façade glowed in the sun. They chose to co­operate.\n\nCafé windows shone.",
+      "check": "Handle NBSP, em dash, ellipsis, fi ligature, accents, combining accent and soft hyphen with explicit normalization mappings. Preserve fine and cooperate."
+    },
+    {
+      "id": "dictionary-substitution",
+      "category": "future_dictionary_substitution",
+      "text": "Worcestershire was written on the sign.",
+      "dictionary_snapshot": {
+        "substitutions": [
+          {
+            "original": "Worcestershire",
+            "replacement": "Wooster"
+          }
+        ]
+      },
+      "expected_transformed_text": "Wooster was written on the sign.",
+      "check": "Apply frozen text substitutions before G2P. Retain original-to-spoken UTF-16 mapping; do not treat the replacement as an IPA lexicon entry."
+    },
+    {
+      "id": "explicit-decoration-silence",
+      "category": "future_dictionary_suppression",
+      "text": "***\n\nThe signal was bright.",
+      "dictionary_snapshot": {
+        "silenced_utf16_ranges": [
+          {
+            "start": 0,
+            "end": 3
+          }
+        ]
+      },
+      "check": "Only the explicitly silenced ornament span may lose spoken coverage. All prose must remain represented."
+    },
+    {
+      "id": "inline-prose-preserved",
+      "category": "decorations_not_blanket_deletion",
+      "text": "The signal was *bright*, and the answer was 3 × 4.",
+      "check": "Do not use blanket symbol stripping: retain bright and the multiplication meaning. Unsupported expressions must produce a visible failure, never disappear."
+    },
+    {
+      "id": "punctuation-only",
+      "category": "no_speech_failure",
+      "text": "“…”",
+      "expected_outcome": "explicit_no_speech_error",
+      "check": "Do not create a successful empty WAV."
+    },
+    {
+      "id": "unsupported-input-failure",
+      "category": "unsupported_input_policy",
+      "text": "Anna read the sign: 你好.",
+      "expected_outcome": "explicit_unsupported_language_error_or_documented_spoken_mapping",
+      "check": "Unsupported non-English content must not be silently removed from an otherwise successful recording."
+    }
+  ]
+}
