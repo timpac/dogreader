@@ -4,6 +4,8 @@ Date: 13 November 2026. Baseline: build 146, PR #36, commit `7ea52004bbfa193ba0b
 
 ## Outcome
 
+**Follow-up:** the authorized bounded FONNX investigation is complete. See [FONNX compatibility evidence, exact licenses and estimated options](KOKORO_FONNX_COMPATIBILITY.md). Published FONNX 1.2.0 cannot directly share Sherpa's current ORT; an adapter/fork or runtime migration is required. No frontend implementation or APK followed this gate.
+
 **Research only; no frontend selected or runtime changed, no new APK/release.**
 The definition of success (paste ordinary novel prose and narrate it without rewriting) is not yet met. I stopped at the task's explicit instruction to report options before substantial native integration or licensing/compatibility work. This PR preserves findings and a proposed 16-case acceptance corpus; it does not present fixture/schema checks as successful frontend tests.
 
@@ -44,7 +46,7 @@ The four small Dart source archives were downloaded and checked against pub.dev 
 - phonemize 1.0.0: `793ceb10952d82919002f8599bd6e72781c983cec421c2155283325e7eba93ef`
 - FONNX 1.2.0: `41eca06a51d05078d7fa9bcfcdf7782d1ee17ed0fd018db381573d444bfec170`
 
-**Recommended next decision:** evaluate the FONNX Misaki components if retaining permissive licensing and closest reference-English behavior is the priority, with a bounded, explicit ORT coexistence/adapter investigation. Keep the working Sherpa FP32 model unchanged. If avoiding a second ORT binding is more important, a Phonemis frontend-only native adapter is the alternative, subject to the tagger decision. Choose eSpeak only with explicit acceptance of GPL distribution obligations for the standalone experiment. None of these routes has been integrated or tested in this probe.
+**Original recommendation (follow-up now completed):** evaluate the FONNX Misaki components if retaining permissive licensing and closest reference-English behavior is the priority, with a bounded, explicit ORT coexistence/adapter investigation. The [subsequent compatibility report](KOKORO_FONNX_COMPATIBILITY.md) records the blocker and estimated adapter/migration options. Keep the working Sherpa FP32 model unchanged. If avoiding a second ORT binding is more important, a Phonemis frontend-only native adapter is the alternative, subject to the tagger decision. Choose eSpeak only with explicit acceptance of GPL distribution obligations for the standalone experiment. None of these routes has been integrated or tested in this probe.
 
 Do not adopt an entire alternative TTS pipeline merely to obtain its phonemizer: that would confound the validated FP32 baseline and exceed this task's scope.
 
@@ -56,7 +58,7 @@ Each lexical source span needs spoken-text/phoneme coverage, or an explicit supp
 
 Text substitutions precede G2P and remain text, not an IPA dictionary. Suppression of decorative characters must be explicit and scoped, not a general punctuation deletion rule. Do not modify the reader's original text. Ambiguous dates need a declared locale policy. Unknown names can receive best-effort G2P, but successful generation is not evidence that their pronunciation is correct.
 
-**Testing status:** corpus structure/category/unique-ID checks ran in the connector orchestration. Corpus acceptance, pronunciation, native compatibility and device tests did not run. The execution environment disconnected during the investigation; the research was preserved through GitHub. Earlier build-146 tests are historical baseline evidence only. No source-level or Android acceptance pass is claimed for a new frontend.
+**Original testing status:** corpus structure/category/unique-ID checks ran in the connector orchestration. Corpus acceptance, pronunciation, native compatibility and device tests did not run in that first investigation. The execution environment disconnected then; the research was preserved through GitHub. The subsequent FONNX investigation ran native metadata/host API and asset checks, documented in its report, but still no frontend corpus acceptance or Android tests. Earlier build-146 tests are historical baseline evidence only. No source-level or Android acceptance pass is claimed for a new frontend.
 
 ## Performance findings and next experiments
 
@@ -73,4 +75,4 @@ A 2× target would require roughly **204.76 s** for the same 276.56 s audio (cal
 
 There is no replacement APK. Keep build 146 and its verified FP32 download. It still has the known dictionary/validation restriction; this PR does not make arbitrary prose work.
 
-Before implementing a new frontend, select the permissive-runtime-adapter, permissive-native, or GPL route above. The subsequent device test should run the corpus with mapping/phoneme diagnostics, listen to names/homographs/numbers/dialogue, verify airplane-mode operation, and only then compare 1/2/4-thread performance. Production integration remains blocked on that frontend decision, corpus acceptance and listening evidence, Android resource/runtime qualification, sustained memory/thermal/battery measurements, and source/normalization mapping compatibility. No PR is merged and no new numbered release is reserved.
+The user selected a bounded FONNX investigation; its [runtime gate and next options](KOKORO_FONNX_COMPATIBILITY.md) now supersede the initial route-selection question. Implementing an adapter/fork or migrating the runtime is beyond that bounded investigation. A subsequent device test should run the corpus with mapping/phoneme diagnostics, listen to names/homographs/numbers/dialogue, verify airplane-mode operation, and only then compare 1/2/4-thread performance. Production integration remains blocked on frontend implementation, corpus acceptance and listening evidence, Android resource/runtime qualification, sustained memory/thermal/battery measurements, and source/normalization mapping compatibility. No PR is merged and no new numbered release is reserved.

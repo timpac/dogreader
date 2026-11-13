@@ -1,0 +1,686 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-13",
+  "status": "stopped_at_runtime_integration_gate",
+  "baseline": "7ea52004bbfa193ba0b5eaad6ba25788798bd876",
+  "scope": "Research evidence only; no package resolution, frontend implementation, corpus acceptance or Android test.",
+  "fonnx": {
+    "version": "1.2.0",
+    "archive_url": "https://pub.dev/api/archives/fonnx-1.2.0.tar.gz",
+    "archive_sha256": "41eca06a51d05078d7fa9bcfcdf7782d1ee17ed0fd018db381573d444bfec170",
+    "root_license": "MIT",
+    "misaki_derived_code_license": "Apache-2.0",
+    "ort_api_required": 31,
+    "android_runtime": {
+      "runner": "ubuntu22 20261101.347.1",
+      "toolchain": "Android NDK 28.2.13676358, cmake version 3.31.6",
+      "minOSVersion": 24,
+      "files": [
+        {
+          "name": "libonnxruntime.so",
+          "sha256": "46e0c16cd515c62a1dd6c5994448b5413705478354bc20a756a5a82634c3ca03",
+          "url": "https://repo.maven.apache.org/maven2/com/microsoft/onnxruntime/onnxruntime-android/1.31.1/onnxruntime-android-1.31.1.aar",
+          "downloadSha256": "d4d50660300ed2c4f38ffdfd5ab5bfa3a22f995f282dda24f42ea3ea55467b49",
+          "archiveEntry": "jni/arm64-v8a/libonnxruntime.so",
+          "delivery": "bundle",
+          "asset": "onnx/ort_ffi_bindings.dart"
+        },
+        {
+          "name": "libfonnx_ort_session_finalizer.so",
+          "sha256": "8f9bceb4e0f42a0c96b9d6da16c5a69a908327f4ce9b6ad82d39081739e1ec1d",
+          "url": "https://github.com/Telosnex/fonnx/releases/download/native-0ac8338828e28726/android-arm64-libfonnx_ort_session_finalizer.so.gz",
+          "downloadSha256": "acb322a85202d8ded00f495a2312e20d38c9f426a52faa305f294129bedf7152",
+          "delivery": "bundle",
+          "asset": "onnx/ort_session_finalizer.dart"
+        }
+      ]
+    }
+  },
+  "sherpa_android": {
+    "package": "sherpa_onnx_android_arm64",
+    "version": "2.0.1",
+    "runtime_version_from_binary_strings": "1.28.2",
+    "libraries": {
+      "libonnxruntime.so": {
+        "sha256": "33847ad43bffe204699fd4a27f7f3603452a8cdaf2f9a44983a0bc31ffcf2da1",
+        "elf_dynamic_entries": [
+          "0x0000000000000001 (NEEDED)             Shared library: [libdl.so]",
+          "0x0000000000000001 (NEEDED)             Shared library: [liblog.so]",
+          "0x0000000000000001 (NEEDED)             Shared library: [libm.so]",
+          "0x0000000000000001 (NEEDED)             Shared library: [libc.so]",
+          "0x000000000000000e (SONAME)             Library soname: [libonnxruntime.so]"
+        ]
+      },
+      "libsherpa-onnx-c-api.so": {
+        "sha256": "8523d8044fb7336b945c8662821165f782103e4200a660b0ef097f6a41230e32",
+        "elf_dynamic_entries": [
+          "0x0000000000000001 (NEEDED)             Shared library: [libandroid.so]",
+          "0x0000000000000001 (NEEDED)             Shared library: [liblog.so]",
+          "0x0000000000000001 (NEEDED)             Shared library: [libonnxruntime.so]",
+          "0x0000000000000001 (NEEDED)             Shared library: [libm.so]",
+          "0x0000000000000001 (NEEDED)             Shared library: [libdl.so]",
+          "0x0000000000000001 (NEEDED)             Shared library: [libc.so]",
+          "0x000000000000000e (SONAME)             Library soname: [libsherpa-onnx-c-api.so]"
+        ]
+      }
+    }
+  },
+  "host_api_probe": {
+    "platform": "Linux x86_64, not Android",
+    "distribution": "sherpa-onnx Python wheel 2.0.1",
+    "library_sha256": "4b3607aebd1784b26b6f9b20e4bd974c7ab8287043e4d095cb7d2cb40b5e566e",
+    "runtime_version": "1.28.2",
+    "api_available": {
+      "27": true,
+      "28": true,
+      "31": false
+    },
+    "inference_executed": false
+  },
+  "frontend_assets": [
+    {
+      "path": "example/assets/models/kokoro/misaki/g2p_fallback_en_us.json",
+      "name": "kokoro_g2p_fallback_en_us.json",
+      "sha256": "f00d62722850b438f0712f285c44ae2a47b604e24ed508546cb9690e26f0ee5d",
+      "bytes": 305,
+      "commit": "4322a6e7ef82e0e483ad795466f60e370701cba0",
+      "source_manifest_key": "example/assets/models/kokoro/misaki/g2p_fallback_en_us.json",
+      "license": "Apache-2.0",
+      "download_url": "https://huggingface.co/telosnex/fonnx/resolve/4322a6e7ef82e0e483ad795466f60e370701cba0/kokoro_g2p_fallback_en_us.json",
+      "download_and_sha256_verified": true
+    },
+    {
+      "path": "example/assets/models/kokoro/misaki/g2p_fallback_en_us.onnx",
+      "name": "kokoro_g2p_fallback_en_us.onnx",
+      "sha256": "afaa95241151346059b5e56d8bf4eb4c883a5c7594833f7f81ed528454e016c3",
+      "bytes": 3101005,
+      "commit": "4322a6e7ef82e0e483ad795466f60e370701cba0",
+      "source_manifest_key": "example/assets/models/kokoro/misaki/g2p_fallback_en_us.onnx",
+      "license": "Apache-2.0",
+      "download_url": "https://huggingface.co/telosnex/fonnx/resolve/4322a6e7ef82e0e483ad795466f60e370701cba0/kokoro_g2p_fallback_en_us.onnx",
+      "download_and_sha256_verified": true
+    },
+    {
+      "path": "example/assets/models/kokoro/misaki/us_gold.json",
+      "name": "kokoro_misaki_us_gold.json",
+      "sha256": "dc414872a49a28ae6c141463d502fd945f3b2fde040484fdc47d00cc4612686f",
+      "bytes": 3000469,
+      "commit": "4322a6e7ef82e0e483ad795466f60e370701cba0",
+      "source_manifest_key": "example/assets/models/kokoro/misaki/us_gold.json",
+      "license": "Apache-2.0",
+      "download_url": "https://huggingface.co/telosnex/fonnx/resolve/4322a6e7ef82e0e483ad795466f60e370701cba0/kokoro_misaki_us_gold.json",
+      "download_and_sha256_verified": true
+    },
+    {
+      "path": "example/assets/models/kokoro/misaki/us_silver.json",
+      "name": "kokoro_misaki_us_silver.json",
+      "sha256": "de8f67be911bb6c659187b4a65fd966b6a30e56350e0f790d763210b053ac475",
+      "bytes": 3099517,
+      "commit": "4322a6e7ef82e0e483ad795466f60e370701cba0",
+      "source_manifest_key": "example/assets/models/kokoro/misaki/us_silver.json",
+      "license": "Apache-2.0",
+      "download_url": "https://huggingface.co/telosnex/fonnx/resolve/4322a6e7ef82e0e483ad795466f60e370701cba0/kokoro_misaki_us_silver.json",
+      "download_and_sha256_verified": true
+    },
+    {
+      "path": "example/assets/models/kokoro/spacy/en_core_web_sm.json",
+      "name": "kokoro_spacy_en_core_web_sm.json",
+      "sha256": "c49e8004f581804a021ab2e78bdde8a4af526f15aecfb2fe961ec22959bb3620",
+      "bytes": 231990,
+      "commit": "4322a6e7ef82e0e483ad795466f60e370701cba0",
+      "source_manifest_key": "example/assets/models/kokoro/spacy/en_core_web_sm.json",
+      "license": "MIT",
+      "download_url": "https://huggingface.co/telosnex/fonnx/resolve/4322a6e7ef82e0e483ad795466f60e370701cba0/kokoro_spacy_en_core_web_sm.json",
+      "download_and_sha256_verified": true
+    },
+    {
+      "path": "example/assets/models/kokoro/spacy/en_core_web_sm_tagger.bin",
+      "name": "kokoro_spacy_en_core_web_sm_tagger.bin",
+      "sha256": "0f884fe5841b110c7457a3dd46c78236ad91dc6d028d4ebc37bb9f4c93c22bf3",
+      "bytes": 6282056,
+      "commit": "4322a6e7ef82e0e483ad795466f60e370701cba0",
+      "source_manifest_key": "example/assets/models/kokoro/spacy/en_core_web_sm_tagger.bin",
+      "license": "MIT",
+      "download_url": "https://huggingface.co/telosnex/fonnx/resolve/4322a6e7ef82e0e483ad795466f60e370701cba0/kokoro_spacy_en_core_web_sm_tagger.bin",
+      "download_and_sha256_verified": true
+    }
+  ],
+  "frontend_assets_total_bytes": 15715342,
+  "fallback_graph_check": {
+    "onnx": "1.19.1",
+    "checker": "passed",
+    "ir_version": 8,
+    "opset": 17,
+    "nodes": 342,
+    "inputs": [
+      "input_ids",
+      "decoder_input_ids"
+    ],
+    "outputs": [
+      "logits"
+    ],
+    "inference_executed": false
+  },
+  "dependency_license_audit": {
+    "selection_note": "Explicit inspected versions satisfying FONNX 1.2.0 constraints, NOT a pub solver lock or installed dependencies. Includes the recursive main-dependency closure for these selections. Dev dependencies and unrelated FONNX models are excluded. Future resolved versions must be rechecked.",
+    "packages": [
+      {
+        "package": "archive",
+        "version": "4.0.9",
+        "archive_sha256": "a96e8b390886ee8abb49b7bd3ac8df6f451c621619f52a26e815fdcf568959ff",
+        "dependencies": {
+          "path": "^1.8.0",
+          "posix": "^6.0.2"
+        },
+        "repository": "https://github.com/brendan-duncan/archive",
+        "role": "direct",
+        "license": "MIT",
+        "archive_url": "https://pub.dev/api/archives/archive-4.0.9.tar.gz",
+        "license_files": {
+          "LICENSE": {
+            "sha256": "32f97d332eae7453ec4079858e6f1d74be85beeb6d3881068b47d02a379cccea"
+          }
+        }
+      },
+      {
+        "package": "args",
+        "version": "2.7.0",
+        "archive_sha256": "d0481093c50b1da8910eb0bb301626d4d8eb7284aa739614d2b394ee09e3ea04",
+        "dependencies": {},
+        "repository": "https://github.com/dart-lang/core/tree/main/pkgs/args",
+        "role": "direct",
+        "license": "BSD-3-Clause",
+        "archive_url": "https://pub.dev/api/archives/args-2.7.0.tar.gz",
+        "license_files": {
+          "LICENSE": {
+            "sha256": "dfb09c74e29386cd3e2719f32d4995d59526179753931d31840757c77fbf2791"
+          }
+        }
+      },
+      {
+        "package": "async",
+        "version": "2.13.1",
+        "archive_sha256": "e2eb0491ba5ddb6177742d2da23904574082139b07c1e33b8503b9f46f3e1a37",
+        "dependencies": {
+          "collection": "^1.15.0",
+          "meta": "^1.3.0"
+        },
+        "repository": "https://github.com/dart-lang/core/tree/main/pkgs/async",
+        "role": "transitive",
+        "license": "BSD-3-Clause",
+        "archive_url": "https://pub.dev/api/archives/async-2.13.1.tar.gz",
+        "license_files": {
+          "LICENSE": {
+            "sha256": "ff15faa32a2e638107b7789592b14426162a75ba620044ee2340a20ec6ce5e73"
+          }
+        }
+      },
+      {
+        "package": "boolean_selector",
+        "version": "2.1.2",
+        "archive_sha256": "8aab1771e1243a5063b8b0ff68042d67334e3feab9e95b9490f9a6ebf73b42ea",
+        "dependencies": {
+          "source_span": "^1.8.0",
+          "string_scanner": "^1.1.0"
+        },
+        "repository": "https://github.com/dart-lang/tools/tree/main/pkgs/boolean_selector",
+        "role": "transitive",
+        "license": "BSD-3-Clause",
+        "archive_url": "https://pub.dev/api/archives/boolean_selector-2.1.2.tar.gz",
+        "license_files": {
+          "LICENSE": {
+            "sha256": "b71519245009a3b8f126196a5408ec031e216e8e0d985085958c6543f82a8a2a"
+          }
+        }
+      },
+      {
+        "package": "code_assets",
+        "version": "2.2.0",
+        "archive_sha256": "1ef22a0be3af9370bd9481ac76db114db92bfe75d5ca2b2d7bc911764478a4d9",
+        "dependencies": {
+          "collection": "^1.19.1",
+          "hooks": "^2.2.0",
+          "logging": "^1.3.0"
+        },
+        "repository": "https://github.com/dart-lang/native/tree/main/pkgs/code_assets",
+        "role": "direct",
+        "license": "BSD-3-Clause",
+        "archive_url": "https://pub.dev/api/archives/code_assets-2.2.0.tar.gz",
+        "license_files": {
+          "LICENSE": {
+            "sha256": "21ae23b0b9ff67a2dc75ab085d1e8db8ac548c5faf370af17f28dd2ef3b52b7b"
+          }
+        }
+      },
+      {
+        "package": "collection",
+        "version": "1.19.1",
+        "archive_sha256": "2f5709ae4d3d59dd8f7cd309b4e023046b57d8a6c82130785d2b0e5868084e76",
+        "dependencies": {},
+        "repository": "https://github.com/dart-lang/core/tree/main/pkgs/collection",
+        "role": "transitive",
+        "license": "BSD-3-Clause",
+        "archive_url": "https://pub.dev/api/archives/collection-1.19.1.tar.gz",
+        "license_files": {
+          "LICENSE": {
+            "sha256": "ff15faa32a2e638107b7789592b14426162a75ba620044ee2340a20ec6ce5e73"
+          }
+        }
+      },
+      {
+        "package": "crypto",
+        "version": "3.0.7",
+        "archive_sha256": "c8ea0233063ba03258fbcf2ca4d6dadfefe14f02fab57702265467a19f27fadf",
+        "dependencies": {
+          "typed_data": "^1.3.0"
+        },
+        "repository": "https://github.com/dart-lang/core/tree/main/pkgs/crypto",
+        "role": "direct",
+        "license": "BSD-3-Clause",
+        "archive_url": "https://pub.dev/api/archives/crypto-3.0.7.tar.gz",
+        "license_files": {
+          "LICENSE": {
+            "sha256": "ad6a71997da90924b2cfb1fb47ec46537f70faf469efe016168794ae45ed6888"
+          }
+        }
+      },
+      {
+        "package": "ffi",
+        "version": "2.1.3",
+        "archive_sha256": "16ed7b077ef01ad6170a3d0c57caa4a112a38d7a2ed5602e0aca9ca6f3d98da6",
+        "dependencies": {},
+        "repository": "https://github.com/dart-lang/native/tree/main/pkgs/ffi",
+        "role": "direct",
+        "license": "BSD-3-Clause",
+        "archive_url": "https://pub.dev/api/archives/ffi-2.1.3.tar.gz",
+        "license_files": {
+          "LICENSE": {
+            "sha256": "0371d1da6a57fb791db29d29b95333429205f51f3cb2eb3a0c12d91838a38744"
+          }
+        }
+      },
+      {
+        "package": "hooks",
+        "version": "2.2.0",
+        "archive_sha256": "eaac480a35ec0814146c2c48d96aaa829e0e44a7662c88ae84c9edf4bc35651f",
+        "dependencies": {
+          "collection": "^1.19.1",
+          "crypto": "^3.0.6",
+          "logging": "^1.3.0",
+          "pub_semver": "^2.2.0",
+          "record_use": "^1.0.0",
+          "yaml": "^3.1.3"
+        },
+        "repository": "https://github.com/dart-lang/native/tree/main/pkgs/hooks",
+        "role": "direct",
+        "license": "BSD-3-Clause",
+        "archive_url": "https://pub.dev/api/archives/hooks-2.2.0.tar.gz",
+        "license_files": {
+          "LICENSE": {
+            "sha256": "21ae23b0b9ff67a2dc75ab085d1e8db8ac548c5faf370af17f28dd2ef3b52b7b"
+          }
+        }
+      },
+      {
+        "package": "kiln",
+        "version": "1.0.0",
+        "archive_sha256": "728cae716f33ec9bcdb2f5ebb451f0b62b8322925899e541a98f41525819477f",
+        "dependencies": {
+          "archive": "^4.0.9",
+          "args": "^2.7.0",
+          "code_assets": "^2.2.0",
+          "crypto": "^3.0.6",
+          "hooks": "^2.2.0",
+          "logging": "^1.2.0",
+          "path": "^1.9.0",
+          "yaml": "^3.1.3"
+        },
+        "repository": "https://github.com/Telosnex/kiln",
+        "role": "direct",
+        "license": "MIT",
+        "archive_url": "https://pub.dev/api/archives/kiln-1.0.0.tar.gz",
+        "license_files": {
+          "LICENSE": {
+            "sha256": "854f496251a5424444256775e57a394c8303a58feaabecbd26486d0f995aa88e"
+          }
+        }
+      },
+      {
+        "package": "logging",
+        "version": "1.3.0",
+        "archive_sha256": "c8245ada5f1717ed44271ed1c26b8ce85ca3228fd2ffdb75468ab01979309d61",
+        "dependencies": {},
+        "repository": "https://github.com/dart-lang/core/tree/main/pkgs/logging",
+        "role": "transitive",
+        "license": "BSD-3-Clause",
+        "archive_url": "https://pub.dev/api/archives/logging-1.3.0.tar.gz",
+        "license_files": {
+          "LICENSE": {
+            "sha256": "dfb09c74e29386cd3e2719f32d4995d59526179753931d31840757c77fbf2791"
+          }
+        }
+      },
+      {
+        "package": "matcher",
+        "version": "0.12.17",
+        "archive_sha256": "dc58c723c3c24bf8d3e2d3ad3f2f9d7bd9cf43ec6feaa64181775e60190153f2",
+        "dependencies": {
+          "async": "^2.10.0",
+          "meta": "^1.8.0",
+          "stack_trace": "^1.10.0",
+          "term_glyph": "^1.2.0",
+          "test_api": ">=0.5.0 <0.8.0"
+        },
+        "repository": "https://github.com/dart-lang/test/tree/master/pkgs/matcher",
+        "role": "transitive",
+        "license": "BSD-3-Clause",
+        "archive_url": "https://pub.dev/api/archives/matcher-0.12.17.tar.gz",
+        "license_files": {
+          "LICENSE": {
+            "sha256": "3c32b53167c7dae9190c38dab5dd9fe1789c53623ebc7d1babcb29914c5b3f16"
+          }
+        }
+      },
+      {
+        "package": "meta",
+        "version": "1.19.0",
+        "archive_sha256": "307249ce4ff29d58a18e97f6345f539382eb9c9c29ecda628900f31de0443dd9",
+        "dependencies": {},
+        "repository": "https://github.com/dart-lang/sdk/tree/main/pkg/meta",
+        "role": "transitive",
+        "license": "BSD-3-Clause",
+        "archive_url": "https://pub.dev/api/archives/meta-1.19.0.tar.gz",
+        "license_files": {
+          "LICENSE": {
+            "sha256": "b71519245009a3b8f126196a5408ec031e216e8e0d985085958c6543f82a8a2a"
+          }
+        }
+      },
+      {
+        "package": "ml_linalg",
+        "version": "13.12.6",
+        "archive_sha256": "abbbd506dc894f8b0394cf5c5d45aab45b7e2a89b86bba9c9b5b8a412b4bec5d",
+        "dependencies": {
+          "quiver": "^3.0.0"
+        },
+        "repository": "https://github.com/gyrdym/ml_linalg",
+        "role": "direct",
+        "license": "BSD-2-Clause",
+        "archive_url": "https://pub.dev/api/archives/ml_linalg-13.12.6.tar.gz",
+        "license_files": {
+          "LICENSE": {
+            "sha256": "297c7450c82a7e62270293e5d98c6688110e81f3dc3b9ed3efddfc23664d992e"
+          }
+        }
+      },
+      {
+        "package": "path",
+        "version": "1.9.1",
+        "archive_sha256": "75cca69d1490965be98c73ceaea117e8a04dd21217b37b292c9ddbec0d955bc5",
+        "dependencies": {},
+        "repository": "https://github.com/dart-lang/core/tree/main/pkgs/path",
+        "role": "direct",
+        "license": "BSD-3-Clause",
+        "archive_url": "https://pub.dev/api/archives/path-1.9.1.tar.gz",
+        "license_files": {
+          "LICENSE": {
+            "sha256": "3c32b53167c7dae9190c38dab5dd9fe1789c53623ebc7d1babcb29914c5b3f16"
+          }
+        }
+      },
+      {
+        "package": "posix",
+        "version": "6.0.2",
+        "archive_sha256": "f0d7856b6ca1887cfa6d1d394056a296ae33489db914e365e2044fdada449e62",
+        "dependencies": {
+          "ffi": "^2.0.1",
+          "meta": "^1.7.0",
+          "path": "^1.8.3"
+        },
+        "repository": "https://github.com/onepub-dev/dart_posix",
+        "role": "transitive",
+        "license": "MIT",
+        "archive_url": "https://pub.dev/api/archives/posix-6.0.2.tar.gz",
+        "license_files": {
+          "LICENSE": {
+            "sha256": "aaf6271abd048deb3125828613f1797b7556472de6c7acd7103bd43e9cb6a84b"
+          }
+        }
+      },
+      {
+        "package": "pub_semver",
+        "version": "2.2.0",
+        "archive_sha256": "5bfcf68ca79ef689f8990d1160781b4bad40a3bd5e5218ad4076ddb7f4081585",
+        "dependencies": {
+          "collection": "^1.15.0"
+        },
+        "repository": "https://github.com/dart-lang/tools/tree/main/pkgs/pub_semver",
+        "role": "transitive",
+        "license": "BSD-3-Clause",
+        "archive_url": "https://pub.dev/api/archives/pub_semver-2.2.0.tar.gz",
+        "license_files": {
+          "LICENSE": {
+            "sha256": "3c32b53167c7dae9190c38dab5dd9fe1789c53623ebc7d1babcb29914c5b3f16"
+          }
+        }
+      },
+      {
+        "package": "quiver",
+        "version": "3.2.2",
+        "archive_sha256": "ea0b925899e64ecdfbf9c7becb60d5b50e706ade44a85b2363be2a22d88117d2",
+        "dependencies": {
+          "matcher": "^0.12.10"
+        },
+        "repository": "https://github.com/google/quiver-dart",
+        "role": "transitive",
+        "license": "Apache-2.0",
+        "archive_url": "https://pub.dev/api/archives/quiver-3.2.2.tar.gz",
+        "license_files": {
+          "LICENSE": {
+            "sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd"
+          }
+        }
+      },
+      {
+        "package": "record_use",
+        "version": "1.0.0",
+        "archive_sha256": "af37186ff9ede46fa32f152526c48f46c5b3ad7d3d5a566140cb5df3dc4ed737",
+        "dependencies": {
+          "collection": "^1.19.1",
+          "meta": "^1.19.0",
+          "pub_semver": "^2.2.0"
+        },
+        "repository": "https://github.com/dart-lang/native/tree/main/pkgs/record_use",
+        "role": "transitive",
+        "license": "BSD-3-Clause",
+        "archive_url": "https://pub.dev/api/archives/record_use-1.0.0.tar.gz",
+        "license_files": {
+          "LICENSE": {
+            "sha256": "1cda25a8de6880c5338de0b4a06ee89e8537c213eb1379c16a4c035bfd198b5c"
+          }
+        }
+      },
+      {
+        "package": "source_span",
+        "version": "1.10.1",
+        "archive_sha256": "254ee5351d6cb365c859e20ee823c3bb479bf4a293c22d17a9f1bf144ce86f7c",
+        "dependencies": {
+          "collection": "^1.15.0",
+          "path": "^1.8.0",
+          "term_glyph": "^1.2.0"
+        },
+        "repository": "https://github.com/dart-lang/tools/tree/main/pkgs/source_span",
+        "role": "transitive",
+        "license": "BSD-3-Clause",
+        "archive_url": "https://pub.dev/api/archives/source_span-1.10.1.tar.gz",
+        "license_files": {
+          "LICENSE": {
+            "sha256": "3c32b53167c7dae9190c38dab5dd9fe1789c53623ebc7d1babcb29914c5b3f16"
+          }
+        }
+      },
+      {
+        "package": "stack_trace",
+        "version": "1.12.1",
+        "archive_sha256": "8b27215b45d22309b5cddda1aa2b19bdfec9df0e765f2de506401c071d38d1b1",
+        "dependencies": {
+          "path": "^1.8.0"
+        },
+        "repository": "https://github.com/dart-lang/tools/tree/main/pkgs/stack_trace",
+        "role": "transitive",
+        "license": "BSD-3-Clause",
+        "archive_url": "https://pub.dev/api/archives/stack_trace-1.12.1.tar.gz",
+        "license_files": {
+          "LICENSE": {
+            "sha256": "ff0b91d4f3c32b25cb6ec84985e8da89b0ba2a2b2f7eef353cda5e5423a20390"
+          }
+        }
+      },
+      {
+        "package": "stream_channel",
+        "version": "2.1.4",
+        "archive_sha256": "969e04c80b8bcdf826f8f16579c7b14d780458bd97f56d107d3950fdbeef059d",
+        "dependencies": {
+          "async": "^2.5.0"
+        },
+        "repository": "https://github.com/dart-lang/tools/tree/main/pkgs/stream_channel",
+        "role": "transitive",
+        "license": "BSD-3-Clause",
+        "archive_url": "https://pub.dev/api/archives/stream_channel-2.1.4.tar.gz",
+        "license_files": {
+          "LICENSE": {
+            "sha256": "ff15faa32a2e638107b7789592b14426162a75ba620044ee2340a20ec6ce5e73"
+          }
+        }
+      },
+      {
+        "package": "string_scanner",
+        "version": "1.4.1",
+        "archive_sha256": "921cd31725b72fe181906c6a94d987c78e3b98c2e205b397ea399d4054872b43",
+        "dependencies": {
+          "source_span": "^1.8.0"
+        },
+        "repository": "https://github.com/dart-lang/tools/tree/main/pkgs/string_scanner",
+        "role": "transitive",
+        "license": "BSD-3-Clause",
+        "archive_url": "https://pub.dev/api/archives/string_scanner-1.4.1.tar.gz",
+        "license_files": {
+          "LICENSE": {
+            "sha256": "3c32b53167c7dae9190c38dab5dd9fe1789c53623ebc7d1babcb29914c5b3f16"
+          }
+        }
+      },
+      {
+        "package": "term_glyph",
+        "version": "1.2.2",
+        "archive_sha256": "7f554798625ea768a7518313e58f83891c7f5024f88e46e7182a4558850a4b8e",
+        "dependencies": {},
+        "repository": "https://github.com/dart-lang/tools/tree/main/pkgs/term_glyph",
+        "role": "transitive",
+        "license": "BSD-3-Clause",
+        "archive_url": "https://pub.dev/api/archives/term_glyph-1.2.2.tar.gz",
+        "license_files": {
+          "LICENSE": {
+            "sha256": "ea97a7558a7bd7cee4e2355f7529e3cbebb0dcbb546ddb9a90f10c9eb6b08da5"
+          }
+        }
+      },
+      {
+        "package": "test_api",
+        "version": "0.7.7",
+        "archive_sha256": "ab2726c1a94d3176a45960b6234466ec367179b87dd74f1611adb1f3b5fb9d55",
+        "dependencies": {
+          "async": "^2.5.0",
+          "boolean_selector": "^2.1.0",
+          "collection": "^1.15.0",
+          "meta": "^1.14.0",
+          "source_span": "^1.8.0",
+          "stack_trace": "^1.10.0",
+          "stream_channel": "^2.1.0",
+          "string_scanner": "^1.1.0",
+          "term_glyph": "^1.2.0"
+        },
+        "repository": "https://github.com/dart-lang/test/tree/master/pkgs/test_api",
+        "role": "transitive",
+        "license": "BSD-3-Clause",
+        "archive_url": "https://pub.dev/api/archives/test_api-0.7.7.tar.gz",
+        "license_files": {
+          "LICENSE": {
+            "sha256": "ff1b9f0df9036c04be424b1e3ce12789bea880ad5ffc3a48e069ae2d40a087a4"
+          }
+        }
+      },
+      {
+        "package": "typed_data",
+        "version": "1.4.0",
+        "archive_sha256": "f9049c039ebfeb4cf7a7104a675823cd72dba8297f264b6637062516699fa006",
+        "dependencies": {
+          "collection": "^1.15.0"
+        },
+        "repository": "https://github.com/dart-lang/core/tree/main/pkgs/typed_data",
+        "role": "transitive",
+        "license": "BSD-3-Clause",
+        "archive_url": "https://pub.dev/api/archives/typed_data-1.4.0.tar.gz",
+        "license_files": {
+          "LICENSE": {
+            "sha256": "ff15faa32a2e638107b7789592b14426162a75ba620044ee2340a20ec6ce5e73"
+          }
+        }
+      },
+      {
+        "package": "yaml",
+        "version": "3.1.3",
+        "archive_sha256": "b9da305ac7c39faa3f030eccd175340f968459dae4af175130b3fc47e40d76ce",
+        "dependencies": {
+          "collection": "^1.15.0",
+          "source_span": "^1.8.0",
+          "string_scanner": "^1.2.0"
+        },
+        "repository": "https://github.com/dart-lang/tools/tree/main/pkgs/yaml",
+        "role": "transitive",
+        "license": "MIT",
+        "archive_url": "https://pub.dev/api/archives/yaml-3.1.3.tar.gz",
+        "license_files": {
+          "LICENSE": {
+            "sha256": "d47b93335401b052d79a2f5a3710e4cf7b5aed782faedf84d40fbdd6eb934ec7"
+          }
+        }
+      }
+    ]
+  },
+  "corpus": {
+    "cases": 16,
+    "status": "not_executed_runtime_gate",
+    "structure_check": "16 unique IDs and all required category fields present"
+  },
+  "older_package_inspection": [
+    {
+      "version": "0.1.0",
+      "archive_sha256": "b36c3460907c70a3d9ecd3a4cf407f0f6468c71d70a8625979991632e9d2753a",
+      "ort_api_required": 27,
+      "misaki_sources": 7,
+      "build_hook_present": true
+    },
+    {
+      "version": "0.2.2",
+      "archive_sha256": "789c45959ea9888e45ec93089ad61889ae55b5fc314212493cd24a998d9461c2",
+      "ort_api_required": 31,
+      "misaki_sources": 7,
+      "build_hook_present": true
+    },
+    {
+      "version": "1.0.0",
+      "archive_sha256": "32bba51ac9d6dc557fdf5a4abeb3c16859ddd813564d606d037a3af6f3b28e0b",
+      "ort_api_required": 31,
+      "misaki_sources": 7,
+      "build_hook_present": true
+    },
+    {
+      "version": "1.1.0",
+      "archive_sha256": "d9846e17897fe2caf6999646317fc39e1725010b6842556364efcf4358167607",
+      "ort_api_required": 31,
+      "misaki_sources": 7,
+      "build_hook_present": true
+    }
+  ]
+}
