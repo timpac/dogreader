@@ -145,7 +145,10 @@ def fixture_models(temp):
         (destination/name).write_bytes(data)
     (destination/'READY').write_text(front['id'])
     adb('push', str(destination), PRIVATE + '/')
-    uid = re.search(r'userId=(\d+)', shell('dumpsys', 'package', PACKAGE))[1]
+    # Android 15 package dumps may report appId instead of the older userId.
+    # The initialized app data directory is already owned by the app UID.
+    uid = shell('stat', '-c', '%u', f'/data/user/0/{PACKAGE}')
+    assert uid.isdigit() and int(uid) >= 10000, ('Unexpected app data owner', uid)
     shell('chown', '-R', uid+':'+uid, PRIVATE)
     shell('restorecon', '-R', PRIVATE)
 
@@ -165,10 +168,10 @@ def main():
     shell('am', 'start', '-n', ACTIVITY); time.sleep(3)
     shell('am', 'force-stop', PACKAGE)  # No job has started; creates the app-private directory.
     models = args.output/'fixtures'; models.mkdir()
-    fixture_models(models)
-    shell('svc', 'wifi', 'disable'); shell('svc', 'data', 'disable')
     results = []
     try:
+        fixture_models(models)
+        shell('svc', 'wifi', 'disable'); shell('svc', 'data', 'disable')
         short = start_job(short=True)
         ended = wait_for(lambda: (s if (s := state()) and not s.get('active') else None), 180)
         assert ended['outcome'] == 'completed' and ended['wakeLockHeld'] is False, ended

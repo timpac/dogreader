@@ -23,6 +23,9 @@ on:
       background_generation:
         type: boolean
         default: false
+      retained_background_build:
+        type: boolean
+        default: false
     secrets:
       DOGREADER_KEYSTORE_B64:
         required: true
@@ -44,6 +47,7 @@ jobs:
       QUALITY_COMPARISON: ${{ inputs.quality_comparison }}
       ENGLISH_FRONTEND: ${{ inputs.english_frontend }}
       BACKGROUND_GENERATION: ${{ inputs.background_generation }}
+      RETAINED_BACKGROUND: ${{ inputs.retained_background_build }}
     defaults:
       run:
         shell: bash
@@ -55,7 +59,19 @@ jobs:
             const expectedBranch = process.env.BACKGROUND_GENERATION === 'true' ? 'feature/kokoro-background-generation' : process.env.ENGLISH_FRONTEND === 'true' ? 'feature/kokoro-misaki-adapter' : process.env.QUALITY_COMPARISON === 'true' ? 'feature/kokoro-quality-comparison' : 'feature/local-kokoro-feasibility';
             if (context.ref !== 'refs/heads/' + expectedBranch) throw Error('Wrong branch');
             if (process.env.GITHUB_RUN_ATTEMPT !== '1') throw Error('Inspect retained assets before another explicit dispatch');
-            if (!/^[a-f0-9]{40}$/.test(process.env.SOURCE) || context.sha !== process.env.SOURCE) throw Error('Reviewed source must equal this feature tip');
+            if (!/^[a-f0-9]{40}$/.test(process.env.SOURCE)) throw Error('Full source SHA required');
+            if (process.env.RETAINED_BACKGROUND === 'true') {
+              if (process.env.BACKGROUND_GENERATION !== 'true' || process.env.SOURCE !== '57042ff146f8363b6bcc555e2b713e1a4228ec8b' || process.env.BUILD_NUMBER !== '148') throw Error('Wrong retained build');
+              const run = (await github.rest.actions.getWorkflowRun({...context.repo, run_id: 43408345801})).data;
+              if (run.head_sha !== process.env.SOURCE || run.head_branch !== expectedBranch) throw Error('Wrong original build provenance');
+              const artifact = (await github.rest.actions.getArtifact({...context.repo, artifact_id: 14028671883})).data;
+              if (artifact.expired || artifact.name !== 'kokoro-probe-148-build-output' || artifact.workflow_run.head_sha !== process.env.SOURCE || artifact.digest !== 'sha256:91cf5ae68e31956889c26e06bd9d4203fdb81142da7a802869e493acdf9cd747') throw Error('Retained artifact mismatch');
+              const jobs = (await github.rest.actions.listJobsForWorkflowRun({...context.repo, run_id: run.id})).data.jobs;
+              const steps = jobs.find(j => j.name === 'kokoro-background / probe')?.steps || [];
+              for (const name of ['Targeted analysis and frontend safeguards', 'Build one ARM64 AOT prototype APK without any model binaries', 'Verify identity, signature and 16 KB native alignment']) {
+                if (!steps.some(s => s.name === name && s.conclusion === 'success')) throw Error('Original checks/build/verification missing');
+              }
+            } else if (context.sha !== process.env.SOURCE) throw Error('Reviewed source must equal this feature tip');
             if (process.env.ENGLISH_FRONTEND === 'true') {
               const checks = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
                 ...context.repo, head_sha: process.env.SOURCE, status: 'success', per_page: 100});
@@ -74,13 +90,20 @@ jobs:
             if (process.env.BUILD_NUMBER !== String(highest + 1)) throw Error(`Next unused build is ${highest + 1}`);
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.release_commit }}
+          ref: ${{ inputs.retained_background_build && github.sha || inputs.release_commit }}
           fetch-depth: 0
           persist-credentials: false
       - name: Check provenance and isolation
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$SOURCE"
+          if [ "$RETAINED_BACKGROUND" = true ]; then
+            # Recovery may change only verification/recipe/docs, never compiled app code.
+            git diff --name-only "$SOURCE" HEAD | python3 -c 'import sys,re; names=sys.stdin.read().splitlines(); assert all(re.match(r"^(?:\.github/workflows/|docs/|experiments/kokoro_probe/tool/test_background_device\.py$)", n) for n in names), names'
+            printf 'Targeted analysis passed in original compile run 43408345801; reused without recompilation.\n' > /tmp/analysis.log
+            printf 'Nine probe safeguards passed before compilation; frontend/native checks passed on original source.\n' > /tmp/tests.log
+          else
+            test "$(git rev-parse HEAD)" = "$SOURCE"
+          fi
           git merge-base --is-ancestor 30e92ca871bad697b19637488b085a8ecd03f1a3 HEAD
           git diff --exit-code 30e92ca871bad697b19637488b085a8ecd03f1a3 HEAD -- lib android pubspec.yaml pubspec.lock third_party test
           if [ "$BACKGROUND_GENERATION" = true ]; then test -e /dev/kvm; fi
@@ -89,11 +112,13 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: subosito/flutter-action@v2
+        if: ${{ !inputs.retained_background_build }}
         with:
           flutter-version: '3.47.7'
           channel: stable
           cache: true
       - name: Prepare standalone Android template and original signing key
+        if: ${{ !inputs.retained_background_build }}
         env:
           DOGREADER_KEYSTORE_B64: ${{ secrets.DOGREADER_KEYSTORE_B64 }}
         run: |
@@ -113,17 +138,20 @@ jobs:
           python3 tool/configure_android.py
           flutter pub get --enforce-lockfile > /tmp/dependencies.log 2>&1 || { tail -60 /tmp/dependencies.log; exit 1; }
       - name: Targeted analysis and frontend safeguards
+        if: ${{ !inputs.retained_background_build }}
         working-directory: experiments/kokoro_probe
         run: |
           flutter analyze --no-pub lib test > /tmp/analysis.log 2>&1 || { cat /tmp/analysis.log; exit 1; }
           flutter test --no-pub test > /tmp/tests.log 2>&1 || { cat /tmp/tests.log; exit 1; }
       - name: Build one ARM64 AOT prototype APK without any model binaries
+        if: ${{ !inputs.retained_background_build }}
         working-directory: experiments/kokoro_probe
         run: |
           PROBE_TARGETS=android-arm64
           if [ "$BACKGROUND_GENERATION" = true ]; then PROBE_TARGETS=android-arm64,android-x64; fi
           flutter build apk --release --no-pub --target-platform "$PROBE_TARGETS" --build-number "$BUILD_NUMBER" --dart-define="DOGREADER_BUILD=$BUILD_NUMBER" > /tmp/build.log 2>&1 || { tail -100 /tmp/build.log; exit 1; }
       - name: Retain compiled bytes before verification to allow recovery without rebuilding
+        if: ${{ !inputs.retained_background_build }}
         uses: actions/upload-artifact@v4
         with:
           name: kokoro-probe-${{ inputs.build_number }}-build-output
@@ -131,6 +159,14 @@ jobs:
             experiments/kokoro_probe/build/app/outputs/flutter-apk/app-release.apk
             experiments/kokoro_probe/pubspec.lock
           retention-days: 14
+      - uses: actions/download-artifact@v4
+        if: inputs.retained_background_build
+        with:
+          github-token: ${{ github.token }}
+          run-id: 43408345801
+          artifact-ids: '14028671883'
+          path: experiments/kokoro_probe
+          merge-multiple: true
       - name: Verify identity, signature and 16 KB native alignment
         run: |
           set -euo pipefail
@@ -167,8 +203,10 @@ jobs:
           printf '%s\n' 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm-kokoro.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-          cd experiments/kokoro_probe/android
-          ./gradlew --stop
+          if [ "$RETAINED_BACKGROUND" != true ]; then
+            cd experiments/kokoro_probe/android
+            ./gradlew --stop
+          fi
       - name: Test real FP32 generation while switching apps and locking the screen separately
         if: inputs.background_generation
         uses: reactivecircus/android-emulator-runner@v2
@@ -201,6 +239,9 @@ jobs:
           PROBE_EVIDENCE='ARM64 release/AOT. No Android inference or Pixel measurements performed in CI.'
           if [ "$BACKGROUND_GENERATION" = true ]; then PROBE_EVIDENCE='ARM64+x86_64 release/AOT. Same-APK Android emulator checks ran real FP32 inference. Pixel measurements remain unperformed.'; fi
           printf 'Experimental Dogreader Kokoro probe %s\nSource: %s\nRun: %s/%s/actions/runs/%s\nPackage: com.dogreader.kokoro_probe\n%s\n' "$BUILD_NUMBER" "$SOURCE" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$PROBE_EVIDENCE" > dist/BUILD.txt
+          if [ "$RETAINED_BACKGROUND" = true ]; then
+            printf 'Retained APK from run 43408345801 / artifact 14028671883; no new compilation. Verification recipe: %s\n' "$GITHUB_SHA" >> dist/BUILD.txt
+          fi
           cat /tmp/analysis.log /tmp/tests.log /tmp/apk-cert.txt >> dist/BUILD.txt
           head -1 /tmp/apk-identity.txt >> dist/BUILD.txt
           (cd dist && sha256sum *.apk prototype-pubspec.lock FEASIBILITY.md LICENSES.txt BUILD.txt > SHA256SUMS)
