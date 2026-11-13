@@ -27,7 +27,7 @@ permissions:
   contents: read
 jobs:
   evidence:
-    if: github.ref == 'refs/heads/feature/dogreader-3-offline' && github.actor == github.repository_owner && inputs.inspect_evidence
+    if: (github.ref == 'refs/heads/feature/dogreader-3-offline' || github.ref == 'refs/heads/gemini/dogreader3-stabilization') && github.actor == github.repository_owner && inputs.inspect_evidence
     runs-on: ubuntu-latest
     timeout-minutes: 3
     permissions:
@@ -76,7 +76,7 @@ jobs:
           print('RETAINED_IMPORT_LOG_END')
           PYTHON
   independent:
-    if: github.ref == 'refs/heads/feature/dogreader-3-offline' && github.actor == github.repository_owner && !inputs.inspect_evidence && !inputs.publication_only
+    if: (github.ref == 'refs/heads/feature/dogreader-3-offline' || github.ref == 'refs/heads/gemini/dogreader3-stabilization') && github.actor == github.repository_owner && !inputs.inspect_evidence && !inputs.publication_only
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -273,13 +273,21 @@ jobs:
             if(!final.assets.some(a=>a.name===name&&a.size>0&&a.state==='uploaded')) throw Error('APK absent');
             if(process.env.PUBLISH==='true'&&(final.draft||final.tag_name!==tag)) throw Error('Not published under requested tag');
             if(!final.draft) {
-              const ref=(await github.rest.git.getRef({owner,repo,ref:`tags/${tag}`})).data;
-              if(ref.object.sha!==process.env.SOURCE) throw Error('Release/source mismatch');
+              let ref;
+              for (let i = 0; i < 10; i++) {
+                try {
+                  ref = (await github.rest.git.getRef({owner,repo,ref:`tags/${tag}`})).data;
+                  if (ref) break;
+                } catch (e) {
+                  await new Promise(r => setTimeout(r, 2000));
+                }
+              }
+              if(!ref || ref.object.sha!==process.env.SOURCE) throw Error('Release/source mismatch');
             }
             await core.summary.addLink('Verified Dogreader 3.0 release',final.html_url).write();
 
   publication:
-    if: github.ref == 'refs/heads/feature/dogreader-3-offline' && github.actor == github.repository_owner && inputs.publication_only && !inputs.inspect_evidence
+    if: (github.ref == 'refs/heads/feature/dogreader-3-offline' || github.ref == 'refs/heads/gemini/dogreader3-stabilization') && github.actor == github.repository_owner && inputs.publication_only && !inputs.inspect_evidence
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -364,7 +372,15 @@ jobs:
             if(!final.assets.some(a=>a.name===name&&a.size>0&&a.state==='uploaded')) throw Error('APK absent');
             if(process.env.PUBLISH==='true'&&(final.draft||final.tag_name!==tag)) throw Error('Not published under requested tag');
             if(!final.draft) {
-              const ref=(await github.rest.git.getRef({owner,repo,ref:`tags/${tag}`})).data;
-              if(ref.object.sha!==process.env.SOURCE) throw Error('Release/source mismatch');
+              let ref;
+              for (let i = 0; i < 10; i++) {
+                try {
+                  ref = (await github.rest.git.getRef({owner,repo,ref:`tags/${tag}`})).data;
+                  if (ref) break;
+                } catch (e) {
+                  await new Promise(r => setTimeout(r, 2000));
+                }
+              }
+              if(!ref || ref.object.sha!==process.env.SOURCE) throw Error('Release/source mismatch');
             }
             await core.summary.addLink('Verified Dogreader 3.0 release',final.html_url).write();

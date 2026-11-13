@@ -67,16 +67,14 @@ class NativeG2p {
 
   MisakiPs phonemize(String word) {
     if (_engine == nullptr) throw StateError('English fallback is closed');
-    // Sanitize input word: keep allowed characters, truncate if too long
-    var clean = word.runes.where(allowed.contains).map(String.fromCharCode).join();
-    if (clean.length > 62) clean = clean.substring(0, 62);
-    if (clean.isEmpty) {
-      final spelled = _spellOut(word);
-      return spelled.isNotEmpty ? (spelled, 1) : (null, null);
+    if (word.runes.any((r) => !allowed.contains(r))) {
+      throw FormatException('Unsupported fallback character in "$word". No audio generated.');
     }
+    var clean = word;
+    if (clean.length > 62) clean = clean.substring(0, 62);
     final source = vocab.source(clean);
     if (source == null) {
-      final spelled = _spellOut(word);
+      final spelled = _spellOut(clean);
       return spelled.isNotEmpty ? (spelled, 1) : (null, null);
     }
     final cached = _cache[clean];
