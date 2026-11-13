@@ -2,7 +2,7 @@ name: Dogreader 3.0 targeted checks (no APK)
 on:
   push:
     branches: [feature/dogreader-3-offline]
-    paths: ['apps/dogreader3/**', '.github/workflows/dogreader3-checks.yml']
+    paths: ['apps/dogreader3/**', '!apps/dogreader3/tool/test_milestone_device.py', '.github/workflows/dogreader3-checks.yml']
 permissions:
   contents: read
 jobs:

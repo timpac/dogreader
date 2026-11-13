@@ -25,8 +25,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def adb(*args, check=True):
-    return subprocess.run(['adb', *args], check=check, text=True, stdout=subprocess.PIPE,
-                          stderr=subprocess.PIPE, timeout=120).stdout.strip()
+    command = ['adb', '-s', 'emulator-5554', *args]
+    result = subprocess.run(command, check=False, text=True, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, timeout=120)
+    if result.returncode:
+        print('ADB failure:', command, result.returncode, result.stdout, result.stderr, flush=True)
+        if check:
+            raise RuntimeError('ADB command failed: '+str(command)+'; '+result.stdout+'; '+result.stderr)
+    return result.stdout.strip()
 
 
 def shell(*args, check=True):
@@ -169,8 +175,11 @@ def main():
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     assert shell('getprop','ro.kernel.qemu') == '1', 'Disposable emulator only; never run on a phone'
-    adb('root'); adb('wait-for-device')
-    assert shell('id','-u') == '0'
+    for attempt in range(3):
+        adb('root', check=False); adb('wait-for-device')
+        if shell('id','-u',check=False) == '0': break
+        time.sleep(2)
+    assert shell('id','-u') == '0', 'Rooted google_apis emulator required; no phone or app changes attempted'
     fixtures = args.output/'fixtures'; fixtures.mkdir()
     try:
         # Install existing immutable apps beside the new one; no cloud calls or user data.
