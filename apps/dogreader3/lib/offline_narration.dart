@@ -145,7 +145,7 @@ class OfflineNarration extends ChangeNotifier with WidgetsBindingObserver {
       'frontend': 'misaki-fonnx-1.2.0-api28-v1',
       'settings': {'threads': threads, 'sid': sid, 'speed': 1.0, 'runtime': 'sherpa_onnx 2.0.1 CPU'},
       'sourceSha256': sha256.convert(utf8.encode(chapter.text)).toString(),
-      'readerWhitespaceNormalization': 'u3000-to-ascii-v1',
+      'readerWhitespaceNormalization': 'reader-paragraph-indent-v1',
       'spokenSha256': sha256.convert(utf8.encode(engineText)).toString(),
       'narration_dictionary': dictionary.toJson(), 'narration_offsets': spoken.offsets,
     };

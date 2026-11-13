@@ -20,7 +20,7 @@ void main() {
   test('reader indentation becomes whitespace without dropping text or changing offsets', () {
     const raw = 'Alice read.\n　The children don’t leave.\n\n　There are 12 books.';
     final spoken = offlineReaderText(raw);
-    expect(spoken, 'Alice read.\n The children don’t leave.\n\n There are 12 books.');
+    expect(spoken, 'Alice read.\n\nThe children don’t leave.\n\n\nThere are 12 books.');
     expect(spoken.length, raw.length);
     expect(spoken.indexOf('The'), raw.indexOf('The'));
     expect(spoken.indexOf('12'), raw.indexOf('12'));
@@ -59,9 +59,9 @@ void main() {
     await controller.generate(bookId: 'book', bookTitle: 'A novel', index: 2,
       chapter: const ReaderChapter('Chapter 3', '“Hello,” Alice said.\n　There were 12 birds.', []), sid: 3, threads: 2);
     expect(request!['text'], contains('Alice'));
-    expect(request!['text'], contains('\n There were 12 birds.'));
+    expect(request!['text'], contains('\n\nThere were 12 birds.'));
     expect(request!['text'], isNot(contains('\u3000')));
-    expect(request!['chapter']['readerWhitespaceNormalization'], 'u3000-to-ascii-v1');
+    expect(request!['chapter']['readerWhitespaceNormalization'], 'reader-paragraph-indent-v1');
     expect(request!['variant'], 'fp32');
     expect(request!['frontend'], 'misaki');
     expect(request!['chapter']['engine'], 'kokoro_offline');
