@@ -3,12 +3,19 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show LicenseRegistry, LicenseEntryWithLineBreaks;
 import 'package:flutter/services.dart';
 import 'worker.dart';
 
 const native = MethodChannel('dogreader.kokoro_probe');
 const experimentBuild = String.fromEnvironment('DOGREADER_BUILD', defaultValue: 'local');
-void main() => runApp(const MaterialApp(home: Probe()));
+void main() {
+  LicenseRegistry.addLicense(() async* {
+    yield LicenseEntryWithLineBreaks(['Experimental Misaki frontend'],
+      await rootBundle.loadString('frontend-notices.txt'));
+  });
+  runApp(const MaterialApp(home: Probe()));
+}
 
 class Probe extends StatefulWidget {
   const Probe({super.key});
@@ -18,7 +25,9 @@ class Probe extends StatefulWidget {
 
 class _ProbeState extends State<Probe> {
   final text = TextEditingController();
-  String manifest = '', root = '', output = '', model = '', variant = 'int8';
+  String manifest = '', root = '', output = '', model = '', variant = 'fp32';
+  String frontend = 'misaki', frontendManifest = '';
+  bool frontendReady = false;
   String status = 'Starting…';
   final manifests = <String, String>{};
   final installed = <String, bool>{};
@@ -39,6 +48,7 @@ class _ProbeState extends State<Probe> {
       manifest = await rootBundle.loadString('model-manifest.json');
       manifests['int8'] = manifest;
       manifests['fp32'] = await rootBundle.loadString('fp32-model-manifest.json');
+      frontendManifest = await rootBundle.loadString('english-frontend-manifest.json');
       text.text = await rootBundle.loadString('passage.txt');
       final paths = Map<String, dynamic>.from(await native.invokeMethod('paths'));
       root = paths['files'] as String;
@@ -48,7 +58,10 @@ class _ProbeState extends State<Probe> {
         final marker = File('$root/${spec['directory']}/READY');
         installed[entry.key] = await marker.exists() && await marker.readAsString() == spec['archiveSha256'];
       }
-      selectVariant('int8');
+      final frontendSpec = jsonDecode(frontendManifest);
+      final frontendMarker = File('$root/${frontendSpec['directory']}/READY');
+      frontendReady = await frontendMarker.exists() && await frontendMarker.readAsString() == frontendSpec['id'];
+      selectVariant('fp32');
       if (mounted) setState(() => status = ready ? 'Model ready. Enable airplane mode to test.' : 'Download the model once to begin.');
     } catch (error) {
       if (mounted) setState(() => status = '$error');
@@ -104,6 +117,7 @@ class _ProbeState extends State<Probe> {
       isolate = await Isolate.spawn(worker, <String, dynamic>{
         'port': receive.sendPort, 'operation': installing ? 'install' : 'generate',
         'manifest': manifest, 'root': root, 'model': model, 'output': output,
+        'frontend': frontend, 'frontendManifest': frontendManifest,
         'id': id, 'text': text.text, 'threads': threads, 'repeats': repeats,
         'sid': sid, 'british': sid == 21, 'modelSha': spec['archiveSha256'],
         'variant': selectedVariant, 'modelFile': graph, 'modelFileSha': spec['files'][graph]['sha256'],
@@ -133,6 +147,7 @@ class _ProbeState extends State<Probe> {
           final summary = <String, dynamic>{
             'experimentalBuild': experimentBuild, 'completed': succeeded,
             'modelVariant': selectedVariant, 'modelArchiveSha256': spec['archiveSha256'],
+            'frontend': frontend,
             'status': status, 'results': results, 'samples': samples,
             'sampledPeakPssKb': samples.map((s) => (s['pssKb'] as num?) ?? 0).fold<num>(0, (a, b) => a > b ? a : b),
             'sessionProcessCpuMs': (samples.last['cpuMs'] as num?) != null && firstSample?['cpuMs'] != null
@@ -146,6 +161,32 @@ class _ProbeState extends State<Probe> {
           if (results.isNotEmpty) recordings[selectedVariant]!['report'] = report;
         }
       } catch (error) { status = '$status\nReport error: $error'; }
+      await native.invokeMethod('keepAwake', false);
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> installEnglish() async {
+    setState(() { busy = true; status = 'Connecting to English frontend download…'; });
+    final receive = ReceivePort();
+    Isolate? isolate;
+    try {
+      await native.invokeMethod('keepAwake', true);
+      isolate = await Isolate.spawn(worker, <String, dynamic>{
+        'port': receive.sendPort, 'operation': 'installFrontend',
+        'root': root, 'frontendManifest': frontendManifest,
+      }, onError: receive.sendPort, onExit: receive.sendPort);
+      await for (final message in receive) {
+        if (message is! Map) throw StateError('Frontend installer stopped unexpectedly: $message');
+        if (message['error'] != null) throw StateError(message['error'] as String);
+        if (message['frontendInstalled'] == true) frontendReady = true;
+        if (message['status'] != null && mounted) setState(() => status = message['status'] as String);
+        if (message['done'] == true) break;
+      }
+    } catch (error) {
+      if (mounted) setState(() => status = '$error');
+    } finally {
+      receive.close(); isolate?.kill();
       await native.invokeMethod('keepAwake', false);
       if (mounted) setState(() => busy = false);
     }
@@ -176,13 +217,23 @@ class _ProbeState extends State<Probe> {
             status = ready ? '${variant.toUpperCase()} ready. Enable airplane mode to test.' : 'Download ${variant.toUpperCase()} once to begin.';
           })),
         Text(variant == 'int8' ? 'INT8: allow 800 MB free during installation.' :
-            'FP32: allow 1.5 GB free during installation. Larger model; phone performance is unmeasured.'),
+            'FP32: quality baseline. Allow 1.5 GB free during installation.'),
         const Text('Downloads are optional and separate. Existing INT8 stays installed. '
-            'Then enable airplane mode, with Wi-Fi off. Only Download model uses the network.'),
+            'Then enable airplane mode, with Wi-Fi off. Only Download buttons use the network.'),
         FilledButton(onPressed: busy || root.isEmpty ? null : () => operate(true),
             child: Text('${ready ? 'Re-download' : 'Download'} ${variant.toUpperCase()} model')),
-        const Text('English lexicon experiment: unknown words are rejected before synthesis. '
-            'Spell out numbers; no SSML. This is not yet a complete audiobook frontend.'),
+        DropdownButton<String>(value: frontend, isExpanded: true,
+          items: const [
+            DropdownMenuItem(value: 'misaki', child: Text('Misaki English · ordinary prose')),
+            DropdownMenuItem(value: 'lexicon', child: Text('Build 146 lexicon · reference')),
+          ], onChanged: busy ? null : (value) => setState(() => frontend = value!)),
+        if (frontend == 'misaki') ...[
+          const Text('Download the English frontend once (22.2 MB). Numbers, book punctuation and '
+            'unfamiliar words are processed offline. Name pronunciations are best effort. '
+            'American voices use US dates; the British voice uses UK dates. No SSML.'),
+          OutlinedButton(onPressed: busy || root.isEmpty ? null : installEnglish,
+            child: Text(frontendReady ? 'Re-download English frontend' : 'Download English frontend')),
+        ] else const Text('Reference frontend: dictionary words and simple punctuation only. Spell out numbers.'),
         TextField(controller: text, enabled: !busy, minLines: 5, maxLines: 9,
             decoration: const InputDecoration(labelText: 'Passage (default: exactly 1,000 words)', border: OutlineInputBorder())),
         Wrap(spacing: 10, children: [
@@ -203,7 +254,7 @@ class _ProbeState extends State<Probe> {
               DropdownMenuItem(value: 16, child: Text('am_michael · American')),
               DropdownMenuItem(value: 21, child: Text('bf_emma · British'))],
             onChanged: busy ? null : (n) => setState(() => sid = n!)),
-        FilledButton(onPressed: busy || !ready ? null : () => operate(false), child: Text('Generate ${variant.toUpperCase()} offline audio')),
+        FilledButton(onPressed: busy || !ready || (frontend == 'misaki' && !frontendReady) ? null : () => operate(false), child: Text('Generate ${variant.toUpperCase()} offline audio')),
         if (busy) const LinearProgressIndicator(),
         SelectableText(status),
         for (final r in results) Text('Run ${r['run']}: ${(r['generationAndWriteMs'] / 1000).toStringAsFixed(1)} s '
@@ -228,9 +279,9 @@ class _ProbeState extends State<Probe> {
         const SizedBox(height: 12),
         const Text('Licenses: Kokoro weights/voice package and Sherpa-ONNX Apache-2.0; '
             'ONNX Runtime MIT. Sherpa 2.0.1 has no eSpeak-NG. Flutter and Dart BSD; '
-            'archive MIT; crypto BSD. See LICENSES.txt in the numbered experimental release '
+            'archive MIT; crypto BSD. Misaki Apache-2.0; FONNX/spaCy MIT; diacritic BSD. See LICENSES.txt in the numbered experimental release '
             'and Flutter notices below. Model notices are retained with the download.'),
-        TextButton(onPressed: () => showLicensePage(context: context), child: const Text('Flutter dependency notices')),
+        TextButton(onPressed: () => showLicensePage(context: context), child: const Text('Component license notices')),
       ],
     )),
   );

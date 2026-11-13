@@ -8,6 +8,9 @@ import 'package:crypto/crypto.dart';
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 import 'frontend.dart';
 import 'audio.dart';
+import 'english_frontend.dart';
+import 'native_g2p.dart';
+import 'frontend_install.dart';
 
 Future<String> fileHash(File file) async =>
     (await sha256.bind(file.openRead()).first).toString();
@@ -18,6 +21,8 @@ void worker(Map<String, dynamic> args) async {
   try {
     if (args['operation'] == 'install') {
       await install(args, port);
+    } else if (args['operation'] == 'installFrontend') {
+      await installEnglishFrontend(args, port);
     } else {
       await generate(args, port);
     }
@@ -112,20 +117,37 @@ Future<void> generate(Map<String, dynamic> args, SendPort port) async {
   final modelFile = args['modelFile'] as String;
   final lexiconName = args['british'] == true ? 'lexicon-gb-en.txt' : 'lexicon-us-en.txt';
   final frontendTimer = Stopwatch()..start();
-  final lexicon = parseLexicon(File('$root/$lexiconName').readAsStringSync());
-  final prepared = prepareText(args['text'] as String, lexicon);
-  // Native lexicon-to-token conversion must not silently drop unfamiliar phonemes either.
-  final tokens = File('$root/tokens.txt').readAsLinesSync()
-      .map((line) => line.substring(0, line.lastIndexOf(' '))).toSet();
-  for (final chunk in prepared.chunks) {
-    for (final word in RegExp(r"[A-Za-z]+(?:'[A-Za-z]+)*").allMatches(chunk)) {
-      if (lexicon[word.group(0)!.toLowerCase()]!.any((phone) => !tokens.contains(phone))) {
-        throw FormatException('Unsupported phoneme in ${word.group(0)}. No audio generated.');
+  final useMisaki = args['frontend'] == 'misaki';
+  final frontendId = useMisaki ? 'misaki-fonnx-1.2.0-api28-v1' : 'probe-145-lexicon-chunker';
+  final PreparedText prepared;
+  EnglishPrepared? english;
+  sherpa.initBindings(); // Loads Sherpa and its existing ORT before the adapter.
+  if (useMisaki) {
+    final spec = jsonDecode(args['frontendManifest'] as String) as Map<String, dynamic>;
+    final path = '${args['root']}/${spec['directory']}';
+    await verifyEnglishFrontend(path, spec);
+    final backend = NativeG2p('$path/kokoro_g2p_fallback_en_us.onnx',
+      File('$path/kokoro_g2p_fallback_en_us.json').readAsStringSync(),
+      threads: args['threads'] as int);
+    try {
+      english = EnglishFrontend(path, readPhoneInventory('$root/tokens.txt'), backend,
+        locale: args['british'] == true ? 'en-GB' : 'en-US').prepare(
+          args['text'] as String, dictionary: args['dictionary'] as Map<String, dynamic>?);
+      prepared = PreparedText(english.chunks, english.words);
+    } finally { backend.close(); } // Release BART before loading the large FP32 model.
+  } else {
+    final lexicon = parseLexicon(File('$root/$lexiconName').readAsStringSync());
+    prepared = prepareText(args['text'] as String, lexicon);
+    final tokens = readPhoneInventory('$root/tokens.txt');
+    for (final chunk in prepared.chunks) {
+      for (final word in RegExp(r"[A-Za-z]+(?:'[A-Za-z]+)*").allMatches(chunk)) {
+        if (lexicon[word.group(0)!.toLowerCase()]!.any((phone) => !tokens.contains(phone))) {
+          throw FormatException('Unsupported phoneme in ${word.group(0)}. No audio generated.');
+        }
       }
     }
   }
   frontendTimer.stop();
-  sherpa.initBindings();
   final loadTimer = Stopwatch()..start();
   final tts = sherpa.OfflineTts(sherpa.OfflineTtsConfig(
     model: sherpa.OfflineTtsModelConfig(
@@ -154,7 +176,10 @@ Future<void> generate(Map<String, dynamic> args, SendPort port) async {
       try {
         wav.writeFromSync(Uint8List(44));
         for (var i = 0; i < prepared.chunks.length; i++) {
-          final audio = tts.generate(text: prepared.chunks[i], sid: args['sid'] as int, speed: 1.0);
+          final audio = useMisaki
+              ? tts.generateWithConfig(text: '', config: sherpa.OfflineTtsGenerationConfig(
+                  sid: args['sid'] as int, speed: 1.0, phonemeCodepoints: [prepared.chunks[i].runes.toList()]))
+              : tts.generate(text: prepared.chunks[i], sid: args['sid'] as int, speed: 1.0);
           if (audio.sampleRate != 24000 || audio.samples.isEmpty) throw StateError('Empty or unexpected audio');
           if (i == 0) firstAudioMs = timer.elapsedMilliseconds;
           final pcm = encodePcm16(audio.samples);
@@ -184,6 +209,7 @@ Future<void> generate(Map<String, dynamic> args, SendPort port) async {
         'audioSeconds': audioSeconds, 'rtf': timer.elapsedMilliseconds / 1000 / audioSeconds,
         'threads': args['threads'], 'sid': args['sid'], 'speed': 1.0,
         'runtime': 'sherpa_onnx 2.0.1 CPU', 'modelArchiveSha256': args['modelSha'],
+        'frontend': frontendId, 'frontendDiagnostics': english?.toJson(),
         'modelVariant': variant, 'modelFile': modelFile, 'modelFileSha256': args['modelFileSha'],
         'sampleRate': 24000, 'channels': 1, 'pcmBits': 16, 'sampleFrames': frames,
         'rawPeakAmplitude': peak, 'rawRmsAmplitude': math.sqrt(squares / frames),
@@ -192,7 +218,7 @@ Future<void> generate(Map<String, dynamic> args, SendPort port) async {
         'chunksSha256': sha256.convert(utf8.encode(jsonEncode(prepared.chunks))).toString(),
         'comparisonSettingsSha256': sha256.convert(utf8.encode(jsonEncode({
           'text': args['text'], 'sid': args['sid'], 'threads': args['threads'], 'speed': 1.0,
-          'runtime': 'sherpa_onnx 2.0.1 CPU', 'frontend': 'probe-145-lexicon-chunker',
+          'runtime': 'sherpa_onnx 2.0.1 CPU', 'frontend': frontendId, 'dictionary': args['dictionary'],
         }))).toString(),
         'textSha256': sha256.convert(utf8.encode(args['text'] as String)).toString(),
         'wavBytes': File(path).lengthSync(), 'wavSha256': await fileHash(File(path)),

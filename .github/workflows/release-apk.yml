@@ -24,11 +24,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  kokoro-english:
+    if: github.ref == 'refs/heads/feature/kokoro-misaki-adapter' && github.actor == github.repository_owner
+    uses: ./.github/workflows/kokoro-prototype.yml
+    permissions:
+      contents: write
+      actions: read
+    with:
+      release_commit: ${{ inputs.release_commit }}
+      build_number: ${{ inputs.build_number }}
+      publish: ${{ inputs.publish }}
+      quality_comparison: true
+      english_frontend: true
+    secrets: inherit
   kokoro-quality:
     if: github.ref == 'refs/heads/feature/kokoro-quality-comparison' && github.actor == github.repository_owner
     uses: ./.github/workflows/kokoro-prototype.yml
     permissions:
       contents: write
+      actions: read
     with:
       release_commit: ${{ inputs.release_commit }}
       build_number: ${{ inputs.build_number }}
@@ -43,6 +57,7 @@ jobs:
     uses: ./.github/workflows/kokoro-prototype.yml
     permissions:
       contents: write
+      actions: read
     with:
       release_commit: ${{ inputs.release_commit }}
       build_number: ${{ inputs.build_number }}

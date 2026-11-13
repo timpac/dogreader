@@ -1,0 +1,405 @@
+{
+  "platform": "Linux x86_64 host, NOT Android/Pixel",
+  "runtime": "sherpa_onnx 2.0.1 CPU / ORT 1.28.2",
+  "model": "FP32",
+  "modelSha256": "b40f62b166ac8164b0627ef48a0b358eda0985e272fb03ef5252e7206305da11",
+  "threads": 2,
+  "speed": 1.0,
+  "frontendInputSha256": "0f9352ddbf6f44a20ead395ac9bb13a65a02e20228330392fc5a5ddc691cf94a",
+  "allPassed": true,
+  "corpusCases": 16,
+  "localeRuns": 17,
+  "synthesizedRuns": 15,
+  "expectedErrors": 2,
+  "results": [
+    {
+      "id": "austen-prose",
+      "locale": "en-US",
+      "pass": true,
+      "outcome": "all_chunks_synthesized",
+      "chunks": 1,
+      "suppliedPhonemeCodepoints": 118,
+      "framesPerChunk": [
+        152910
+      ],
+      "audioFrames": 152910,
+      "audioSeconds": 6.37125,
+      "sampleRate": 24000,
+      "channels": 1,
+      "pcmBits": 16,
+      "wavSha256": "b4ef2ff90333d7c9375ec8f11eb4845d7f1957d042f19b419755f944e1f6cda5",
+      "pcmPeak": 0.41038239692373424,
+      "pcmRms": 0.06223698716350955,
+      "normalizedText": "It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife.",
+      "phonemeChunks": [
+        "ˌɪt ɪz ɐ tɹˈuθ jˌunəvˈɜɹsəli əknˈɑləʤd, ðæt ɐ sˈɪŋɡᵊl mˈæn ɪn pəzˈɛʃən ʌv ɐ ɡˈʊd fˈɔɹʧən, mˈʌst bi ɪn wˈɑnt ʌv ɐ wˈIf."
+      ],
+      "sourceCoverageChecked": true
+    },
+    {
+      "id": "carroll-prose",
+      "locale": "en-US",
+      "pass": true,
+      "outcome": "all_chunks_synthesized",
+      "chunks": 1,
+      "suppliedPhonemeCodepoints": 303,
+      "framesPerChunk": [
+        356553
+      ],
+      "audioFrames": 356553,
+      "audioSeconds": 14.856375,
+      "sampleRate": 24000,
+      "channels": 1,
+      "pcmBits": 16,
+      "wavSha256": "93a36756f25bbda4b07a9ec4d5add62b8f2bd4aa91a1453116be3129aa55b494",
+      "pcmPeak": 0.4644001586962493,
+      "pcmRms": 0.06479015590148858,
+      "normalizedText": "Alice was beginning to get very tired of sitting by her sister on the bank, and of having nothing to do: once or twice she had peeped into the book her sister was reading, but it had no pictures or conversations in it, \"and what is the use of a book,\" thought Alice \"without pictures or conversations?\"",
+      "phonemeChunks": [
+        "ˈælɪs wʌz bəɡˈɪnɪŋ tə ɡɛt vˈɛɹi tˈIəɹd ʌv sˈɪTɪŋ bI hɜɹ sˈɪstəɹ ˌɔn ðə bˈæŋk, ænd ʌv hˈævɪŋ nˈʌθɪŋ tə dˈu: wˈʌns ɔɹ twˈIs ʃi hæd pˈipt ˈɪntu ðə bˈʊk hɜɹ sˈɪstəɹ wʌz ɹˈidɪŋ, bˌʌt ɪt hæd nˈO pˈɪkʧəɹz ɔɹ kˌɑnvəɹsˈAʃənz ɪn ɪt, “ænd wˌʌt ɪz ðə jˈus ʌv ɐ bˈʊk,” θˈɔt ˈælɪs “wɪðˈWt pˈɪkʧəɹz ɔɹ kˌɑnvəɹsˈAʃənz?”"
+      ],
+      "sourceCoverageChecked": true
+    },
+    {
+      "id": "curly-contractions",
+      "locale": "en-US",
+      "pass": true,
+      "outcome": "all_chunks_synthesized",
+      "chunks": 2,
+      "suppliedPhonemeCodepoints": 58,
+      "framesPerChunk": [
+        49647,
+        26419
+      ],
+      "audioFrames": 76066,
+      "audioSeconds": 3.1694166666666668,
+      "sampleRate": 24000,
+      "channels": 1,
+      "pcmBits": 16,
+      "wavSha256": "bd045bf6f22c13366b15f7cf686a2a3b015d077c21bd1dcade12a0a9b572d6b5",
+      "pcmPeak": 0.4512771996215705,
+      "pcmRms": 0.06266352644504813,
+      "normalizedText": "\"I can't believe it's John's,\" she said. 'Don't leave — wait…'",
+      "phonemeChunks": [
+        "“ˌI kˈænt bəlˈiv ɪts ʤˈɑnz,” ʃi sˈɛd. ",
+        "“dˈOnt lˈiv — wˈAt…”"
+      ],
+      "sourceCoverageChecked": true
+    },
+    {
+      "id": "morphology",
+      "locale": "en-US",
+      "pass": true,
+      "outcome": "all_chunks_synthesized",
+      "chunks": 2,
+      "suppliedPhonemeCodepoints": 83,
+      "framesPerChunk": [
+        66162,
+        39896
+      ],
+      "audioFrames": 106058,
+      "audioSeconds": 4.419083333333333,
+      "sampleRate": 24000,
+      "channels": 1,
+      "pcmBits": 16,
+      "wavSha256": "a035515275cd6e81e3a4adb596b3c65ff8d85f9a7bc24ecddea779a12264429b",
+      "pcmPeak": 0.4317758720664083,
+      "pcmRms": 0.06293291166510614,
+      "normalizedText": "She arrived, opened the boxes, and carried the books. The children's toys were scattered.",
+      "phonemeChunks": [
+        "ʃˌi əɹˈIvd, ˈOpᵊnd ðə bˈɑksᵻz, ænd kˈɛɹid ðə bˈʊks. ",
+        "ðə ʧˈɪldɹᵊnz tˈYz wɜɹ skˈæTəɹd."
+      ],
+      "sourceCoverageChecked": true
+    },
+    {
+      "id": "names-oov",
+      "locale": "en-US",
+      "pass": true,
+      "outcome": "all_chunks_synthesized",
+      "chunks": 1,
+      "suppliedPhonemeCodepoints": 94,
+      "framesPerChunk": [
+        127510
+      ],
+      "audioFrames": 127510,
+      "audioSeconds": 5.312916666666666,
+      "sampleRate": 24000,
+      "channels": 1,
+      "pcmBits": 16,
+      "wavSha256": "14d633116d563f229068de173c692ccc36804b003c504f3761e66e0d54f28850",
+      "pcmPeak": 0.47242652668843654,
+      "pcmRms": 0.061961796937432666,
+      "normalizedText": "Doctor Siobhan O'Connor met Quvenzhane near Worcestershire; Xylophonia was their destination.",
+      "phonemeChunks": [
+        "dˈɑktəɹ sˈObhˌɑn ˌOkˈɑnəɹ mˈɛt kwəvˈɛnʃˌAn nˌɪɹ wˈʊstəɹʃˌɪɹ; zˌIləfˈOniə wʌz ðɛɹ dˌɛstənˈAʃən."
+      ],
+      "sourceCoverageChecked": true
+    },
+    {
+      "id": "numbers-money",
+      "locale": "en-US",
+      "pass": true,
+      "outcome": "all_chunks_synthesized",
+      "chunks": 1,
+      "suppliedPhonemeCodepoints": 164,
+      "framesPerChunk": [
+        201618
+      ],
+      "audioFrames": 201618,
+      "audioSeconds": 8.40075,
+      "sampleRate": 24000,
+      "channels": 1,
+      "pcmBits": 16,
+      "wavSha256": "5f6a478b6329d5e51996868f2e9752d1ae20c0fddc7ba6f40658aac649a3b608",
+      "pcmPeak": 0.41013824884792627,
+      "pcmRms": 0.065120439246972,
+      "normalizedText": "She bought three books for one thousand, two hundred and thirty-four dollars and fifty cents, saved twelve point five percent, and walked two point five kilometers.",
+      "phonemeChunks": [
+        "ʃˌi bˈɔt θɹˈi bˈʊks fɔɹ wˈʌn θˈWzᵊnd, tˈu hˈʌndɹəd ænd θˈɜɹTifˌɔɹ dˈɑləɹz ænd fˈɪfti sˈɛnts, sˈAvd twˈɛlv pˈYnt fˈIv pəɹsˈɛnt, ænd wˈɔkt tˈu pˈYnt fˈIv kəlˈɑməTəɹz."
+      ],
+      "sourceCoverageChecked": true
+    },
+    {
+      "id": "date-time",
+      "locale": "en-US",
+      "pass": true,
+      "outcome": "all_chunks_synthesized",
+      "chunks": 1,
+      "suppliedPhonemeCodepoints": 94,
+      "framesPerChunk": [
+        116786
+      ],
+      "audioFrames": 116786,
+      "audioSeconds": 4.866083333333333,
+      "sampleRate": 24000,
+      "channels": 1,
+      "pcmBits": 16,
+      "wavSha256": "866f51a0492795ea394aa6a4c5097df38d1e537723b6c43c6699faeb7706a5a5",
+      "pcmPeak": 0.34412671285134433,
+      "pcmRms": 0.06307251654230556,
+      "normalizedText": "On November thirteenth, twenty twenty-six, at nine oh five A M, Mister Jones returned.",
+      "phonemeChunks": [
+        "ˌɔn nOvˈɛmbəɹ θˌɜɹtˈinθ, twˈɛnti twˈɛntisˌɪks, æt nˈIn ˈO fˈIv ˈA ˈɛm, mˈɪstəɹ ʤˈOnz ɹətˈɜɹnd."
+      ],
+      "sourceCoverageChecked": true
+    },
+    {
+      "id": "ambiguous-date",
+      "locale": "en-US",
+      "pass": true,
+      "outcome": "all_chunks_synthesized",
+      "chunks": 1,
+      "suppliedPhonemeCodepoints": 55,
+      "framesPerChunk": [
+        62875
+      ],
+      "audioFrames": 62875,
+      "audioSeconds": 2.6197916666666665,
+      "sampleRate": 24000,
+      "channels": 1,
+      "pcmBits": 16,
+      "wavSha256": "af2938c669e01503f3777e11efde9abde31cf86bcbfff6931e225afc1de80551",
+      "pcmPeak": 0.3773308511612293,
+      "pcmRms": 0.06399023131571639,
+      "normalizedText": "The appointment is on March fourth, twenty twenty-six.",
+      "phonemeChunks": [
+        "ði əpˈYntmənt ɪz ˌɔn mˈɑɹʧ fˈɔɹθ, twˈɛnti twˈɛntisˌɪks."
+      ],
+      "sourceCoverageChecked": true
+    },
+    {
+      "id": "ambiguous-date",
+      "locale": "en-GB",
+      "pass": true,
+      "outcome": "all_chunks_synthesized",
+      "chunks": 1,
+      "suppliedPhonemeCodepoints": 56,
+      "framesPerChunk": [
+        75811
+      ],
+      "audioFrames": 75811,
+      "audioSeconds": 3.1587916666666667,
+      "sampleRate": 24000,
+      "channels": 1,
+      "pcmBits": 16,
+      "wavSha256": "dcd82c9054dbd5c079e1716232159a18b231842afaddf17b27257f31f0894778",
+      "pcmPeak": 0.5040131839960936,
+      "pcmRms": 0.0763334564377723,
+      "normalizedText": "The appointment is on April third, twenty twenty-six.",
+      "phonemeChunks": [
+        "ði əpˈYntmᵊnt ɪz ˌɒn ˈApɹɪl θˈɜːd, twˈɛnti twˈɛntisˌɪks."
+      ],
+      "sourceCoverageChecked": true
+    },
+    {
+      "id": "abbreviations",
+      "locale": "en-US",
+      "pass": true,
+      "outcome": "all_chunks_synthesized",
+      "chunks": 1,
+      "suppliedPhonemeCodepoints": 91,
+      "framesPerChunk": [
+        118631
+      ],
+      "audioFrames": 118631,
+      "audioSeconds": 4.942958333333333,
+      "sampleRate": 24000,
+      "channels": 1,
+      "pcmBits": 16,
+      "wavSha256": "ec123838f908afa3eec3c38c0dbd37845eea11cecfb816382a2eb6577ab4349d",
+      "pcmPeak": 0.3954588457899716,
+      "pcmRms": 0.06217135857072639,
+      "normalizedText": "Missus Brown visited Doctor Smith at Saint James's; the U.S. team arrived at five P M",
+      "phonemeChunks": [
+        "mˈɪsəz bɹˈWn vˈɪzɪTᵻd dˈɑktəɹ smˈɪθ æt sˈAnt ʤˈAmzᵻz; ðə jˌuˈɛs tˈim əɹˈIvd æt fˈIv pˈi ˈɛm"
+      ],
+      "sourceCoverageChecked": true
+    },
+    {
+      "id": "paragraph-dialogue",
+      "locale": "en-US",
+      "pass": true,
+      "outcome": "all_chunks_synthesized",
+      "chunks": 4,
+      "suppliedPhonemeCodepoints": 60,
+      "framesPerChunk": [
+        24558,
+        22454,
+        32086,
+        18024
+      ],
+      "audioFrames": 97122,
+      "audioSeconds": 4.04675,
+      "sampleRate": 24000,
+      "channels": 1,
+      "pcmBits": 16,
+      "wavSha256": "5a272230618597f182c5e8ca2de93b9e917d362410e02c22b73936a5dc0c4770",
+      "pcmPeak": 0.39768669698171943,
+      "pcmRms": 0.06895662729649947,
+      "normalizedText": "\"Will you return?\" Anna asked.\n\n\"Yes,\" he replied. \"Tomorrow.\"",
+      "phonemeChunks": [
+        "“wˌɪl ju ɹətˈɜɹn?",
+        "” ˈɑnə ˈæskt.",
+        "“jˈɛs,” hi ɹᵻplˈId. ",
+        "“təmˈɑɹO.”"
+      ],
+      "sourceCoverageChecked": true
+    },
+    {
+      "id": "unicode-epub",
+      "locale": "en-US",
+      "pass": true,
+      "outcome": "all_chunks_synthesized",
+      "chunks": 4,
+      "suppliedPhonemeCodepoints": 116,
+      "framesPerChunk": [
+        50783,
+        44236,
+        34895,
+        29794
+      ],
+      "audioFrames": 159708,
+      "audioSeconds": 6.6545,
+      "sampleRate": 24000,
+      "channels": 1,
+      "pcmBits": 16,
+      "wavSha256": "664a3e15ff647fb4b2acd0fae265bcf753fd8a062d55e6c52f9d08c94b35932a",
+      "pcmPeak": 0.35288552507095555,
+      "pcmRms": 0.06245236989213728,
+      "normalizedText": "The cafe was quiet — almost too quiet… A fine facade glowed in the sun. They chose to cooperate.\n\nCafe windows shone.",
+      "phonemeChunks": [
+        "ðə kæfˈA wʌz kwˈIət — ˈɔlmOst tˈu kwˈIət… ",
+        "ɐ fˈIn fəsˈɑd ɡlˈOd ɪn ðə sˈʌn. ",
+        "ðˌA ʧˈOz tə kOˈɑpəɹˌAt.",
+        "kæfˈA wˈɪndOz ʃˈOn."
+      ],
+      "sourceCoverageChecked": true
+    },
+    {
+      "id": "dictionary-substitution",
+      "locale": "en-US",
+      "pass": true,
+      "outcome": "all_chunks_synthesized",
+      "chunks": 1,
+      "suppliedPhonemeCodepoints": 30,
+      "framesPerChunk": [
+        40258
+      ],
+      "audioFrames": 40258,
+      "audioSeconds": 1.6774166666666666,
+      "sampleRate": 24000,
+      "channels": 1,
+      "pcmBits": 16,
+      "wavSha256": "2c7814d5764412a97a9c6eacc5dff24b22d81a87be6c6e9786996cacc7237d58",
+      "pcmPeak": 0.44526505325479904,
+      "pcmRms": 0.06111734650811805,
+      "normalizedText": "Wooster was written on the sign.",
+      "phonemeChunks": [
+        "wˈʊstəɹ wʌz ɹˈɪtn ˌɔn ðə sˈIn."
+      ],
+      "sourceCoverageChecked": true
+    },
+    {
+      "id": "explicit-decoration-silence",
+      "locale": "en-US",
+      "pass": true,
+      "outcome": "all_chunks_synthesized",
+      "chunks": 1,
+      "suppliedPhonemeCodepoints": 21,
+      "framesPerChunk": [
+        30256
+      ],
+      "audioFrames": 30256,
+      "audioSeconds": 1.2606666666666666,
+      "sampleRate": 24000,
+      "channels": 1,
+      "pcmBits": 16,
+      "wavSha256": "72dd1b0559ad96b6ce496cfd231c0c79f4e17abde667c023d00660540ce0b05d",
+      "pcmPeak": 0.3420209356975005,
+      "pcmRms": 0.06496079580536954,
+      "normalizedText": "\n\nThe signal was bright.",
+      "phonemeChunks": [
+        "ðə sˈɪɡnᵊl wʌz bɹˈIt."
+      ],
+      "sourceCoverageChecked": true
+    },
+    {
+      "id": "inline-prose-preserved",
+      "locale": "en-US",
+      "pass": true,
+      "outcome": "all_chunks_synthesized",
+      "chunks": 1,
+      "suppliedPhonemeCodepoints": 56,
+      "framesPerChunk": [
+        67786
+      ],
+      "audioFrames": 67786,
+      "audioSeconds": 2.8244166666666666,
+      "sampleRate": 24000,
+      "channels": 1,
+      "pcmBits": 16,
+      "wavSha256": "1c7a49e86b312729c199d1ae72b8092f3dcdde809de0094a0dc34a7fb5d17f3e",
+      "pcmPeak": 0.37205114902188174,
+      "pcmRms": 0.06303884813194688,
+      "normalizedText": "The signal was bright, and the answer was three times four.",
+      "phonemeChunks": [
+        "ðə sˈɪɡnᵊl wʌz bɹˈIt, ænd ði ˈænsəɹ wʌz θɹˈi tˈImz fˈɔɹ."
+      ],
+      "sourceCoverageChecked": true
+    },
+    {
+      "id": "punctuation-only",
+      "locale": "en-US",
+      "outcome": "expected_error_before_synthesis",
+      "pass": true
+    },
+    {
+      "id": "unsupported-input-failure",
+      "locale": "en-US",
+      "outcome": "expected_error_before_synthesis",
+      "pass": true
+    }
+  ],
+  "note": "Every accepted phoneme chunk produced finite nonempty audio. Source coverage was checked by the frontend. This does not prove pronunciation correctness or that listeners hear every intended word. No Android speed, RAM, heat or battery result is claimed."
+}

@@ -1,14 +1,32 @@
 """Apply only prototype-specific Android settings to a pinned Flutter template."""
 from pathlib import Path
 import shutil
+import subprocess
+import sys
 
 root = Path(__file__).resolve().parents[1]
+# Populate only hash-pinned frontend source and official API-28 headers.
+# No FONNX hook, native asset package, or alternate ORT enters the build.
+if not (root / 'native/ort_headers/onnxruntime_ep_c_api.h').exists():
+    subprocess.run([sys.executable, str(root / 'tool/prepare_frontend.py')], check=True)
 app = root / 'android/app'
 gradle = app / 'build.gradle.kts'
 text = gradle.read_text()
 assert 'applicationId = "com.dogreader.kokoro_probe"' in text
 assert 'minSdk = flutter.minSdkVersion' in text
 text = text.replace('minSdk = flutter.minSdkVersion', 'minSdk = 26')
+text = text.replace('    defaultConfig {', '''    externalNativeBuild {
+        cmake {
+            path = file("../../native/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+    defaultConfig {
+        externalNativeBuild {
+            cmake {
+                arguments += listOf("-DANDROID_STL=c++_static")
+            }
+        }''', 1)
 # Do not rely on the Android plugin's implicit debug-keystore location: explicitly
 # bind the restored original key, just as the canonical Dogreader build does.
 assert 'signingConfigs.getByName("debug")' in text

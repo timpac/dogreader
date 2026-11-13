@@ -1,0 +1,55 @@
+{
+  "id": "fonnx-misaki-1.2.0-us-gb-api28",
+  "directory": "english-frontend-v1",
+  "totalBytes": 22217792,
+  "files": {
+    "kokoro_g2p_fallback_en_us.json": {
+      "url": "https://huggingface.co/telosnex/fonnx/resolve/4322a6e7ef82e0e483ad795466f60e370701cba0/kokoro_g2p_fallback_en_us.json",
+      "bytes": 305,
+      "sha256": "f00d62722850b438f0712f285c44ae2a47b604e24ed508546cb9690e26f0ee5d",
+      "license": "Apache-2.0"
+    },
+    "kokoro_g2p_fallback_en_us.onnx": {
+      "url": "https://huggingface.co/telosnex/fonnx/resolve/4322a6e7ef82e0e483ad795466f60e370701cba0/kokoro_g2p_fallback_en_us.onnx",
+      "bytes": 3101005,
+      "sha256": "afaa95241151346059b5e56d8bf4eb4c883a5c7594833f7f81ed528454e016c3",
+      "license": "Apache-2.0"
+    },
+    "kokoro_misaki_us_gold.json": {
+      "url": "https://huggingface.co/telosnex/fonnx/resolve/4322a6e7ef82e0e483ad795466f60e370701cba0/kokoro_misaki_us_gold.json",
+      "bytes": 3000469,
+      "sha256": "dc414872a49a28ae6c141463d502fd945f3b2fde040484fdc47d00cc4612686f",
+      "license": "Apache-2.0"
+    },
+    "kokoro_misaki_us_silver.json": {
+      "url": "https://huggingface.co/telosnex/fonnx/resolve/4322a6e7ef82e0e483ad795466f60e370701cba0/kokoro_misaki_us_silver.json",
+      "bytes": 3099517,
+      "sha256": "de8f67be911bb6c659187b4a65fd966b6a30e56350e0f790d763210b053ac475",
+      "license": "Apache-2.0"
+    },
+    "kokoro_spacy_en_core_web_sm.json": {
+      "url": "https://huggingface.co/telosnex/fonnx/resolve/4322a6e7ef82e0e483ad795466f60e370701cba0/kokoro_spacy_en_core_web_sm.json",
+      "bytes": 231990,
+      "sha256": "c49e8004f581804a021ab2e78bdde8a4af526f15aecfb2fe961ec22959bb3620",
+      "license": "MIT"
+    },
+    "kokoro_spacy_en_core_web_sm_tagger.bin": {
+      "url": "https://huggingface.co/telosnex/fonnx/resolve/4322a6e7ef82e0e483ad795466f60e370701cba0/kokoro_spacy_en_core_web_sm_tagger.bin",
+      "bytes": 6282056,
+      "sha256": "0f884fe5841b110c7457a3dd46c78236ad91dc6d028d4ebc37bb9f4c93c22bf3",
+      "license": "MIT"
+    },
+    "kokoro_misaki_gb_gold.json": {
+      "url": "https://huggingface.co/telosnex/fonnx/resolve/4322a6e7ef82e0e483ad795466f60e370701cba0/kokoro_misaki_gb_gold.json",
+      "bytes": 2838552,
+      "sha256": "29e62f4b60261c88f7f3c2c7811ca3825978948090b72d2b27d565b729282f71",
+      "license": "Apache-2.0"
+    },
+    "kokoro_misaki_gb_silver.json": {
+      "url": "https://huggingface.co/telosnex/fonnx/resolve/4322a6e7ef82e0e483ad795466f60e370701cba0/kokoro_misaki_gb_silver.json",
+      "bytes": 3663898,
+      "sha256": "48131e2d92ccc41655f4543e87e0f938e71463eb5a54be7f0693bb712ebb6bce",
+      "license": "Apache-2.0"
+    }
+  }
+}

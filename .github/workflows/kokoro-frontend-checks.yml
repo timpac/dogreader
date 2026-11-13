@@ -1,0 +1,115 @@
+name: Kokoro frontend targeted checks (no APK)
+on:
+  push:
+    branches: [feature/kokoro-misaki-adapter]
+    paths:
+      - 'experiments/kokoro_probe/**'
+      - '.github/workflows/kokoro-frontend-checks.yml'
+permissions:
+  contents: read
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    defaults:
+      run:
+        working-directory: experiments/kokoro_probe
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: '3.13.5'
+      - name: Materialize audited sources and download small test assets
+        run: |
+          set -euo pipefail
+          python3 tool/prepare_frontend.py
+          python3 tool/prepare_frontend.py --test-data
+          mkdir -p test-results
+          python3 -m venv "$RUNNER_TEMP/kokoro-g2p-python"
+          "$RUNNER_TEMP/kokoro-g2p-python/bin/pip" install --disable-pip-version-check sherpa-onnx==2.0.1
+          "$RUNNER_TEMP/kokoro-g2p-python/bin/python" - <<'PY' >> "$GITHUB_ENV"
+          from pathlib import Path
+          import sherpa_onnx
+          print('KOKORO_ORT='+str(Path(sherpa_onnx.__file__).parent/'lib/libonnxruntime.so'))
+          PY
+      - name: Compile small host bridge; no ORT linked or downloaded by bridge
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O2 -fPIC -fvisibility=hidden -shared -Wall -Wextra -Werror \
+            -I native/ort_headers native/g2p_bridge.cc -ldl -o test-results/libkokoro_g2p-host.so
+          readelf -d test-results/libkokoro_g2p-host.so > test-results/host-elf.txt
+          ! grep -q 'NEEDED.*onnxruntime' test-results/host-elf.txt
+      - name: Execute real offline English frontend and 16-case corpus
+        run: |
+          set -euo pipefail
+          printf '{"configVersion":2,"packages":[]}' > "$RUNNER_TEMP/empty-packages.json"
+          dart --packages="$RUNNER_TEMP/empty-packages.json" tool/check_english.dart \
+            "$PWD/research/test-data" "$PWD/test-results/libkokoro_g2p-host.so" "$KOKORO_ORT" \
+            test-results/english-corpus-results.json
+      - name: Compile Android ARM64 bridge only; inspect ABI, dependencies and 16 KB alignment
+        run: |
+          set -euo pipefail
+          NDK_ROOT="$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -1)"
+          "$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++" \
+            -std=c++17 -O2 -fPIC -fvisibility=hidden -shared -static-libstdc++ \
+            -Wall -Wextra -Werror -Wl,-z,max-page-size=16384 \
+            -I native/ort_headers native/g2p_bridge.cc -ldl -o test-results/libkokoro_g2p-arm64.so
+          readelf -h -d -lW test-results/libkokoro_g2p-arm64.so > test-results/android-elf.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          text=Path('test-results/android-elf.txt').read_text()
+          assert 'AArch64' in text
+          assert not re.search(r'NEEDED.*(?:onnxruntime|fonnx|c\+\+_shared)',text)
+          loads=[int(line.split()[-1],16) for line in text.splitlines() if re.match(r'\s*LOAD\s',line)]
+          assert loads and min(loads)>=16384, loads
+          print('ARM64 native bridge compiled; no ORT dependency; 16 KB ELF alignment verified. NOT device execution or APK verification.')
+          PY
+      - name: Retain only focused evidence (no models, APK or runtime)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kokoro-frontend-checks
+          path: |
+            experiments/kokoro_probe/test-results/*.json
+            experiments/kokoro_probe/test-results/*-elf.txt
+            experiments/kokoro_probe/frontend-vendor-receipts.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  probe-analysis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    defaults:
+      run:
+        working-directory: experiments/kokoro_probe
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.7'
+          channel: stable
+          cache: true
+      - name: Prepare pinned source and standalone template without building an APK
+        run: |
+          set -euo pipefail
+          python3 tool/prepare_frontend.py
+          cp pubspec.lock "$RUNNER_TEMP/kokoro-probe-dependencies.lock"
+          flutter create --no-pub --platforms android --org com.dogreader --project-name kokoro_probe . > "$RUNNER_TEMP/template.log" 2>&1
+          cp "$RUNNER_TEMP/kokoro-probe-dependencies.lock" pubspec.lock
+          rm -f test/widget_test.dart
+          python3 tool/configure_android.py
+          flutter pub get --enforce-lockfile
+      - name: Analyze probe only and run its existing small safeguard suite
+        run: |
+          set -euo pipefail
+          flutter analyze --no-pub lib test
+          flutter test --no-pub test
+          git diff --exit-code -- pubspec.lock
+          git diff --check
+          test -f native/ort_headers/onnxruntime_c_api.h
+          test -f lib/third_party/fonnx_misaki/misaki.dart
+          grep -Fq 'ANDROID_STL=c++_static' android/app/build.gradle.kts
+          grep -Fq '../../native/CMakeLists.txt' android/app/build.gradle.kts

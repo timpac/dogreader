@@ -20,3 +20,5 @@ flutter:
     - model-manifest.json
     - fp32-model-manifest.json
     - comparison-passage.txt
+    - english-frontend-manifest.json
+    - frontend-notices.txt

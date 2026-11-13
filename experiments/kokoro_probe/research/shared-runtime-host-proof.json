@@ -1,0 +1,27 @@
+{
+  "date": "2026-11-13",
+  "platform": "Linux x86_64 managed host, NOT Android/Pixel",
+  "status": "measured before execution environment disconnected",
+  "runtime": "1.28.2",
+  "api": 28,
+  "nativeMethod": "Compiled C++ bridge against official ORT v1.28.2 header; dlopen/dlsym of the ORT supplied by sherpa_onnx; no linked ORT dependency.",
+  "singleLoadedRuntime": [
+    "/tmp/kokoro-research/venv/lib/python3.12/site-packages/sherpa_onnx/lib/libonnxruntime.so"
+  ],
+  "runtimeLibrarySha256": "4b3607aebd1784b26b6f9b20e4bd974c7ab8287043e4d095cb7d2cb40b5e566e",
+  "fallbackPhonemes": {
+    "Xylophonia": "zˌIləfˈOniə",
+    "Quvenzhane": "kwəvˈɛnʃˌAn"
+  },
+  "fp32Synthesis": {
+    "text": "The morning train reached the coast.",
+    "voiceId": 3,
+    "threads": 2,
+    "speed": 1,
+    "sampleRate": 24000,
+    "frames": 41375,
+    "finite": true
+  },
+  "fp32ModelSha256": "b40f62b166ac8164b0627ef48a0b358eda0985e272fb03ef5252e7206305da11",
+  "note": "BART session and FP32 Sherpa synthesis were simultaneously active. Host ELF NEEDED contained libc/libstdc++/libgcc, not libonnxruntime. Repository bridge adds explicit Android runtime-name restriction and allocation/null handling; CI rechecks it. This is not Android loading, a listening assessment, or a phone benchmark."
+}

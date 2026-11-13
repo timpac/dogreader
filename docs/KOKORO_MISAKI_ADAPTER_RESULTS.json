@@ -1,0 +1,140 @@
+{
+  "date": "2026-11-13",
+  "codeCommit": "ec6c9b5271598b7d1b1edbef0f7f90f5c6b8f69f",
+  "workflowRun": 43355950797,
+  "workflowUrl": "https://github.com/timpac/dogreader/actions/runs/43355950797",
+  "platform": "Linux x86_64 GitHub Actions host; Android ARM64 cross-compile only",
+  "corpusCases": 16,
+  "localeRuns": 17,
+  "acceptedRuns": 15,
+  "expectedVisibleErrors": 2,
+  "allPassed": true,
+  "results": [
+    {
+      "id": "austen-prose",
+      "locale": "en-US",
+      "outcome": "accepted",
+      "pass": true
+    },
+    {
+      "id": "carroll-prose",
+      "locale": "en-US",
+      "outcome": "accepted",
+      "pass": true
+    },
+    {
+      "id": "curly-contractions",
+      "locale": "en-US",
+      "outcome": "accepted",
+      "pass": true
+    },
+    {
+      "id": "morphology",
+      "locale": "en-US",
+      "outcome": "accepted",
+      "pass": true
+    },
+    {
+      "id": "names-oov",
+      "locale": "en-US",
+      "outcome": "accepted",
+      "pass": true
+    },
+    {
+      "id": "numbers-money",
+      "locale": "en-US",
+      "outcome": "accepted",
+      "pass": true
+    },
+    {
+      "id": "date-time",
+      "locale": "en-US",
+      "outcome": "accepted",
+      "pass": true
+    },
+    {
+      "id": "ambiguous-date",
+      "locale": "en-US",
+      "outcome": "accepted",
+      "pass": true
+    },
+    {
+      "id": "ambiguous-date",
+      "locale": "en-GB",
+      "outcome": "accepted",
+      "pass": true
+    },
+    {
+      "id": "abbreviations",
+      "locale": "en-US",
+      "outcome": "accepted",
+      "pass": true
+    },
+    {
+      "id": "paragraph-dialogue",
+      "locale": "en-US",
+      "outcome": "accepted",
+      "pass": true
+    },
+    {
+      "id": "unicode-epub",
+      "locale": "en-US",
+      "outcome": "accepted",
+      "pass": true
+    },
+    {
+      "id": "dictionary-substitution",
+      "locale": "en-US",
+      "outcome": "accepted",
+      "pass": true
+    },
+    {
+      "id": "explicit-decoration-silence",
+      "locale": "en-US",
+      "outcome": "accepted",
+      "pass": true
+    },
+    {
+      "id": "inline-prose-preserved",
+      "locale": "en-US",
+      "outcome": "accepted",
+      "pass": true
+    },
+    {
+      "id": "punctuation-only",
+      "locale": "en-US",
+      "outcome": "visible_error",
+      "pass": true
+    },
+    {
+      "id": "unsupported-input-failure",
+      "locale": "en-US",
+      "outcome": "visible_error",
+      "pass": true
+    }
+  ],
+  "additionalChecks": [
+    "Real BART fallback for unfamiliar vocabulary",
+    "One loaded ORT runtime in Dart process, version 1.28.2",
+    "Overlong/unsupported fallback input rejected",
+    "Unknown phoneme inventory rejected",
+    "Closed fallback session rejected",
+    "Emoji, invalid calendar date and malformed currency rejected",
+    "Official API-28 host bridge compilation with warnings as errors",
+    "Android ARM64 API-26 bridge compilation, no ORT/FONNX/shared-C++ DT_NEEDED and 16 KB ELF alignment",
+    "Flutter probe analysis and existing small safeguard suite",
+    "Probe lockfile unchanged"
+  ],
+  "unmeasured": [
+    "Android runtime loading and inference",
+    "End-to-end worker execution with phoneme input on device",
+    "Pronunciation correctness and listening quality",
+    "New memory, speed, battery or thermal benchmarks",
+    "APK packaging or installation"
+  ],
+  "notes": [
+    "The two visible-error cases count as passes only because the corpus explicitly requires safe failure.",
+    "Ordinary prose, punctuation, names, contractions and numbers all passed frontend acceptance, not synthesized-audio listening.",
+    "Full token/normalization/phoneme diagnostics and vendor receipts are retained by the workflow artifact for 14 days."
+  ]
+}
