@@ -34,8 +34,8 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           github-token: ${{ github.token }}
-          run-id: 43435620609
-          artifact-ids: '14041889433'
+          run-id: 43441602097
+          artifact-ids: '14046276930'
           path: evidence
           merge-multiple: true
       - name: Read prior picker hierarchy and import errors; no app execution
@@ -49,7 +49,7 @@ jobs:
                   print(json.dumps({k:node.get(k) for k in ['text','content-desc','enabled','clickable','bounds']}))
           print('RETAINED_DEVICE_UI_END')
           lines=Path('evidence/logcat.txt').read_text().splitlines()
-          selected=[line for line in lines if 'AccessibilityNodeInfoDumper' not in line and re.search(r'flutter|FATAL EXCEPTION|sherpa|onnx|kokoro|OfflineBridge|GenerationService',line,re.I)]
+          selected=[line for line in lines if 'AccessibilityNodeInfoDumper' not in line and re.search(r'\b4094\b|flutter|FATAL EXCEPTION|ExoPlayer|AudioTrack|AudioFocus|AudioService|PlayerException|PlaybackException|sherpa|onnx|kokoro|OfflineBridge|GenerationService',line,re.I)]
           print('RETAINED_IMPORT_LOG_BEGIN')
           print('\n'.join(selected[-250:]))
           print('RETAINED_IMPORT_LOG_END')
