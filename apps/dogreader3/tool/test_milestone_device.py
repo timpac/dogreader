@@ -208,7 +208,7 @@ def main():
         ui_click('Import a book')
         ui_click('Show roots', attempts=3)
         ui_click('Downloads', attempts=4)
-        ui_click('Dogreader3-acceptance.epub', attempts=6)
+        ui_click('Dogreader3-acceptance.epub', attempts=6, exact=True)
         wait_for(lambda: 'Dogreader 3.0 Offline Acceptance' in ui_snapshot(), 60)
         ui_click('Chapters and narration')
         ui_click('Generate narration')
