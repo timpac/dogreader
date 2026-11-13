@@ -1,5 +1,6 @@
 """Check native ELF alignment and absence of model/GPL frontend binaries."""
 import re
+import os
 import hashlib
 import subprocess
 import struct
@@ -59,3 +60,17 @@ with zipfile.ZipFile(sys.argv[1]) as apk, tempfile.TemporaryDirectory() as temp:
         assert loads and all(int(value, 16) >= 16384 for value in loads), (name, loads)
     print(f'Checked {len(arm64)} ARM64 ELF files: 16 KB alignment, no model files/eSpeak libraries; '
           f'{len(libs)-len(arm64)} unused dependency libraries for other ABIs')
+
+# audio_service resolves these names dynamically from Dart controls. Release
+# resource shrinking must not remove them: API 33+ requires nonzero custom-action
+# icon IDs, otherwise even starting playback can fail while the WAV is valid.
+sdk = Path(os.environ['ANDROID_HOME'])
+tools = sorted(sdk.glob('build-tools/*/aapt'), key=lambda p: [int(n) for n in re.findall(r'\d+', p.parent.name)])
+assert tools, 'Android aapt required for media resource verification'
+resources = subprocess.check_output([str(tools[-1]), 'dump', 'resources', sys.argv[1]], text=True)
+media_icons = ['audio_service_play_arrow', 'audio_service_pause', 'audio_service_stop',
+               'audio_service_fast_rewind', 'audio_service_fast_forward',
+               'audio_service_skip_next', 'audio_service_skip_previous']
+missing = [name for name in media_icons if not re.search(r':drawable/' + name + r'\b', resources)]
+assert not missing, f'Release stripped required media resources: {missing}'
+print('All seven dynamically referenced media-control drawable names are packaged.')

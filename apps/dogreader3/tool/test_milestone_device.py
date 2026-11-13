@@ -168,6 +168,13 @@ def ui_snapshot():
     return shell('cat', '/sdcard/kokoro-ui.xml', check=False)
 
 
+
+def media_session_playing(sessions):
+    # Android now prints symbolic names (PLAYING(3)); older versions print 3.
+    # Inspect our package's session, never a Bluetooth/assistant session.
+    match = re.search(r'^\s*package=' + re.escape(PACKAGE) + r'\s*\n(.*?)(?=^\s*package=|\Z)', sessions, re.M|re.S)
+    return bool(match and re.search(r'\bstate=(?:3\b|PLAYING\(3\))', match[1]))
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('apk', type=Path)
@@ -245,21 +252,32 @@ def main():
         # Every synthesized chunk must have a committed checkpoint; exact byte identity is unit-tested.
         chunk_files = shell('ls', f"{PRIVATE}/generation-jobs/{job['jobId']}/chunks/*.json").splitlines()
         assert len(chunk_files)==result['chunkCount']
+        uids = {p:shell('stat','-c','%u',f'/data/user/0/{p}') for p in [*installs,PACKAGE]}
+        assert len(set(uids.values()))==3
+        for package in installs:
+            assert shell('cat',f'/data/user/0/{package}/dogreader3-isolation-sentinel')=='unchanged'
+        (args.output/'chapter-report.json').write_text(json.dumps(report,indent=2)+'\n')
+        (args.output/'generation-checks.json').write_text(json.dumps({
+            'platform':'Android emulator; NOT Pixel measurements','package':PACKAGE,
+            'coinstalled':uids,'privateSentinelsPreserved':True,
+            'epubImportedThroughSystemPicker':True,'completedWhileScreenOff':True,
+            'screenOffIntervalStartUnixMs':before,'screenOffIntervalEndUnixMs':after,
+            'nativeChunkCompletionsDuringInterval':len(completions),
+            'chunkCount':result['chunkCount'],'sampleFrames':result['sampleFrames'],
+            'audioSeconds':result['audioSeconds'],'wavSha256':result['wavSha256'],
+            'sampleRate':24000,'channels':1,'bits':16,'wakeLockReleased':True,
+            'playbackNotYetChecked':True},indent=2)+'\n')
         shell('input','keyevent','KEYCODE_WAKEUP'); shell('wm','dismiss-keyguard',check=False)
         shell('am','start','-n',ACTIVITY); time.sleep(3)
         ui_click('Play completed chapter')
         ui_click('Play', exact=True)
         time.sleep(6)
         sessions = shell('dumpsys','media_session')
-        assert PACKAGE in sessions and re.search(r'state=3\b',sessions), sessions
+        assert media_session_playing(sessions), sessions
         ui_click('Pause', exact=True)  # Persists observed playback position.
         selected = wait_for(lambda: e if (d:=read_json('/data/user/0/'+PACKAGE+'/app_flutter/narration_state.json')) and (e:=d.get(job['chapter']['key'])) and e.get('positionMs',0)>1000 else None, 15)
         assert selected['engine']=='kokoro_offline' and selected['path']==result['path']
         assert selected['positionMs']>1000, selected
-        uids = {p:shell('stat','-c','%u',f'/data/user/0/{p}') for p in [*installs,PACKAGE]}
-        assert len(set(uids.values()))==3
-        for package in installs:
-            assert shell('cat',f'/data/user/0/{package}/dogreader3-isolation-sentinel')=='unchanged'
         summary = {'platform':'Android 15 x86_64 emulator; NOT Pixel measurements', 'allPassed':True,
             'singleCompiledApk':True,'package':PACKAGE,'coinstalled':uids,'existingReleaseApks':installs,
             'epubImportedThroughSystemPicker':True,'fixturePassageSha256':source_hash,'fixtureWords':391,
@@ -270,7 +288,6 @@ def main():
             'playbackObservedPositionMs':selected['positionMs'],'wakeLockReleased':True,
             'limitations':'Powered emulator, no listening judgement or Pixel battery/heat/endurance result. No paid cloud generation.'}
         (args.output/'MILESTONE.json').write_text(json.dumps(summary,indent=2)+'\n')
-        (args.output/'chapter-report.json').write_text(json.dumps(report,indent=2)+'\n')
         (args.output/'playback-session.txt').write_text(sessions)
         print(json.dumps(summary,indent=2))
     finally:

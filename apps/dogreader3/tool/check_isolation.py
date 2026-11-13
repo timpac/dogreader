@@ -24,6 +24,8 @@ assert services['com.ryanheise.audioservice.AudioService'].get(android+'foregrou
 generation = services['.GenerationService']
 assert generation.get(android+'process') == ':kokoro_generation'
 assert generation.get(android+'exported') == 'false'
+keep = ET.parse(root/'android/app/src/main/res/raw/keep.xml').getroot()
+assert '@drawable/audio_service_*' in keep.get('{http://schemas.android.com/tools}keep', '')
 assert set(generation.get(android+'foregroundServiceType').split('|')) == {'mediaProcessing', 'dataSync'}
 service = (root/'native/GenerationService.kt').read_text()
 assert 'FlutterEngine(applicationContext, null, false)' in service
