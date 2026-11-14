@@ -354,7 +354,8 @@ class Engine:
                     delay = min(MAX_DISPATCH_SECONDS,
                                 state.get('dispatch_delay', DISPATCH_SECONDS) * 2)
                 state['sequence'] += 1
-                state['recoveries'] += 1
+                if sequence:
+                    state['recoveries'] += 1
                 state.update(dispatch_delay=delay, next_dispatch=now + delay)
             state.update(status='queued', pending=True, lease_until=0)
             return state
@@ -365,7 +366,7 @@ class Engine:
             self.enqueue(job_id, sequence)
 
             def accepted(current):
-                if current['sequence'] != sequence:
+                if current['sequence'] != sequence or not current.get('pending'):
                     return None
                 current.update(pending=False, last_dispatch=now)
                 return current
@@ -396,6 +397,49 @@ class Engine:
         if fields.get('lease_until', 0) and state['lease_until'] <= self.clock():
             raise LeaseLost('Lease renewal did not complete before expiry')
         return state
+
+    def checkpoint(self, job_id, token, completed, total):
+        """Persist batch progress under lease, enqueue the continuation task, and return 200."""
+        sequences = []
+
+        def prepare(state):
+            now = self.clock()
+            if state.get('owner') != token or state.get('lease_until', 0) <= now:
+                raise LeaseLost('Worker lease expired or was replaced')
+            next_sequence = state.get('sequence', 0) + 1
+            sequences.append(next_sequence)
+            state.update(
+                status='queued',
+                owner=None,
+                lease_until=0,
+                pending=True,
+                sequence=next_sequence,
+                progress=max(state.get('progress', 0), completed),
+                chunks=total,
+                dispatch_delay=DISPATCH_SECONDS,
+                next_dispatch=now + DISPATCH_SECONDS,
+            )
+            return state
+
+        self.edit(job_id, prepare)
+        sequence = sequences[-1]
+        try:
+            self.enqueue(job_id, sequence)
+        except Exception as exc:
+            event('checkpoint_enqueue_failed', job_id, sequence=sequence,
+                  error_type=type(exc).__name__)
+            return 'queued', 503
+        dispatched_at = self.clock()
+
+        def accepted(current):
+            if current.get('sequence') != sequence or not current.get('pending'):
+                return None
+            current.update(pending=False, last_dispatch=dispatched_at)
+            return current
+
+        self.edit(job_id, accepted)
+        event('batch_checkpoint', job_id, completed=completed, total=total, sequence=sequence)
+        return 'queued', 200
 
     def process(self, job_id):
         if self.completed(job_id):
@@ -455,9 +499,7 @@ class Engine:
                         content = None
                     if content is None:
                         if made >= BATCH_CHUNKS or self.clock() - now >= BATCH_SECONDS:
-                            self.owned(job_id, owner, status='queued', lease_until=0, owner=None)
-                            event('batch_checkpoint', job_id, completed=index, total=len(chunks))
-                            return 'queued', 503  # Cloud Tasks resumes the same durable job
+                            return self.checkpoint(job_id, owner, index, len(chunks))
                         if made == 0:
                             synthesis_runs = state.get('synthesis_runs', 0)
                             if synthesis_runs >= (max(MAX_SYNTHESIS_RUNS, len(chunks) + MAX_FAILURES)
@@ -512,8 +554,7 @@ class Engine:
                                dispatch_delay=DISPATCH_SECONDS,
                                next_dispatch=self.clock() + DISPATCH_SECONDS)
                 if self.clock() - now >= BATCH_SECONDS:
-                    self.owned(job_id, owner, status='queued', lease_until=0, owner=None)
-                    return 'queued', 503
+                    return self.checkpoint(job_id, owner, len(chunks), len(chunks))
                 self.owned(job_id, owner, lease_until=self.clock() + LEASE_SECONDS)
                 with self.finalizer(combined) as finished:
                     size = validate_mp3(finished)
