@@ -5,6 +5,7 @@ without credentials or paid synthesis. All mutable job state uses GCS generation
 """
 import hashlib
 from contextlib import contextmanager
+import io
 import json
 import logging
 import subprocess
@@ -50,29 +51,16 @@ class SynthesisLimit(Exception):
 
 def mp3_seconds(content):
     """Encoded frame timeline used by the copy/remux assembly (including padding)."""
-    with tempfile.TemporaryFile() as source, tempfile.TemporaryFile() as frames:
-        source.write(content)
-        validate_mp3(source, frames_only=frames)
-        frames.seek(0)
-        duration = 0.0
-        while header := frames.read(4):
-            h = int.from_bytes(header, 'big')
-            version, rate, sample = (h >> 19) & 3, (h >> 12) & 15, (h >> 10) & 3
-            rates = ([0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320]
-                     if version == 3 else [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160])
-            hz = [44100, 48000, 32000][sample] // {3: 1, 2: 2, 0: 4}[version]
-            length = (144000 if version == 3 else 72000) * rates[rate] // hz + ((h >> 9) & 1)
-            frames.seek(length - 4, 1)
-            duration += (1152 if version == 3 else 576) / hz
-        return duration
+    _, duration = validate_mp3_with_duration(io.BytesIO(content))
+    return duration
 
 
 def event(name, job_id, **fields):
     LOG.info(json.dumps(dict(severity='INFO', event=name, job_id=job_id, **fields), sort_keys=True))
 
 
-def validate_mp3(stream, frames_only=None, max_bytes=None):
-    """Check every MPEG Layer III frame, including concatenated TTS ID3 tags.
+def validate_mp3_with_duration(stream, frames_only=None, max_bytes=None):
+    """Check every MPEG Layer III frame and return (size_bytes, duration_seconds) in one pass.
 
     This checks framing and truncation, not linguistic accuracy or audibility.
     Never scans ahead past corrupt bytes or accepts an empty/tag-only response.
@@ -85,6 +73,7 @@ def validate_mp3(stream, frames_only=None, max_bytes=None):
         raise InvalidAudio('Audio is empty')
     stream.seek(0)
     frames = 0
+    duration = 0.0
     while stream.tell() < size:
         pos = stream.tell()
         header = stream.read(4)
@@ -110,6 +99,7 @@ def validate_mp3(stream, frames_only=None, max_bytes=None):
             length = (144000 if version == 3 else 72000) * rates[rate] // sample_rate + ((h >> 9) & 1)
             end = pos + length
             frames += 1
+            duration += (1152 if version == 3 else 576) / sample_rate
             if end <= size and frames_only is not None:
                 stream.seek(pos)
                 frames_only.write(stream.read(length))
@@ -119,6 +109,12 @@ def validate_mp3(stream, frames_only=None, max_bytes=None):
     if not frames:
         raise InvalidAudio('Audio contains no MP3 frames')
     stream.seek(0)
+    return size, duration
+
+
+def validate_mp3(stream, frames_only=None, max_bytes=None):
+    """Check every MPEG Layer III frame, including concatenated TTS ID3 tags."""
+    size, _ = validate_mp3_with_duration(stream, frames_only=frames_only, max_bytes=max_bytes)
     return size
 
 
@@ -153,6 +149,12 @@ def finalize_mp3(stream):
                 '-f', 'mp3', '-i', 'pipe:0', '-map', '0:a:0', '-c:a', 'copy',
                 '-write_xing', '1', finished.name], stdin=stream,
                 stdout=subprocess.DEVNULL, stderr=errors, timeout=120, check=False)
+            # Release tmpfs pages held by the raw frame stream before validation/upload.
+            try:
+                stream.seek(0)
+                stream.truncate(0)
+            except Exception:
+                pass
             if remux.returncode:
                 raise InvalidAudio('MP3 assembly failed')
             validate_mp3(finished)
@@ -398,7 +400,7 @@ class Engine:
             raise LeaseLost('Lease renewal did not complete before expiry')
         return state
 
-    def checkpoint(self, job_id, token, completed, total):
+    def checkpoint(self, job_id, token, completed, total, *, rewind=False):
         """Persist batch progress under lease, enqueue the continuation task, and return 200."""
         sequences = []
 
@@ -408,13 +410,14 @@ class Engine:
                 raise LeaseLost('Worker lease expired or was replaced')
             next_sequence = state.get('sequence', 0) + 1
             sequences.append(next_sequence)
+            progress = completed if rewind else max(state.get('progress', 0), completed)
             state.update(
                 status='queued',
                 owner=None,
                 lease_until=0,
                 pending=True,
                 sequence=next_sequence,
-                progress=max(state.get('progress', 0), completed),
+                progress=progress,
                 chunks=total,
                 dispatch_delay=DISPATCH_SECONDS,
                 next_dispatch=now + DISPATCH_SECONDS,
@@ -441,6 +444,48 @@ class Engine:
         event('batch_checkpoint', job_id, completed=completed, total=total, sequence=sequence)
         return 'queued', 200
 
+    def _synthesize_chunk(self, job_id, owner, state, job, index, text, total_chunks, part, expected, reserved):
+        """Synthesize, validate once in memory, and upload a single chunk under lease."""
+        if not reserved[0]:
+            synthesis_runs = state.get('synthesis_runs', 0)
+            if synthesis_runs >= (max(MAX_SYNTHESIS_RUNS, total_chunks + MAX_FAILURES)
+                                  if job.get('engine') == 'kokoro' else MAX_SYNTHESIS_RUNS):
+                raise SynthesisLimit('Automatic synthesis attempt limit reached')
+            state = self.owned(job_id, owner, synthesis_runs=synthesis_runs + 1,
+                               lease_until=self.clock() + LEASE_SECONDS)
+            reserved[0] = True
+        elif state.get('lease_until', 0) - self.clock() < LEASE_SECONDS * 2 // 3:
+            state = self.owned(job_id, owner, lease_until=self.clock() + LEASE_SECONDS)
+
+        started = time.monotonic()
+        generated = (self.job_synthesizer(text, job, job_id, index)
+                     if self.job_synthesizer else
+                     self.synthesize(text, job['voice'], job_id, index))
+        metrics = {}
+        if isinstance(generated, tuple):
+            content, metrics = generated
+        else:
+            content = generated
+        metrics = dict(metrics)
+        metrics['generation_seconds'] = time.monotonic() - started
+        if not content or len(content) > MAX_CHUNK_BYTES:
+            raise InvalidAudio('TTS returned empty or oversized audio')
+        _, duration = validate_mp3_with_duration(io.BytesIO(content), max_bytes=MAX_CHUNK_BYTES)
+        metrics['duration_seconds'] = duration
+        if state.get('lease_until', 0) - self.clock() < LEASE_SECONDS * 2 // 3:
+            state = self.owned(job_id, owner, lease_until=self.clock() + LEASE_SECONDS)
+        part.metadata = dict(text_sha256=expected, validation='decoded-v1',
+                             audio_sha256=hashlib.sha256(content).hexdigest(),
+                             **{key: str(value) for key, value in metrics.items()})
+        # A stale worker cannot overwrite a newer worker's checkpoint.
+        part.upload_from_string(content, content_type='audio/mpeg',
+                                if_generation_match=part.generation or 0)
+        state = self.owned(job_id, owner, progress=index + 1, chunks=total_chunks,
+                           lease_until=self.clock() + LEASE_SECONDS,
+                           dispatch_delay=DISPATCH_SECONDS,
+                           next_dispatch=self.clock() + DISPATCH_SECONDS)
+        return content, state
+
     def process(self, job_id):
         if self.completed(job_id):
             return 'ready', 200
@@ -466,7 +511,47 @@ class Engine:
             chunks = self.chunks_for(job)
             if not chunks:
                 raise ValueError('Chapter contains no narratable text')
+            total_chunks = len(chunks)
             made = 0
+            reserved = [False]
+
+            # Stage 1: Resume directly from durable progress without downloading prior chunks.
+            start_index = max(0, min(int(state.get('progress', 0)), total_chunks))
+            for index in range(start_index, total_chunks):
+                if state.get('lease_until', 0) - self.clock() < LEASE_SECONDS * 2 // 3:
+                    state = self.owned(job_id, owner, lease_until=self.clock() + LEASE_SECONDS)
+                text = chunks[index]
+                path = f'chunks/{job_id}/v1/{index:04d}.mp3'
+                part = self.bucket.blob(path)
+                expected = hashlib.sha256(text.encode()).hexdigest()
+                cached_valid = False
+                try:
+                    part.reload()
+                    meta = part.metadata or {}
+                    if (part.size and part.size <= MAX_CHUNK_BYTES and
+                            meta.get('text_sha256') == expected and
+                            meta.get('validation') == 'decoded-v1' and
+                            meta.get('audio_sha256')):
+                        cached_valid = True
+                except self.missing:
+                    pass
+                if cached_valid:
+                    if index == total_chunks - 1 and state.get('progress', 0) < total_chunks:
+                        state = self.owned(job_id, owner, progress=total_chunks, chunks=total_chunks,
+                                           lease_until=self.clock() + LEASE_SECONDS,
+                                           dispatch_delay=DISPATCH_SECONDS,
+                                           next_dispatch=self.clock() + DISPATCH_SECONDS)
+                    continue
+                if made >= BATCH_CHUNKS or self.clock() - now >= BATCH_SECONDS:
+                    return self.checkpoint(job_id, owner, index, total_chunks)
+                _, state = self._synthesize_chunk(
+                    job_id, owner, state, job, index, text, total_chunks, part, expected, reserved)
+                made += 1
+
+            if self.clock() - now >= BATCH_SECONDS:
+                return self.checkpoint(job_id, owner, total_chunks, total_chunks)
+
+            # Stage 2: Single final-assembly pass once all chunks are complete.
             total_bytes = 0
             digest = hashlib.sha256()
             timings = []
@@ -477,65 +562,38 @@ class Engine:
             peak_rss_kib = 0
             with tempfile.TemporaryFile() as combined:
                 for index, text in enumerate(chunks):
-                    self.owned(job_id, owner, lease_until=self.clock() + LEASE_SECONDS)
+                    if state.get('lease_until', 0) - self.clock() < LEASE_SECONDS * 2 // 3:
+                        state = self.owned(job_id, owner, lease_until=self.clock() + LEASE_SECONDS)
                     path = f'chunks/{job_id}/v1/{index:04d}.mp3'
                     part = self.bucket.blob(path)
                     expected = hashlib.sha256(text.encode()).hexdigest()
                     content = None
+                    duration = None
                     try:
                         part.reload()
+                        meta = part.metadata or {}
                         if (part.size and part.size <= MAX_CHUNK_BYTES and
-                                (part.metadata or {}).get('text_sha256') == expected and
-                                (part.metadata or {}).get('validation') == 'decoded-v1'):
+                                meta.get('text_sha256') == expected and
+                                meta.get('validation') == 'decoded-v1'):
                             content = part.download_as_bytes(if_generation_match=part.generation)
-                            if hashlib.sha256(content).hexdigest() != part.metadata.get('audio_sha256'):
+                            if hashlib.sha256(content).hexdigest() != meta.get('audio_sha256'):
                                 raise InvalidAudio('Checkpoint digest does not match its audio')
-                            with tempfile.TemporaryFile() as check:
-                                check.write(content)
-                                validate_mp3(check)
+                            _, duration = validate_mp3_with_duration(
+                                io.BytesIO(content), frames_only=combined, max_bytes=MAX_CHUNK_BYTES)
                     except self.missing:
-                        pass
+                        content = None
                     except InvalidAudio:
                         content = None
                     if content is None:
+                        # Self-healing recovery if an earlier chunk was deleted or corrupted.
                         if made >= BATCH_CHUNKS or self.clock() - now >= BATCH_SECONDS:
-                            return self.checkpoint(job_id, owner, index, len(chunks))
-                        if made == 0:
-                            synthesis_runs = state.get('synthesis_runs', 0)
-                            if synthesis_runs >= (max(MAX_SYNTHESIS_RUNS, len(chunks) + MAX_FAILURES)
-                                                  if job.get('engine') == 'kokoro' else MAX_SYNTHESIS_RUNS):
-                                raise SynthesisLimit('Automatic synthesis attempt limit reached')
-                            # Reserve only when starting new paid work. Queuing,
-                            # expired leases and cache-only assembly do not spend
-                            # this budget. A crash after reservation is uncertain,
-                            # so retain it conservatively until explicit retry.
-                            self.owned(job_id, owner, synthesis_runs=synthesis_runs + 1,
-                                       lease_until=self.clock() + LEASE_SECONDS)
-                        started = time.monotonic()
-                        generated = (self.job_synthesizer(text, job, job_id, index)
-                                     if self.job_synthesizer else
-                                     self.synthesize(text, job['voice'], job_id, index))
-                        metrics = {}
-                        if isinstance(generated, tuple):
-                            content, metrics = generated
-                        else:
-                            content = generated
-                        metrics['generation_seconds'] = time.monotonic() - started
-                        if not content or len(content) > MAX_CHUNK_BYTES:
-                            raise InvalidAudio('TTS returned empty or oversized audio')
-                        with tempfile.TemporaryFile() as check:
-                            check.write(content)
-                            validate_mp3(check)
-                        self.owned(job_id, owner, lease_until=self.clock() + LEASE_SECONDS)
-                        part.metadata = dict(text_sha256=expected, validation='decoded-v1',
-                                             audio_sha256=hashlib.sha256(content).hexdigest(),
-                                             **{key: str(value) for key, value in metrics.items()})
-                        # A stale worker cannot overwrite a newer worker's checkpoint.
-                        part.upload_from_string(content, content_type='audio/mpeg',
-                                                if_generation_match=part.generation or 0)
+                            return self.checkpoint(job_id, owner, index, total_chunks, rewind=True)
+                        content, state = self._synthesize_chunk(
+                            job_id, owner, state, job, index, text, total_chunks, part, expected, reserved)
                         made += 1
+                        _, duration = validate_mp3_with_duration(
+                            io.BytesIO(content), frames_only=combined, max_bytes=MAX_CHUNK_BYTES)
                     if job.get('engine') == 'kokoro':
-                        duration = mp3_seconds(content)
                         timings.append(dict(text_start=text_offset, text_end=text_offset + len(text),
                                             audio_start=audio_offset, audio_end=audio_offset + duration))
                         text_offset += len(text)
@@ -544,32 +602,26 @@ class Engine:
                         cpu_seconds += float((part.metadata or {}).get('cpu_seconds', 0))
                         peak_rss_kib = max(peak_rss_kib, int((part.metadata or {}).get('peak_rss_kib', 0)))
                     total_bytes += len(content)
+                    del content
                     if total_bytes > MAX_AUDIO_BYTES:
                         raise AudioLimit('Chapter audio exceeds the 128 MiB safety limit')
-                    with tempfile.TemporaryFile() as source:
-                        source.write(content)
-                        validate_mp3(source, frames_only=combined)
-                    self.owned(job_id, owner, progress=index + 1, chunks=len(chunks),
-                               lease_until=self.clock() + LEASE_SECONDS,
-                               dispatch_delay=DISPATCH_SECONDS,
-                               next_dispatch=self.clock() + DISPATCH_SECONDS)
-                if self.clock() - now >= BATCH_SECONDS:
-                    return self.checkpoint(job_id, owner, len(chunks), len(chunks))
-                self.owned(job_id, owner, lease_until=self.clock() + LEASE_SECONDS)
+
+                state = self.owned(job_id, owner, lease_until=self.clock() + LEASE_SECONDS)
                 with self.finalizer(combined) as finished:
                     size = validate_mp3(finished)
                     while block := finished.read(64 * 1024):
                         digest.update(block)
                     finished.seek(0)
-                    self.owned(job_id, owner, lease_until=self.clock() + LEASE_SECONDS)
+                    state = self.owned(job_id, owner, lease_until=self.clock() + LEASE_SECONDS)
+                    audio_sha256 = digest.hexdigest()
                     if job.get('engine') == 'kokoro':
                         if text_offset != len(job['text']):
                             raise InvalidAudio('Text coverage validation failed')
-                        report = dict(audio_sha256=digest.hexdigest(), engine='kokoro', model_version=job['model_version'],
+                        report = dict(audio_sha256=audio_sha256, engine='kokoro', model_version=job['model_version'],
                                       voice=job['voice'], settings=job['settings'],
                                       audio_seconds=audio_offset, generation_seconds=generation_seconds,
                                       cpu_seconds=cpu_seconds, peak_rss_kib=peak_rss_kib,
-                                      characters=text_offset, chunks=len(chunks), timings=timings)
+                                      characters=text_offset, chunks=total_chunks, timings=timings)
                         self.bucket.blob(f'timing/{job_id}.json').upload_from_string(
                             json.dumps(report), content_type='application/json')
                         event('kokoro_measurements', job_id, **{k: v for k, v in report.items() if k != 'timings'})
@@ -581,14 +633,29 @@ class Engine:
                         generation = 0
                     # Concurrent valid publication wins; CAS rejects later changes.
                     if not self.ready(job_id):
-                        result.metadata = dict(schema='1', job_id=job_id, chunks=str(len(chunks)),
-                                               sha256=digest.hexdigest())
+                        result.metadata = dict(schema='1', job_id=job_id, chunks=str(total_chunks),
+                                               sha256=audio_sha256)
                         result.upload_from_file(finished, size=size, content_type='audio/mpeg',
                                                 if_generation_match=generation)
+                        try:
+                            finished.seek(0)
+                            finished.truncate(0)
+                        except Exception:
+                            pass
+                        # Persist proof immediately for the validated upload so ready() does not
+                        # re-download the entire chapter MP3 back into /tmp.
+                        if result.generation:
+                            self.bucket.blob(f'verified/{job_id}.json').upload_from_string(
+                                json.dumps(dict(generation=str(result.generation), size=size,
+                                                validation='complete')),
+                                content_type='application/json')
+                            event('audio_verified', job_id, generation=str(result.generation),
+                                  bytes=size, legacy=False)
             if not self.ready(job_id):
                 raise InvalidAudio('Uploaded chapter could not be verified')
-            self.owned(job_id, owner, status='ready', lease_until=0, owner=None, error=None)
-            event('job_ready', job_id, chunks=len(chunks), bytes=size)
+            self.owned(job_id, owner, status='ready', progress=total_chunks, chunks=total_chunks,
+                       lease_until=0, owner=None, error=None)
+            event('job_ready', job_id, chunks=total_chunks, bytes=size)
             return 'ready', 200
         except LeaseLost:
             event('worker_fenced', job_id, owner=owner)
