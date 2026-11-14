@@ -15,6 +15,6 @@ RUN python fetch_kokoro.py /opt/kokoro
 COPY main.py reliability.py recover.py narration.py kokoro_worker.py gunicorn_conf.py ./
 COPY notices /app/notices
 
-ENV PORT=8080 DOGREADER_KOKORO_ENABLED=1 OMP_NUM_THREADS=1
+ENV PORT=8080 DOGREADER_KOKORO_ENABLED=1 OMP_NUM_THREADS=2 DOGREADER_KOKORO_THREADS=2
 
 CMD ["/bin/sh", "-c", "exec gunicorn --config gunicorn_conf.py --bind :${PORT} --workers 1 --threads 4 --timeout 600 main:app"]

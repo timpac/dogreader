@@ -20,16 +20,19 @@ def _serve(connection):
     # Imports and the model live only in this process. spawn avoids inheriting
     # Gunicorn threads or an initialized ONNX runtime through fork.
     try:
+        import gc
+        import io
         import numpy as np
         import onnxruntime as ort
         from kokoro_onnx import Kokoro
         import resource
         import subprocess
-        from reliability import InvalidAudio, validate_mp3, decode_mp3
-        import tempfile
+        from reliability import InvalidAudio, validate_mp3
         folder = Path(os.environ.get('DOGREADER_KOKORO_DIR', '/opt/kokoro'))
+        threads = max(1, int(os.environ.get('DOGREADER_KOKORO_THREADS') or
+                             os.environ.get('OMP_NUM_THREADS') or '2'))
         options = ort.SessionOptions()
-        options.intra_op_num_threads = 1
+        options.intra_op_num_threads = threads
         options.inter_op_num_threads = 1
         session = ort.InferenceSession(str(folder / 'kokoro-v1.0.onnx'),
                                        sess_options=options, providers=['CPUExecutionProvider'])
@@ -48,22 +51,24 @@ def _serve(connection):
                 raise InvalidAudio('Kokoro produced invalid samples')
             if len(samples) > 24000 * 180:
                 raise InvalidAudio('Kokoro chunk exceeded 180 seconds')
+            sample_seconds = len(samples) / hz
+            pcm_bytes = np.asarray(samples, dtype='<f4').tobytes()
+            del samples
             # No Xing header per chunk: the existing finalizer writes one for
             # the complete chapter. The frame timeline also powers text seeking.
             encoded = subprocess.run([
                 'ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error',
                 '-f', 'f32le', '-ar', str(hz), '-ac', '1', '-i', 'pipe:0',
                 '-c:a', 'libmp3lame', '-b:a', '64k', '-write_xing', '0',
-                '-f', 'mp3', 'pipe:1'], input=np.asarray(samples, dtype='<f4').tobytes(),
+                '-f', 'mp3', 'pipe:1'], input=pcm_bytes,
                 capture_output=True, timeout=20, check=True)
-            with tempfile.TemporaryFile() as stream:
-                stream.write(encoded.stdout)
-                validate_mp3(stream)
-                decode_mp3(stream)
+            del pcm_bytes
+            validate_mp3(io.BytesIO(encoded.stdout))
+            gc.collect()
             connection.send(('audio', (encoded.stdout, dict(
                 cpu_seconds=time.process_time() - started,
                 peak_rss_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
-                sample_seconds=len(samples) / hz))))
+                sample_seconds=sample_seconds))))
     except EOFError:
         pass
     except Exception as exc:
@@ -81,6 +86,7 @@ class Worker:
         self.lock = threading.Lock()
         self.process = None
         self.connection = None
+        self._warming = False
 
     def close(self):
         if self.connection:
@@ -100,8 +106,8 @@ class Worker:
         self.process.start()
         child.close()
         try:
-            if not self.connection.poll(90):
-                raise KokoroUnavailable('Kokoro model loading exceeded 90 seconds')
+            if not self.connection.poll(120):
+                raise KokoroUnavailable('Kokoro model loading exceeded 120 seconds')
             state, _ = self.connection.recv()
             if state != 'loaded':
                 raise KokoroUnavailable('Kokoro model or voice pack could not be loaded')
@@ -109,8 +115,24 @@ class Worker:
             self.close()
             raise
 
+    def warmup_async(self):
+        def _warm():
+            if not self.lock.acquire(blocking=False):
+                return
+            self._warming = True
+            try:
+                self.start()
+            except Exception:
+                pass
+            finally:
+                self._warming = False
+                self.lock.release()
+        threading.Thread(target=_warm, name='kokoro-warmup', daemon=True).start()
+
     def synthesize(self, text, voice):
-        if not self.lock.acquire(blocking=False):
+        # Wait if initial background warmup is in progress; fail fast if busy with another chunk.
+        acquired = self.lock.acquire(timeout=120) if self._warming else self.lock.acquire(blocking=False)
+        if not acquired:
             raise KokoroBusy('Kokoro CPU worker is busy; saved chunks will resume')
         try:
             self.start()
@@ -135,7 +157,7 @@ worker = Worker()
 
 def post_worker_init(server_worker):
     if os.environ.get('DOGREADER_KOKORO_ENABLED') == '1':
-        worker.start()
+        worker.warmup_async()
 
 
 def worker_exit(server, server_worker):
