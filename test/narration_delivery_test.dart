@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:audiobook_app/narration_delivery.dart';
 import 'package:audiobook_app/narration_storage.dart';
@@ -598,5 +599,90 @@ void main() {
       canRetryNarrationDownload({'id': 'existing', 'status': 'ready'}),
       isTrue,
     );
+  });
+
+  test('signed GCS redirect downloads directly without leaking API token and verifies SHA-256', () async {
+    final gcsServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => gcsServer.close(force: true));
+    final gcsHeaders = <String?>[];
+    final payload = List<int>.generate(64000, (i) => (i * 31 + 7) & 0xff);
+    final digest = sha256.convert(payload).toString();
+    gcsServer.listen((req) async {
+      gcsHeaders.add(req.headers.value('x-dogreader-token'));
+      req.response.headers.contentType = ContentType('audio', 'mpeg');
+      req.response.contentLength = payload.length;
+      req.response.add(payload);
+      await req.response.close();
+    });
+
+    respond = (req) async {
+      expect(req.headers.value('x-dogreader-token'), 'TEST_PRIVATE_TOKEN');
+      req.response.statusCode = 302;
+      req.response.headers.set(
+        HttpHeaders.locationHeader,
+        'http://127.0.0.1:${gcsServer.port}/signed/existing.mp3?X-Goog-Signature=test',
+      );
+      req.response.headers.set('x-dogreader-audio-bytes', '${payload.length}');
+      req.response.headers.set('x-dogreader-audio-sha256', digest);
+      await req.response.close();
+    };
+
+    await delivery.reconcile();
+    expect(gcsHeaders, [isNull]);
+    expect(delivery.books['book']![0]!['delivery'], 'downloaded');
+    final target = await delivery.audioFile('book', 0);
+    expect(await target.readAsBytes(), payload);
+  });
+
+  test('multi-slice 206 Partial Content and mid-stream Range resume assemble large audio cleanly', () async {
+    final payload = List<int>.generate(120000, (i) => (i * 17 + 3) & 0xff);
+    final digest = sha256.convert(payload).toString();
+    const sliceLimit = 45000;
+    var dropOnce = true;
+    final rangeHeaders = <String?>[];
+
+    respond = (req) async {
+      expect(req.headers.value('x-dogreader-token'), 'TEST_PRIVATE_TOKEN');
+      final rangeHeader = req.headers.value(HttpHeaders.rangeHeader);
+      rangeHeaders.add(rangeHeader);
+      var start = 0;
+      if (rangeHeader != null) {
+        final m = RegExp(r'^bytes=(\d+)-$').firstMatch(rangeHeader)!;
+        start = int.parse(m.group(1)!);
+      }
+      final end = (start + sliceLimit - 1) < payload.length
+          ? (start + sliceLimit - 1)
+          : (payload.length - 1);
+      final slice = payload.sublist(start, end + 1);
+      req.response.statusCode = 206;
+      req.response.headers.contentType = ContentType('audio', 'mpeg');
+      req.response.headers.set(HttpHeaders.acceptRangesHeader, 'bytes');
+      req.response.headers.set(
+        HttpHeaders.contentRangeHeader,
+        'bytes $start-$end/${payload.length}',
+      );
+      req.response.headers.set('x-dogreader-audio-sha256', digest);
+      req.response.contentLength = slice.length;
+      if (start == sliceLimit && dropOnce) {
+        dropOnce = false;
+        req.response.add(slice.sublist(0, 10000));
+        final socket = await req.response.detachSocket();
+        socket.destroy();
+        return;
+      }
+      req.response.add(slice);
+      await req.response.close();
+    };
+
+    await delivery.reconcile();
+    expect(delivery.books['book']![0]!['delivery'], 'downloaded');
+    expect(rangeHeaders, [
+      isNull,
+      'bytes=45000-',
+      'bytes=55000-',
+      'bytes=100000-',
+    ]);
+    final target = await delivery.audioFile('book', 0);
+    expect(await target.readAsBytes(), payload);
   });
 }

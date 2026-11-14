@@ -1,4 +1,5 @@
 """Dogreader cloud narration bridge. Private jobs, Cloud Tasks, GCS, Google TTS."""
+import datetime
 import hashlib
 import hmac
 import json
@@ -18,6 +19,7 @@ from reliability import Engine, InvalidAudio, event, validate_mp3, decode_mp3, M
 from narration import (configuration, stored_configuration, recording_id, legacy_id,
     split_kokoro, KOKORO, KOKORO_VOICES, NarrationConfiguration)
 from kokoro_worker import worker as kokoro, KokoroUnavailable
+import google.auth
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 
@@ -29,6 +31,10 @@ REGION = os.environ.get('DOGREADER_REGION', 'us-central1')
 BUCKET = os.environ.get('DOGREADER_BUCKET', 'pg-wodehouse-dogreader-audio')
 QUEUE = os.environ.get('DOGREADER_QUEUE', 'dogreader-narration')
 WORKER_SA = os.environ.get('DOGREADER_WORKER_SA', f'dogreader-worker@{PROJECT}.iam.gserviceaccount.com')
+SIGNER_SA = os.environ.get('DOGREADER_SIGNER_SA', '')
+SIGNED_URL_SECONDS = int(os.environ.get('DOGREADER_SIGNED_URL_SECONDS', '900'))
+# Cloud Run enforces a 32 MiB HTTP/1.1 buffered response cap; bound fallback slices to 16 MiB.
+DIRECT_SLICE_BYTES = 16 * 1024 * 1024
 VOICE = os.environ.get('DOGREADER_VOICE', 'en-US-Chirp3-HD-Achernar')
 AVAILABLE_VOICES = {
     'en-US-Chirp3-HD-Achernar',
@@ -294,6 +300,52 @@ def status(job_id):
     return job_response(job_id, state)
 
 
+def signed_audio_url(blob, job_id):
+    """Generate a short-lived V4 signed GCS URL so large MP3s bypass the Cloud Run 32 MiB proxy limit."""
+    if os.environ.get('DOGREADER_DISABLE_SIGNED_URLS') == '1':
+        return None
+    params = dict(
+        version='v4',
+        expiration=datetime.timedelta(seconds=SIGNED_URL_SECONDS),
+        method='GET',
+        generation=blob.generation,
+        response_disposition=f'attachment; filename="{job_id}.mp3"',
+        response_type='audio/mpeg',
+    )
+    try:
+        return blob.generate_signed_url(**params)
+    except Exception:
+        pass
+    try:
+        credentials, _ = google.auth.default(scopes=['https://www.googleapis.com/auth/cloud-platform'])
+        if not credentials.valid or not credentials.token:
+            credentials.refresh(google_requests.Request())
+        signer = SIGNER_SA or getattr(credentials, 'service_account_email', None) or WORKER_SA
+        if signer and signer != 'default' and credentials.token:
+            return blob.generate_signed_url(
+                service_account_email=signer,
+                access_token=credentials.token,
+                **params)
+    except Exception as exc:
+        event('signed_url_unavailable', job_id, error_type=type(exc).__name__)
+    return None
+
+
+def parse_byte_range(header, total_size):
+    """Parse an HTTP Range header and bound the slice to DIRECT_SLICE_BYTES."""
+    if not header:
+        return None
+    match = re.fullmatch(r'bytes=(\d+)-(\d*)', header.strip())
+    if not match:
+        return 'invalid'
+    start = int(match.group(1))
+    end = int(match.group(2)) if match.group(2) else total_size - 1
+    if start >= total_size or start > end:
+        return 'invalid'
+    end = min(end, start + DIRECT_SLICE_BYTES - 1, total_size - 1)
+    return start, end
+
+
 @app.get('/dogreader/audio/<job_id>')
 def audio(job_id):
     if not authorized():
@@ -303,18 +355,52 @@ def audio(job_id):
     blob = engine().completed(job_id)
     if blob is None:
         return jsonify(error='Audio not ready'), 404
-    # Download bounded recordings before headers so storage errors become JSON
-    # errors. Larger legacy recordings use a bounded, generation-pinned reader.
-    legacy_large = blob.size > MAX_AUDIO_BYTES
-    stream = (blob.open('rb', chunk_size=256 * 1024, if_generation_match=blob.generation)
-              if legacy_large else tempfile.TemporaryFile())
+    metadata = blob.metadata or {}
+    sha256 = metadata.get('sha256', '')
+    common_headers = {
+        'Cache-Control': 'private, no-store',
+        'Accept-Ranges': 'bytes',
+        'X-Dogreader-Audio-Bytes': str(blob.size),
+        'X-Dogreader-Audio-Generation': str(blob.generation),
+    }
+    if sha256:
+        common_headers['X-Dogreader-Audio-Sha256'] = sha256
+
+    range_header = request.headers.get('Range')
+    if not range_header and request.args.get('direct') != '0':
+        signed = signed_audio_url(blob, job_id)
+        if signed:
+            event('audio_download_redirect', job_id, bytes=blob.size,
+                  generation=str(blob.generation))
+            return Response('', status=302, headers={
+                **common_headers,
+                'Location': signed,
+            })
+
+    parsed_range = parse_byte_range(range_header, blob.size)
+    if parsed_range == 'invalid':
+        return Response('', status=416, headers={
+            **common_headers,
+            'Content-Range': f'bytes */{blob.size}',
+        })
+    if parsed_range is not None:
+        start, end = parsed_range
+        status = 206
+    elif blob.size > DIRECT_SLICE_BYTES:
+        # Never emit a non-chunked HTTP/1.1 response >32 MiB through Cloud Run.
+        start, end = 0, DIRECT_SLICE_BYTES - 1
+        status = 206
+    else:
+        start, end = 0, blob.size - 1
+        status = 200
+
+    length = end - start + 1
+    stream = blob.open('rb', chunk_size=4 * 1024 * 1024, if_generation_match=blob.generation)
     prefix = b''
     try:
-        if legacy_large:
-            prefix = stream.read(64 * 1024)
-        else:
-            blob.download_to_file(stream, if_generation_match=blob.generation)
-            stream.seek(0)
+        if start > 0:
+            stream.seek(start)
+        prefix = stream.read(min(64 * 1024, length))
     except Exception:
         stream.close()
         raise
@@ -325,25 +411,35 @@ def audio(job_id):
             if prefix:
                 sent += len(prefix)
                 yield prefix
-            while block := stream.read(64 * 1024):
+            while sent < length:
+                block = stream.read(min(64 * 1024, length - sent))
+                if not block:
+                    break
                 sent += len(block)
                 yield block
             event('audio_download_complete', job_id, bytes=sent,
+                  start=start, end=end, total=blob.size,
                   generation=str(blob.generation))
         except GeneratorExit:
-            event('audio_download_disconnected', job_id, bytes=sent)
+            event('audio_download_disconnected', job_id, bytes=sent, start=start)
             raise
         except Exception as exc:
-            event('audio_download_failed', job_id, bytes=sent,
+            event('audio_download_failed', job_id, bytes=sent, start=start,
                   error_type=type(exc).__name__)
             raise
         finally:
             stream.close()
-    event('audio_download_started', job_id, bytes=blob.size,
-          generation=str(blob.generation))
-    response = Response(body(), mimetype='audio/mpeg', headers={
+
+    event('audio_download_started', job_id, bytes=length, start=start, end=end,
+          total=blob.size, generation=str(blob.generation))
+    headers = {
+        **common_headers,
         'Content-Disposition': f'attachment; filename="{job_id}.mp3"',
-        'Cache-Control': 'private, no-store', 'Content-Length': str(blob.size)})
+        'Content-Length': str(length),
+    }
+    if status == 206:
+        headers['Content-Range'] = f'bytes {start}-{end}/{blob.size}'
+    response = Response(body(), status=status, mimetype='audio/mpeg', headers=headers)
     response.call_on_close(stream.close)
     return response
 

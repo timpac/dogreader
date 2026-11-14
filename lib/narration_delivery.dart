@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 
 import 'narration_files.dart';
@@ -60,8 +61,8 @@ class NarrationDelivery extends ChangeNotifier {
     required this.documentsDirectory,
     required this.beforeReplace,
     DateTime Function()? clock,
-    this.responseTimeout = const Duration(seconds: 20),
-    this.idleTimeout = const Duration(seconds: 30),
+    this.responseTimeout = const Duration(seconds: 30),
+    this.idleTimeout = const Duration(seconds: 45),
     this.diagnosticSink,
   }) : clock = clock ?? DateTime.now;
 
@@ -489,6 +490,132 @@ class NarrationDelivery extends ChangeNotifier {
         });
   }
 
+  static final _contentRangePattern = RegExp(r'^bytes (\d+)-(\d+)/(\d+)$');
+
+  static bool _isAllowedRedirect(Uri uri) =>
+      uri.scheme == 'https' ||
+      (uri.scheme == 'http' &&
+          (uri.host == '127.0.0.1' ||
+              uri.host == 'localhost' ||
+              uri.host == '::1'));
+
+  static ({int start, int end, int total})? _parseContentRange(
+    HttpHeaders headers,
+  ) {
+    final value = headers.value(HttpHeaders.contentRangeHeader);
+    if (value == null) return null;
+    final match = _contentRangePattern.firstMatch(value.trim());
+    if (match == null) return null;
+    final start = int.tryParse(match.group(1)!);
+    final end = int.tryParse(match.group(2)!);
+    final total = int.tryParse(match.group(3)!);
+    if (start == null ||
+        end == null ||
+        total == null ||
+        start < 0 ||
+        end < start ||
+        end >= total) {
+      return null;
+    }
+    return (start: start, end: end, total: total);
+  }
+
+  Stream<List<int>> _streamAudioBytes({
+    required HttpClient client,
+    required HttpClientResponse initialResponse,
+    required Uri downloadUri,
+    required bool sendAuth,
+    required int totalBytes,
+    required bool rangeCapable,
+    String? expectedSha256,
+  }) async* {
+    _SingleDigestSink? digestSink;
+    ByteConversionSink? hashSink;
+    final normalizedSha = expectedSha256?.trim().toLowerCase() ?? '';
+    if (RegExp(r'^[0-9a-f]{64}$').hasMatch(normalizedSha)) {
+      digestSink = _SingleDigestSink();
+      hashSink = sha256.startChunkedConversion(digestSink);
+    }
+
+    var received = 0;
+    var currentResponse = initialResponse;
+    var resumeRetries = 0;
+    try {
+      while (true) {
+        var sliceBytes = 0;
+        try {
+          await for (final chunk in currentResponse.timeout(idleTimeout)) {
+            if (chunk.isEmpty) continue;
+            sliceBytes += chunk.length;
+            received += chunk.length;
+            hashSink?.add(chunk);
+            yield chunk;
+          }
+          if (sliceBytes > 0) {
+            resumeRetries = 0;
+          }
+        } catch (error) {
+          if (!rangeCapable ||
+              received <= 0 ||
+              received >= totalBytes ||
+              sliceBytes <= 0 ||
+              resumeRetries >= 3) {
+            rethrow;
+          }
+          resumeRetries++;
+        }
+
+        if (received >= totalBytes) {
+          break;
+        }
+        if (!rangeCapable) {
+          throw const FormatException('Incomplete audio response');
+        }
+
+        final req = await client
+            .getUrl(downloadUri)
+            .timeout(responseTimeout);
+        req.followRedirects = false;
+        if (sendAuth) {
+          req.headers.set('X-Dogreader-Token', token);
+        }
+        req.headers.set(HttpHeaders.rangeHeader, 'bytes=$received-');
+        final nextResponse = await req.close().timeout(responseTimeout);
+        if (nextResponse.statusCode != 206) {
+          await nextResponse.drain<void>().catchError((Object _) {});
+          throw DeliveryHttpError(nextResponse.statusCode);
+        }
+        final range = _parseContentRange(nextResponse.headers);
+        if (range == null ||
+            range.start != received ||
+            range.total != totalBytes ||
+            (nextResponse.contentLength >= 0 &&
+                nextResponse.contentLength != range.end - range.start + 1)) {
+          await nextResponse.drain<void>().catchError((Object _) {});
+          throw const FormatException('Invalid audio range response');
+        }
+        currentResponse = nextResponse;
+      }
+
+      if (received != totalBytes) {
+        throw const FormatException('Incomplete audio transfer');
+      }
+      if (hashSink != null && digestSink != null) {
+        hashSink.close();
+        final actualDigest = digestSink.value;
+        if (actualDigest == null || actualDigest.toString() != normalizedSha) {
+          throw const FormatException('Audio SHA-256 verification failed');
+        }
+      }
+    } finally {
+      if (hashSink != null) {
+        try {
+          hashSink.close();
+        } catch (_) {}
+      }
+    }
+  }
+
   Future<void> _download(
     String book,
     int index, {
@@ -528,12 +655,11 @@ class NarrationDelivery extends ChangeNotifier {
         automatic: automatic,
         attempt: (job['deliveryAttempts'] as int? ?? 0) + 1,
       );
-      final req = await client
-          .getUrl(_endpoint('/dogreader/audio/$id'))
-          .timeout(responseTimeout);
+      final initialUri = _endpoint('/dogreader/audio/$id');
+      final req = await client.getUrl(initialUri).timeout(responseTimeout);
       req.followRedirects = false;
       req.headers.set('X-Dogreader-Token', token);
-      final response = await req.close().timeout(responseTimeout);
+      var response = await req.close().timeout(responseTimeout);
       if (response.statusCode == 404 && job['status'] != 'ready') {
         _log(
           'download_not_ready',
@@ -546,14 +672,72 @@ class NarrationDelivery extends ChangeNotifier {
         await _notReady(job, book, index, automatic: automatic);
         return;
       }
-      if (response.statusCode != 200) {
+
+      var downloadUri = initialUri;
+      var sendAuth = true;
+      var expectedSha256 = response.headers.value('x-dogreader-audio-sha256');
+      var hintedTotal = int.tryParse(
+        response.headers.value('x-dogreader-audio-bytes') ?? '',
+      );
+
+      if (const {301, 302, 303, 307, 308}.contains(response.statusCode)) {
+        final location = response.headers.value(HttpHeaders.locationHeader);
+        await response.drain<void>().catchError((Object _) {});
+        if (location == null || location.isEmpty) {
+          throw const FormatException('Missing audio redirect location');
+        }
+        downloadUri = initialUri.resolve(location);
+        if (!_isAllowedRedirect(downloadUri)) {
+          throw const FormatException('Disallowed audio redirect scheme');
+        }
+        sendAuth = false;
+        final signedReq = await client
+            .getUrl(downloadUri)
+            .timeout(responseTimeout);
+        signedReq.followRedirects = false;
+        response = await signedReq.close().timeout(responseTimeout);
+        expectedSha256 ??= response.headers.value('x-dogreader-audio-sha256');
+        hintedTotal ??= int.tryParse(
+          response.headers.value('x-dogreader-audio-bytes') ?? '',
+        );
+      }
+
+      if (response.statusCode != 200 && response.statusCode != 206) {
         throw DeliveryHttpError(response.statusCode);
       }
-      if (response.contentLength < 1000 ||
-          (response.headers.contentType != null &&
-              response.headers.contentType!.mimeType != 'audio/mpeg')) {
+
+      final mimeType = response.headers.contentType?.mimeType;
+      if (mimeType != null &&
+          mimeType != 'audio/mpeg' &&
+          mimeType != 'application/octet-stream') {
         throw const FormatException('Incomplete audio response');
       }
+
+      final int totalBytes;
+      if (response.statusCode == 206) {
+        final range = _parseContentRange(response.headers);
+        if (range == null ||
+            range.start != 0 ||
+            (response.contentLength >= 0 &&
+                response.contentLength != range.end - range.start + 1)) {
+          throw const FormatException('Incomplete audio response');
+        }
+        totalBytes = range.total;
+      } else {
+        totalBytes = response.contentLength >= 0
+            ? response.contentLength
+            : (hintedTotal ?? -1);
+      }
+
+      if (totalBytes < 1000) {
+        throw const FormatException('Incomplete audio response');
+      }
+
+      final rangeCapable =
+          response.statusCode == 206 ||
+          response.headers.value(HttpHeaders.acceptRangesHeader) == 'bytes' ||
+          !sendAuth;
+
       if (!identical(books[book]?[index], job)) {
         throw StateError('Recording changed');
       }
@@ -582,12 +766,20 @@ class NarrationDelivery extends ChangeNotifier {
         index,
         id,
         automatic: automatic,
-        http: 200,
+        http: response.statusCode,
       );
       await replaceNarrationFile(
         target,
-        response.timeout(idleTimeout),
-        contentLength: response.contentLength,
+        _streamAudioBytes(
+          client: client,
+          initialResponse: response,
+          downloadUri: downloadUri,
+          sendAuth: sendAuth,
+          totalBytes: totalBytes,
+          rangeCapable: rangeCapable,
+          expectedSha256: expectedSha256,
+        ),
+        contentLength: totalBytes,
         metadataFile: File(
           '${(await documentsDirectory()).path}/narration_state.json',
         ),
@@ -646,4 +838,12 @@ class NarrationDelivery extends ChangeNotifier {
     _timer?.cancel();
     super.dispose();
   }
+}
+
+class _SingleDigestSink implements Sink<Digest> {
+  Digest? value;
+  @override
+  void add(Digest data) => value = data;
+  @override
+  void close() {}
 }

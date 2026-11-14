@@ -94,14 +94,27 @@ Future<File?> generateNarrationPreview({
       'Server returned a different engine or voice. Update the backend.',
     );
   }
-  final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
+  final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
   try {
-    final req = await client.getUrl(
-      Uri.parse('${host.replaceAll(RegExp(r'/$'), '')}/dogreader/audio/$id'),
+    final initialUri = Uri.parse(
+      '${host.replaceAll(RegExp(r'/$'), '')}/dogreader/audio/$id',
     );
+    final req = await client.getUrl(initialUri);
+    req.followRedirects = false;
     req.headers.set('X-Dogreader-Token', token);
-    final audio = await req.close().timeout(const Duration(seconds: 20));
-    if (audio.statusCode != 200) {
+    var audio = await req.close().timeout(const Duration(seconds: 25));
+    if (const {301, 302, 303, 307, 308}.contains(audio.statusCode)) {
+      final location = audio.headers.value(HttpHeaders.locationHeader);
+      await audio.drain<void>().catchError((Object _) {});
+      if (location == null || location.isEmpty) {
+        throw Exception('Preview redirect missing location');
+      }
+      final redirectUri = initialUri.resolve(location);
+      final signedReq = await client.getUrl(redirectUri);
+      signedReq.followRedirects = false;
+      audio = await signedReq.close().timeout(const Duration(seconds: 25));
+    }
+    if (audio.statusCode != 200 && audio.statusCode != 206) {
       throw Exception('Preview download failed (${audio.statusCode})');
     }
     final root = await getTemporaryDirectory();
