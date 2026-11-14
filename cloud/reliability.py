@@ -11,9 +11,18 @@ import logging
 import subprocess
 import tempfile
 import time
+import traceback
 import uuid
 
 LOG = logging.getLogger(__name__)
+
+
+def _safe_frames(exc, limit=8):
+    """Return (filename:lineno:func) tuples without local variables or message text."""
+    if exc is None or exc.__traceback__ is None:
+        return []
+    extracted = traceback.extract_tb(exc.__traceback__)[-limit:]
+    return [f"{frame.filename.rsplit('/', 1)[-1]}:{frame.lineno}:{frame.name}" for frame in extracted]
 LEASE_SECONDS = 300
 DISPATCH_SECONDS = 900
 MAX_DISPATCH_SECONDS = 6 * 60 * 60
@@ -244,6 +253,7 @@ class Engine:
             if not blob.size or (blob.size > MAX_AUDIO_BYTES and metadata.get('schema') == '1'):
                 return None
             proof, _ = self.read(f'verified/{job_id}.json')
+            job = None
             if not proof or str(proof.get('generation')) != str(generation) or proof.get('size') != blob.size:
                 # Validate legacy files once without modifying or regenerating them.
                 # New uploads carry completion metadata written atomically with bytes.
@@ -273,12 +283,14 @@ class Engine:
                     content_type='application/json')
                 event('audio_verified', job_id, generation=str(generation), bytes=size,
                       legacy=metadata.get('schema') != '1')
-            job, _ = self.read(f'jobs/{job_id}.json')
-            if require_timing and job and job.get('engine') == 'kokoro':
-                report, _ = self.read(f'timing/{job_id}.json')
-                if (not report or report.get('audio_sha256') != metadata.get('sha256') or
-                        report.get('characters') != len(job['text'])):
-                    return None
+            if require_timing:
+                if job is None:
+                    job, _ = self.read(f'jobs/{job_id}.json')
+                if job and job.get('engine') == 'kokoro':
+                    report, _ = self.read(f'timing/{job_id}.json')
+                    if (not report or report.get('audio_sha256') != metadata.get('sha256') or
+                            report.get('characters') != len(job['text'])):
+                        return None
             # Prove the pinned object is readable, including on cache hits.
             blob.download_as_bytes(start=0, end=3, if_generation_match=generation)
             return blob
@@ -400,7 +412,7 @@ class Engine:
             raise LeaseLost('Lease renewal did not complete before expiry')
         return state
 
-    def checkpoint(self, job_id, token, completed, total, *, rewind=False):
+    def checkpoint(self, job_id, token, completed, total, *, rewind=False, made=0, batch_seconds=0.0):
         """Persist batch progress under lease, enqueue the continuation task, and return 200."""
         sequences = []
 
@@ -441,7 +453,8 @@ class Engine:
             return current
 
         self.edit(job_id, accepted)
-        event('batch_checkpoint', job_id, completed=completed, total=total, sequence=sequence)
+        event('batch_checkpoint', job_id, completed=completed, total=total, sequence=sequence,
+              made=made, batch_seconds=round(batch_seconds, 3))
         return 'queued', 200
 
     def _synthesize_chunk(self, job_id, owner, state, job, index, text, total_chunks, part, expected, reserved):
@@ -480,10 +493,12 @@ class Engine:
         # A stale worker cannot overwrite a newer worker's checkpoint.
         part.upload_from_string(content, content_type='audio/mpeg',
                                 if_generation_match=part.generation or 0)
+        config_meta = {k: job[k] for k in ('engine', 'voice', 'model_version', 'settings') if k in job}
         state = self.owned(job_id, owner, progress=index + 1, chunks=total_chunks,
                            lease_until=self.clock() + LEASE_SECONDS,
                            dispatch_delay=DISPATCH_SECONDS,
-                           next_dispatch=self.clock() + DISPATCH_SECONDS)
+                           next_dispatch=self.clock() + DISPATCH_SECONDS,
+                           **config_meta)
         return content, state
 
     def process(self, job_id):
@@ -505,13 +520,15 @@ class Engine:
             return 'error', 200
         if state.get('owner') != owner:
             return 'generating', 503  # never acknowledge the only surviving delivery
-        event('worker_started', job_id, owner=owner, failures=state['failures'])
+        event('worker_started', job_id, owner=owner, failures=state['failures'],
+              run=state.get('runs', 1), sequence=state.get('sequence', 0))
         try:
             job, _ = self.read(f'jobs/{job_id}.json')
             chunks = self.chunks_for(job)
             if not chunks:
                 raise ValueError('Chapter contains no narratable text')
             total_chunks = len(chunks)
+            config_meta = {k: job[k] for k in ('engine', 'voice', 'model_version', 'settings') if k in job}
             made = 0
             reserved = [False]
 
@@ -540,16 +557,22 @@ class Engine:
                         state = self.owned(job_id, owner, progress=total_chunks, chunks=total_chunks,
                                            lease_until=self.clock() + LEASE_SECONDS,
                                            dispatch_delay=DISPATCH_SECONDS,
-                                           next_dispatch=self.clock() + DISPATCH_SECONDS)
+                                           next_dispatch=self.clock() + DISPATCH_SECONDS,
+                                           **config_meta)
                     continue
                 if made >= BATCH_CHUNKS or self.clock() - now >= BATCH_SECONDS:
-                    return self.checkpoint(job_id, owner, index, total_chunks)
+                    return self.checkpoint(job_id, owner, index, total_chunks,
+                                           made=made, batch_seconds=self.clock() - now)
                 _, state = self._synthesize_chunk(
                     job_id, owner, state, job, index, text, total_chunks, part, expected, reserved)
                 made += 1
 
             if self.clock() - now >= BATCH_SECONDS:
-                return self.checkpoint(job_id, owner, total_chunks, total_chunks)
+                return self.checkpoint(job_id, owner, total_chunks, total_chunks,
+                                       made=made, batch_seconds=self.clock() - now)
+
+            event('batch_completed', job_id, made=made, completed=total_chunks, total=total_chunks,
+                  sequence=state.get('sequence', 0), batch_seconds=round(self.clock() - now, 3))
 
             # Stage 2: Single final-assembly pass once all chunks are complete.
             total_bytes = 0
@@ -587,7 +610,8 @@ class Engine:
                     if content is None:
                         # Self-healing recovery if an earlier chunk was deleted or corrupted.
                         if made >= BATCH_CHUNKS or self.clock() - now >= BATCH_SECONDS:
-                            return self.checkpoint(job_id, owner, index, total_chunks, rewind=True)
+                            return self.checkpoint(job_id, owner, index, total_chunks, rewind=True,
+                                                   made=made, batch_seconds=self.clock() - now)
                         content, state = self._synthesize_chunk(
                             job_id, owner, state, job, index, text, total_chunks, part, expected, reserved)
                         made += 1
@@ -654,7 +678,7 @@ class Engine:
             if not self.ready(job_id):
                 raise InvalidAudio('Uploaded chapter could not be verified')
             self.owned(job_id, owner, status='ready', progress=total_chunks, chunks=total_chunks,
-                       lease_until=0, owner=None, error=None)
+                       lease_until=0, owner=None, error=None, **config_meta)
             event('job_ready', job_id, chunks=total_chunks, bytes=size)
             return 'ready', 200
         except LeaseLost:
@@ -684,9 +708,11 @@ class Engine:
                            failures=failures, error=message, lease_until=0, owner=None)
             except LeaseLost:
                 return 'queued', 503
-            # Provider exception strings may echo chapter text; log safe context.
+            # Provider exception strings may echo chapter text; log safe context + traceback frames.
             LOG.error(json.dumps(dict(severity='ERROR', event='worker_failed', job_id=job_id,
                                       error_type=type(exc).__name__, failures=failures,
-                                      progress=locals().get('index', 0), retryable=retryable)))
+                                      run=state.get('runs', 1), sequence=state.get('sequence', 0),
+                                      progress=locals().get('index', 0), retryable=retryable,
+                                      frames=_safe_frames(exc))))
             return ('error', 200) if terminal else ('queued', 503)
 

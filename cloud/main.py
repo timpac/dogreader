@@ -7,6 +7,7 @@ import os
 import re
 import random
 import tempfile
+import threading
 import logging
 import time
 from flask import Flask, jsonify, request, Response
@@ -15,7 +16,8 @@ from google.api_core.exceptions import (ServiceUnavailable, DeadlineExceeded, To
     InternalServerError, BadGateway, GatewayTimeout, PreconditionFailed, NotFound, AlreadyExists)
 from google.api_core.exceptions import PermissionDenied
 from google.api_core.retry import Retry
-from reliability import Engine, InvalidAudio, event, validate_mp3, decode_mp3, MAX_AUDIO_BYTES
+from reliability import Engine, InvalidAudio, event, validate_mp3, decode_mp3, MAX_AUDIO_BYTES, _safe_frames
+from recover import sweep as recovery_sweep
 from narration import (configuration, stored_configuration, recording_id, legacy_id,
     split_kokoro, KOKORO, KOKORO_VOICES, NarrationConfiguration)
 from kokoro_worker import worker as kokoro, KokoroUnavailable
@@ -33,6 +35,7 @@ QUEUE = os.environ.get('DOGREADER_QUEUE', 'dogreader-narration')
 WORKER_SA = os.environ.get('DOGREADER_WORKER_SA', f'dogreader-worker@{PROJECT}.iam.gserviceaccount.com')
 SIGNER_SA = os.environ.get('DOGREADER_SIGNER_SA', '')
 SIGNED_URL_SECONDS = int(os.environ.get('DOGREADER_SIGNED_URL_SECONDS', '900'))
+RECOVERY_INTERVAL_SECONDS = int(os.environ.get('DOGREADER_RECOVERY_INTERVAL_SECONDS', '900'))
 # Cloud Run enforces a 32 MiB HTTP/1.1 buffered response cap; bound fallback slices to 16 MiB.
 DIRECT_SLICE_BYTES = 16 * 1024 * 1024
 VOICE = os.environ.get('DOGREADER_VOICE', 'en-US-Chirp3-HD-Achernar')
@@ -45,6 +48,8 @@ AVAILABLE_VOICES = {
 BASE_URL = os.environ.get('DOGREADER_URL', '').rstrip('/')
 API_TOKEN = os.environ.get('DOGREADER_TOKEN', '')
 store = None
+_recovery_lock = threading.Lock()
+_last_recovery_sweep = 0.0
 TRANSIENT = (ServiceUnavailable, DeadlineExceeded, TooManyRequests,
              InternalServerError, BadGateway, GatewayTimeout)
 # 250k supplementary characters can occupy 3 MB as JSON surrogate escapes.
@@ -222,8 +227,15 @@ def valid_id(job_id):
 def job_response(job_id, state):
     # Preserve the Android app's existing status vocabulary; extra fields are optional.
     fields = {key: state[key] for key in ('error', 'progress', 'chunks', 'failures') if state.get(key) is not None}
-    job, _ = engine().read(f'jobs/{job_id}.json')
-    metadata = stored_configuration(job) if job else {}
+    metadata = {}
+    if 'engine' in state and 'voice' in state:
+        try:
+            metadata = stored_configuration(state)
+        except NarrationConfiguration:
+            metadata = {}
+    if not metadata:
+        job, _ = engine().read(f'jobs/{job_id}.json')
+        metadata = stored_configuration(job) if job else {}
     return jsonify(id=job_id, status=state['status'], **metadata, **fields)
 
 
@@ -235,7 +247,8 @@ def service_error(exc):
     if isinstance(exc, NotFound):
         return jsonify(error='Job not found'), 404
     event('request_failed', (request.view_args or {}).get('job_id', ''),
-          error_type=type(exc).__name__, endpoint=request.endpoint)
+          error_type=type(exc).__name__, endpoint=request.endpoint,
+          frames=_safe_frames(exc))
     return jsonify(error='Narration service temporarily unavailable. Retry the request.'), 503
 
 
@@ -269,7 +282,8 @@ def submit():
         if bucket().blob(f'jobs/{old_id}.json').exists() or workflow.ready(old_id):
             job_id = old_id
     if workflow.completed(job_id):
-        return job_response(job_id, {'status': 'ready'}), 200
+        state, _ = workflow.read(f'state/{job_id}.json')
+        return job_response(job_id, {**(state or {}), **config, 'status': 'ready'}), 200
     payload = dict(text=chapter, title=title[:150], created=int(time.time()), **config)
     created = False
     try:
@@ -280,11 +294,13 @@ def submit():
         pass
     # Current Android retries a failed chapter by submitting its text again.
     # Treat that explicit action like /retry; polling never resets budgets.
-    existing = workflow.edit(job_id, lambda current: None)
+    existing = workflow.edit(
+        job_id,
+        lambda current: {**current, **config} if 'engine' not in current else None)
     state = (workflow.retry(job_id) if existing['status'] in ('error', 'ready')
              else workflow.dispatch(job_id))
     event('job_submitted', job_id, created=created, characters=len(chapter), status=state['status'])
-    return job_response(job_id, state), 202 if created else 200
+    return job_response(job_id, {**config, **state}), 202 if created else 200
 
 
 @app.get('/dogreader/jobs/<job_id>')
@@ -295,7 +311,8 @@ def status(job_id):
         return jsonify(error='Invalid job id'), 400
     workflow = engine()
     if workflow.completed(job_id):
-        return job_response(job_id, {'status': 'ready'})
+        state, _ = workflow.read(f'state/{job_id}.json')
+        return job_response(job_id, {**(state or {}), 'status': 'ready'})
     state = workflow.dispatch(job_id)  # recover missing dispatches and expired leases
     return job_response(job_id, state)
 
@@ -469,6 +486,80 @@ def voices():
              voices=[dict(id=v, name=n) for v, n in KOKORO_VOICES.items()])])
 
 
+def run_recovery_sweep(*, limit=50, after=None, enqueue_tasks=True, include_terminal=False):
+    workflow = engine()
+    cursor_blob = workflow.bucket.blob('recovery/cursor.txt')
+    if after is None:
+        try:
+            after = cursor_blob.download_as_text().strip()
+        except Exception:
+            after = ''
+    if after and not valid_id(after):
+        after = ''
+    summary = recovery_sweep(
+        workflow,
+        limit=limit,
+        after=after,
+        enqueue=enqueue_tasks,
+        include_terminal=include_terminal,
+        emit=lambda _: None,
+    )
+    try:
+        cursor_blob.upload_from_string(summary['next_cursor'], content_type='text/plain')
+    except Exception:
+        pass
+    event('recovery_sweep_completed', '', **summary)
+    return summary
+
+
+def maybe_trigger_background_recovery():
+    """Opportunistic bounded recovery sweep when no external scheduler is polling."""
+    global _last_recovery_sweep
+    if RECOVERY_INTERVAL_SECONDS <= 0:
+        return
+    now = time.monotonic()
+    if now - _last_recovery_sweep < RECOVERY_INTERVAL_SECONDS:
+        return
+    if not _recovery_lock.acquire(blocking=False):
+        return
+    _last_recovery_sweep = now
+
+    def _bg():
+        try:
+            run_recovery_sweep(limit=25, enqueue_tasks=True, include_terminal=False)
+        except Exception as exc:
+            event('background_recovery_failed', '', error_type=type(exc).__name__)
+        finally:
+            _recovery_lock.release()
+
+    threading.Thread(target=_bg, name='dogreader-recovery', daemon=True).start()
+
+
+@app.post('/internal/recover')
+def recover_jobs():
+    if not (task_authorized() or authorized()):
+        return jsonify(error='Forbidden'), 403
+    data = request.get_json(silent=True) or {}
+    try:
+        limit = int(data.get('limit', request.args.get('limit', 50)))
+    except (TypeError, ValueError):
+        return jsonify(error='Invalid limit'), 400
+    if not 1 <= limit <= 500:
+        return jsonify(error='Limit must be between 1 and 500'), 400
+    after = data.get('after', request.args.get('after'))
+    if after is not None and after != '' and not valid_id(str(after)):
+        return jsonify(error='Invalid cursor'), 400
+    enqueue_tasks = bool(data.get('enqueue', request.args.get('enqueue', '1') != '0'))
+    include_terminal = bool(data.get('include_terminal', False))
+    summary = run_recovery_sweep(
+        limit=limit,
+        after=after,
+        enqueue_tasks=enqueue_tasks,
+        include_terminal=include_terminal,
+    )
+    return jsonify(ok=True, **summary), 200
+
+
 @app.post('/internal/process/<job_id>')
 def process(job_id):
     if not task_authorized():
@@ -480,6 +571,8 @@ def process(job_id):
     except NotFound:
         event('worker_missing_job', job_id)
         return jsonify(status='error', error='Job not found'), 200
+    if state == 'ready':
+        maybe_trigger_background_recovery()
     return jsonify(status=state), code
 
 
@@ -493,7 +586,8 @@ def retry_job(job_id):
     if not bucket().blob(f'jobs/{job_id}.json').exists():
         return jsonify(error='Job not found'), 404
     if workflow.completed(job_id):
-        return job_response(job_id, {'status': 'ready'})
+        state, _ = workflow.read(f'state/{job_id}.json')
+        return job_response(job_id, {**(state or {}), 'status': 'ready'})
     state = workflow.retry(job_id)
     return job_response(job_id, state), 202 if state['status'] == 'queued' else 200
 
