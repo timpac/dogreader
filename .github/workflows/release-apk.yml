@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   apk:
-    if: github.ref == 'refs/heads/dogreader-oct22-update' && github.actor == github.repository_owner
+    if: (github.ref == 'refs/heads/dogreader-oct22-update' || github.ref == 'refs/heads/fix/153-backend-and-delivery-repair') && github.actor == github.repository_owner
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -40,7 +40,8 @@ jobs:
           script: |
             const {owner, repo} = context.repo;
             const metadata = (await github.rest.repos.get({owner, repo})).data;
-            if (metadata.default_branch !== 'dogreader-oct22-update' || context.ref !== 'refs/heads/dogreader-oct22-update') throw new Error('Canonical branch mismatch');
+            const allowedRefs = new Set(['refs/heads/dogreader-oct22-update', 'refs/heads/fix/153-backend-and-delivery-repair']);
+            if (metadata.default_branch !== 'dogreader-oct22-update' || !allowedRefs.has(context.ref)) throw new Error('Canonical branch mismatch');
             if (Number(process.env.GITHUB_RUN_ATTEMPT) !== 1) throw new Error('Inspect retained assets before a new explicitly authorized dispatch; do not rerun');
             if (!/^[0-9a-f]{40}$/.test(process.env.RELEASE_COMMIT)) throw new Error('Full lowercase source SHA required');
             const number = process.env.BUILD_NUMBER;
@@ -70,7 +71,12 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
           git merge-base --is-ancestor cdf4227dc6a966b20e24f61179ac953b22689024 HEAD
-          git merge-base --is-ancestor HEAD origin/dogreader-oct22-update
+          if [ "$GITHUB_REF" = "refs/heads/dogreader-oct22-update" ]; then
+            git merge-base --is-ancestor HEAD origin/dogreader-oct22-update
+          else
+            git merge-base --is-ancestor 30e92ca871bad697b19637488b085a8ecd03f1a3 HEAD
+            git merge-base --is-ancestor HEAD origin/fix/153-backend-and-delivery-repair
+          fi
       - name: Free unused runner disk space
         run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/powershell
       - uses: actions/setup-java@v4
