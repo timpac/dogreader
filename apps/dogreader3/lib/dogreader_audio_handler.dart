@@ -66,6 +66,65 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
   _Recording? _beforePreview;
   Duration _beforePreviewPosition = Duration.zero;
   Completer<void>? _previewDone;
+  bool _streamingActive = false;
+  bool _streamingComplete = false;
+  bool _streamingWaitingForChunk = false;
+  final List<String> _streamingChunkPaths = [];
+  final List<int> _streamingChunkDurationsMs = [];
+  int _streamingTotalDurationMs = 0;
+  int streamingUnderrunCount = 0;
+  int streamingTotalUnderrunMs = 0;
+  DateTime? _underrunStartedAt;
+
+  bool get isStreamingChapter => _streamingActive;
+  bool get isStreamingBuffering => _streamingWaitingForChunk;
+  int get streamingBufferDepth {
+    if (!_streamingActive || _streamingChunkPaths.isEmpty) return 0;
+    final idx = (player.currentIndex ?? 0).clamp(0, _streamingChunkPaths.length - 1);
+    return (_streamingChunkPaths.length - 1 - idx).clamp(0, _streamingChunkPaths.length);
+  }
+
+  Duration get effectivePosition {
+    if (!_streamingActive) return player.position;
+    final idx = (player.currentIndex ?? 0).clamp(0, _streamingChunkDurationsMs.length);
+    var prefixMs = 0;
+    for (var i = 0; i < idx; i++) {
+      prefixMs += _streamingChunkDurationsMs[i];
+    }
+    return Duration(milliseconds: prefixMs) + player.position;
+  }
+
+  Duration? get effectiveDuration {
+    if (!_streamingActive) return player.duration;
+    return Duration(milliseconds: _streamingTotalDurationMs);
+  }
+
+  void _resetStreaming() {
+    _streamingActive = false;
+    _streamingComplete = false;
+    _streamingWaitingForChunk = false;
+    _streamingChunkPaths.clear();
+    _streamingChunkDurationsMs.clear();
+    _streamingTotalDurationMs = 0;
+    streamingUnderrunCount = 0;
+    streamingTotalUnderrunMs = 0;
+    _underrunStartedAt = null;
+  }
+
+  ({int index, Duration offset}) _resolveStreamingPosition(Duration overall) {
+    if (_streamingChunkDurationsMs.isEmpty) {
+      return (index: 0, offset: Duration.zero);
+    }
+    var remainingMs = overall.inMilliseconds.clamp(0, _streamingTotalDurationMs);
+    for (var i = 0; i < _streamingChunkDurationsMs.length; i++) {
+      final chunkMs = _streamingChunkDurationsMs[i];
+      if (remainingMs < chunkMs || i == _streamingChunkDurationsMs.length - 1) {
+        return (index: i, offset: Duration(milliseconds: remainingMs.clamp(0, chunkMs)));
+      }
+      remainingMs -= chunkMs;
+    }
+    return (index: 0, offset: Duration.zero);
+  }
 
   DogreaderAudioHandler({
     AudioPlayer? player,
@@ -81,7 +140,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
            documentsDirectory ?? getApplicationDocumentsDirectory {
     recordDiagnostic(MediaDiagnosticEvent.handlerCreated);
     _subscriptions.add(
-      this.player.positionStream.listen((position) {
+      this.player.positionStream.listen((_) {
         if (_recording == null ||
             _stopped ||
             _preparing ||
@@ -91,6 +150,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
             _playbackError != null) {
           return;
         }
+        final position = effectivePosition;
         _resumePosition = position;
         if (position.inSeconds != _lastSavedSecond &&
             position.inSeconds % 5 == 0) {
@@ -106,7 +166,17 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
             !_preparing &&
             _wantsPlayback &&
             !_interrupted) {
-          unawaited(_advanceToNextChapter());
+          if (_streamingActive && !_streamingComplete) {
+            if (!_streamingWaitingForChunk) {
+              _streamingWaitingForChunk = true;
+              streamingUnderrunCount++;
+              _underrunStartedAt = DateTime.now();
+              _logDiagnostic('STREAMING_UNDERRUN count=$streamingUnderrunCount queued=${_streamingChunkPaths.length}');
+            }
+            _broadcastPlaybackState();
+          } else {
+            unawaited(_advanceToNextChapter());
+          }
         }
       }),
     );
@@ -133,6 +203,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     );
     _subscriptions.add(
       this.player.durationStream.listen((duration) {
+        if (_streamingActive) return;
         final item = mediaItem.value;
         if (!_preparing &&
             item != null &&
@@ -347,6 +418,8 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
             ? AudioProcessingState.idle
             : _playbackError != null
             ? AudioProcessingState.error
+            : _streamingWaitingForChunk
+            ? AudioProcessingState.buffering
             : switch (player.processingState) {
                 ProcessingState.idle =>
                   // audio_service treats idle as stopService(), deactivating
@@ -362,8 +435,10 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
                 ProcessingState.completed => AudioProcessingState.completed,
               },
         playing: playing,
-        updatePosition: player.position,
-        bufferedPosition: player.bufferedPosition,
+        updatePosition: effectivePosition,
+        bufferedPosition: _streamingActive
+            ? Duration(milliseconds: _streamingTotalDurationMs)
+            : player.bufferedPosition,
         speed: player.speed,
         errorCode: _stopped ? null : _playbackError,
         errorMessage: !_stopped && _playbackError != null
@@ -444,7 +519,9 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
         title: recording.title,
         album: 'Dogreader',
         artist: recording.author,
-        duration: player.duration,
+        duration: _streamingActive
+            ? Duration(milliseconds: _streamingTotalDurationMs)
+            : player.duration,
       ),
     );
     _broadcastPlaybackState();
@@ -508,10 +585,11 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
           revision == _sourceRevision &&
           (isCurrent?.call() ?? true);
       if (!current()) return;
-      await _savePosition(_resumePosition = seekPosition ?? player.position);
+      await _savePosition(_resumePosition = seekPosition ?? effectivePosition);
       if (!current()) return;
       await _silence();
       if (!current()) return;
+      _resetStreaming();
       _preparing = true;
       ++_engineRevision;
       _playbackError = null;
@@ -550,9 +628,156 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     });
   }
 
+  Future<void> startStreamingChapter({
+    required String title,
+    required String author,
+    required String bookId,
+    required int chapterIndex,
+    required int chapterCount,
+    required List<({String wavPath, int durationMs})> initialChunks,
+    bool autoPlay = true,
+  }) async {
+    if (_disposed || initialChunks.isEmpty) return;
+    _finishPreview();
+    _previewActive = false;
+    ++_previewSequence;
+    final revision = ++_sourceRevision;
+    ++_intentRevision;
+    _wantsPlayback = autoPlay;
+    _stopped = false;
+    _pausedReleased = false;
+    _resumeFocusRevision = null;
+    final recording = _Recording(
+      'streaming://$bookId:$chapterIndex',
+      title,
+      author,
+      bookId,
+      chapterIndex,
+      chapterCount,
+    );
+    await _serial(() async {
+      if (_disposed || revision != _sourceRevision) return;
+      await _savePosition(effectivePosition);
+      if (_disposed || revision != _sourceRevision) return;
+      await _silence();
+      if (_disposed || revision != _sourceRevision) return;
+      _resetStreaming();
+      _streamingActive = true;
+      for (final chunk in initialChunks) {
+        _streamingChunkPaths.add(chunk.wavPath);
+        _streamingChunkDurationsMs.add(chunk.durationMs);
+        _streamingTotalDurationMs += chunk.durationMs;
+      }
+      _preparing = true;
+      ++_engineRevision;
+      _playbackError = null;
+      _resumePosition = Duration.zero;
+      try {
+        await player.setAudioSources(
+          [for (final path in _streamingChunkPaths) AudioSource.file(path)],
+          initialIndex: 0,
+          initialPosition: Duration.zero,
+        );
+        if (_disposed || revision != _sourceRevision) {
+          await _silence(stop: true);
+          _resetStreaming();
+          _recording = null;
+          mediaItem.add(null);
+          return;
+        }
+        _loadedRevision = revision;
+        _publish(recording);
+      } finally {
+        _preparing = false;
+        _broadcastPlaybackState();
+      }
+    });
+    if (autoPlay && !_disposed && revision == _sourceRevision && _wantsPlayback && !_stopped) {
+      await play(origin: 'streaming start');
+    }
+  }
+
+  Future<void> appendStreamingChunk({
+    required String bookId,
+    required int chapterIndex,
+    required int chunkIndex,
+    required String wavPath,
+    required int durationMs,
+  }) {
+    if (_disposed) return Future<void>.value();
+    return _serial(() async {
+      if (_disposed ||
+          !_streamingActive ||
+          _recording?.key != '$bookId:$chapterIndex') {
+        return;
+      }
+      if (chunkIndex < _streamingChunkPaths.length) return;
+      _streamingChunkPaths.add(wavPath);
+      _streamingChunkDurationsMs.add(durationMs);
+      _streamingTotalDurationMs += durationMs;
+      await player.addAudioSource(AudioSource.file(wavPath));
+      final item = mediaItem.value;
+      if (item != null) {
+        mediaItem.add(item.copyWith(duration: Duration(milliseconds: _streamingTotalDurationMs)));
+      }
+      if (_streamingWaitingForChunk) {
+        _streamingWaitingForChunk = false;
+        final gapMs = _underrunStartedAt == null
+            ? 0
+            : DateTime.now().difference(_underrunStartedAt!).inMilliseconds;
+        _underrunStartedAt = null;
+        streamingTotalUnderrunMs += gapMs;
+        _logDiagnostic('STREAMING_RESUMED gapMs=$gapMs chunk=$chunkIndex bufferDepth=$streamingBufferDepth');
+        if (_wantsPlayback && !_stopped && !_interrupted) {
+          await player.seek(Duration.zero, index: _streamingChunkPaths.length - 1);
+          unawaited(play(origin: 'streaming resume'));
+        }
+      } else {
+        _logDiagnostic('STREAMING_APPENDED chunk=$chunkIndex durationMs=$durationMs bufferDepth=$streamingBufferDepth');
+      }
+      _broadcastPlaybackState();
+    });
+  }
+
+  Future<void> finishStreamingChapter({
+    required String bookId,
+    required int chapterIndex,
+    String? finalWavPath,
+  }) {
+    if (_disposed) return Future<void>.value();
+    return _serial(() async {
+      if (_disposed ||
+          !_streamingActive ||
+          _recording?.key != '$bookId:$chapterIndex') {
+        return;
+      }
+      _streamingComplete = true;
+      if (finalWavPath != null && _recording != null) {
+        _recording = _Recording(
+          finalWavPath,
+          _recording!.title,
+          _recording!.author,
+          _recording!.bookId,
+          _recording!.index,
+          _recording!.count,
+        );
+      }
+      if (_streamingWaitingForChunk) {
+        _streamingWaitingForChunk = false;
+        _streamingActive = false;
+        _broadcastPlaybackState();
+        if (_wantsPlayback && !_stopped && !_interrupted) {
+          unawaited(_advanceToNextChapter());
+        }
+      } else {
+        _broadcastPlaybackState();
+      }
+    });
+  }
+
   bool isChapterPlaying(String bookId, int index) {
     if (_recording?.key != '$bookId:$index') return false;
-    return player.playing || playbackState.value.playing;
+    return player.playing || playbackState.value.playing || (_streamingActive && _wantsPlayback && !_stopped);
   }
 
   Future<void> unloadChapter(String bookId, int index) async {
@@ -562,6 +787,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     await stop();
     await _serial(() async {
       if (revision != _sourceRevision) return;
+      _resetStreaming();
       _recording = null;
       mediaItem.add(null);
     });
@@ -606,7 +832,18 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
             if (!current()) return;
             ++_engineRevision;
             _playbackError = null;
-            await player.setFilePath(recording.path, initialPosition: position);
+            if (_streamingActive &&
+                (!_streamingComplete || recording.path.startsWith('streaming://')) &&
+                _streamingChunkPaths.isNotEmpty) {
+              final resolved = _resolveStreamingPosition(position);
+              await player.setAudioSources(
+                [for (final path in _streamingChunkPaths) AudioSource.file(path)],
+                initialIndex: resolved.index,
+                initialPosition: resolved.offset,
+              );
+            } else {
+              await player.setFilePath(recording.path, initialPosition: position);
+            }
             _publish(recording);
           } finally {
             _preparing = false;
@@ -616,8 +853,10 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
             return;
           }
         }
-        if (player.processingState == ProcessingState.completed) {
-          await player.seek(Duration.zero);
+        if (player.processingState == ProcessingState.completed && !_streamingWaitingForChunk) {
+          await (_streamingActive
+              ? player.seek(Duration.zero, index: 0)
+              : player.seek(Duration.zero));
           _resumePosition = Duration.zero;
         }
         if (!current()) return;
@@ -678,7 +917,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     final saved = _preparing
         ? Future<void>.value()
         : _savePosition(
-            _resumePosition = _seeking ? _resumePosition : player.position,
+            _resumePosition = _seeking ? _resumePosition : effectivePosition,
           );
     // just_audio.pause() returns without a platform call when its Dart playing
     // flag is false. Always release the native engine on deliberate Pause:
@@ -709,7 +948,7 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
     final saved = _preparing
         ? Future<void>.value()
         : _savePosition(
-            _resumePosition = _seeking ? _resumePosition : player.position,
+            _resumePosition = _seeking ? _resumePosition : effectivePosition,
           );
     try {
       await _silence(stop: true);
@@ -732,16 +971,23 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
         return;
       }
       await _silencing;
-      final end = player.duration;
+      final end = effectiveDuration;
       var target = position < Duration.zero ? Duration.zero : position;
       if (end != null && end > Duration.zero && target > end) target = end;
-      _resumePosition = player.position;
+      _resumePosition = effectivePosition;
       _seeking = true;
       final released = _engineReleased.future;
       try {
+        final Future<void> seekFuture;
+        if (_streamingActive && _streamingChunkDurationsMs.isNotEmpty) {
+          final resolved = _resolveStreamingPosition(target);
+          seekFuture = player.seek(resolved.offset, index: resolved.index);
+        } else {
+          seekFuture = player.seek(target);
+        }
         final completed =
             await Future.any<bool>([
-              player.seek(target).then((_) => true),
+              seekFuture.then((_) => true),
               released.then((_) => false),
             ]).timeout(
               const Duration(seconds: 5),
@@ -758,9 +1004,9 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
           _result(id, 'cancelled after native engine release');
           return;
         }
-        _resumePosition = player.position;
+        _resumePosition = effectivePosition;
         _broadcastPlaybackState();
-        await _savePosition(player.position);
+        await _savePosition(_resumePosition);
         _result(id, 'completed');
       } catch (_) {
         _result(id, 'failed');
@@ -772,10 +1018,10 @@ class DogreaderAudioHandler extends BaseAudioHandler with SeekHandler {
   }
 
   @override
-  Future<void> rewind() => seek(player.position - const Duration(seconds: 15));
+  Future<void> rewind() => seek(effectivePosition - const Duration(seconds: 15));
   @override
   Future<void> fastForward() =>
-      seek(player.position + const Duration(seconds: 30));
+      seek(effectivePosition + const Duration(seconds: 30));
 
   // Preserve the inherited no-op behavior while making headset skip delivery
   // observable. Chapter navigation semantics are outside this investigation.

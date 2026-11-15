@@ -13,6 +13,7 @@ import 'native_g2p.dart';
 import 'frontend_install.dart';
 import 'generation_journal.dart';
 import 'chunk_store.dart';
+import 'pcm_trim.dart';
 
 Future<String> fileHash(File file) async =>
     (await sha256.bind(file.openRead()).first).toString();
@@ -194,34 +195,103 @@ Future<void> generate(Map<String, dynamic> args, SendPort port) async {
           port.send({'phase': 'generating', 'run': run, 'chunk': i + 1,
             'totalChunks': prepared.chunks.length, 'status': 'Run $run: generating chunk ${i + 1}/${prepared.chunks.length}'});
           var pcm = chunks?.read(i);
+          var synthMs = 0;
+          var trimmedLeadingMs = 0;
+          var trimmedTrailingMs = 0;
           if (pcm == null) {
+            final synthTimer = Stopwatch()..start();
             final audio = useMisaki
                 ? tts.generateWithConfig(text: '', config: sherpa.OfflineTtsGenerationConfig(
                     sid: args['sid'] as int, speed: 1.0, phonemeCodepoints: [prepared.chunks[i].runes.toList()]))
                 : tts.generate(text: prepared.chunks[i], sid: args['sid'] as int, speed: 1.0);
-            journal?.record('chunkInferenceEnd', {'run': run, 'chunk': i + 1, 'frames': audio.samples.length});
+            synthTimer.stop();
+            synthMs = synthTimer.elapsedMilliseconds;
+            journal?.record('chunkInferenceEnd', {
+              'run': run,
+              'chunk': i + 1,
+              'frames': audio.samples.length,
+              'synthMs': synthMs,
+            });
             if (audio.sampleRate != 24000 || audio.samples.isEmpty) throw StateError('Empty or unexpected audio');
-            pcm = encodePcm16(audio.samples);
+            final trimmed = trimLeadingTrailingSilence(audio.samples);
+            trimmedLeadingMs = (trimmed.trimmedLeadingSamples * 1000) ~/ 24000;
+            trimmedTrailingMs = (trimmed.trimmedTrailingSamples * 1000) ~/ 24000;
+            pcm = encodePcm16(trimmed.samples);
             chunks?.write(i, pcm);
-            journal?.record('chunkCommitted', {'run': run, 'chunk': i + 1, 'frames': audio.samples.length});
+            journal?.record('chunkCommitted', {
+              'run': run,
+              'chunk': i + 1,
+              'frames': trimmed.samples.length,
+              'trimmedLeadingMs': trimmedLeadingMs,
+              'trimmedTrailingMs': trimmedTrailingMs,
+            });
           } else {
             journal?.record('chunkRestored', {'run': run, 'chunk': i + 1, 'frames': pcm.bytes.length ~/ 2});
           }
           journal?.checkCancellation();
           if (i == 0) firstAudioMs = timer.elapsedMilliseconds;
           final chunkFrames = pcm.bytes.length ~/ 2;
+          final chunkDurationMs = (chunkFrames * 1000) ~/ 24000;
           peak = math.max(peak, pcm.peak);
           sum += pcm.sum; squares += pcm.squareSum;
           clipped += pcm.clippedSamples; fullScale += pcm.fullScaleSamples;
-          boundaries.add({'chunk': i + 1, 'startFrame': frames,
-            'frames': chunkFrames, 'firstPcm': pcm.firstPcm, 'lastPcm': pcm.lastPcm,
-            'joinDeltaPcm': previousPcm == null ? null : pcm.firstPcm - previousPcm});
+          boundaries.add({
+            'chunk': i + 1,
+            'startFrame': frames,
+            'frames': chunkFrames,
+            'synthMs': synthMs,
+            'trimmedLeadingMs': trimmedLeadingMs,
+            'trimmedTrailingMs': trimmedTrailingMs,
+            'firstPcm': pcm.firstPcm,
+            'lastPcm': pcm.lastPcm,
+            'joinDeltaPcm': previousPcm == null ? null : pcm.firstPcm - previousPcm,
+          });
           previousPcm = pcm.lastPcm;
           wav.writeFromSync(pcm.bytes);
           frames += chunkFrames;
-          journal?.record('chunkWritten', {'run': run, 'chunk': i + 1, 'totalFrames': frames});
-          port.send({'phase': 'generating', 'run': run, 'chunk': i + 1,
-            'totalChunks': prepared.chunks.length, 'completedChunks': i + 1, 'status': 'Run $run: ${i + 1}/${prepared.chunks.length} chunks saved'});
+          Map<String, dynamic>? readyChunk;
+          final streamDirPath = args['streamDir'] as String?;
+          if (streamDirPath != null && run == 1) {
+            final streamDir = Directory(streamDirPath);
+            if (!streamDir.existsSync()) streamDir.createSync(recursive: true);
+            final chunkName = 'chunk_${i.toString().padLeft(5, '0')}.wav';
+            final chunkFile = File('$streamDirPath/$chunkName');
+            final tmpChunkFile = File('$streamDirPath/$chunkName.tmp');
+            final out = tmpChunkFile.openSync(mode: FileMode.write);
+            try {
+              out.writeFromSync(wavHeader(chunkFrames, 24000));
+              out.writeFromSync(pcm.bytes);
+              out.flushSync();
+            } finally {
+              out.closeSync();
+            }
+            tmpChunkFile.renameSync(chunkFile.path);
+            readyChunk = {
+              'index': i,
+              'wavPath': chunkFile.path,
+              'frames': chunkFrames,
+              'durationMs': chunkDurationMs,
+              'synthMs': synthMs,
+              'trimmedLeadingMs': trimmedLeadingMs,
+              'trimmedTrailingMs': trimmedTrailingMs,
+            };
+          }
+          journal?.record('chunkWritten', {
+            'run': run,
+            'chunk': i + 1,
+            'totalFrames': frames,
+            'chunkDurationMs': chunkDurationMs,
+            'synthMs': synthMs,
+          });
+          port.send({
+            'phase': 'generating',
+            'run': run,
+            'chunk': i + 1,
+            'totalChunks': prepared.chunks.length,
+            'completedChunks': i + 1,
+            'readyChunk': ?readyChunk,
+            'status': 'Run $run: ${i + 1}/${prepared.chunks.length} chunks saved',
+          });
         }
         wav.setPositionSync(0);
         wav.writeFromSync(wavHeader(frames, 24000));

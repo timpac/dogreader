@@ -115,6 +115,17 @@ class GenerationService : Service() {
                                     for (key in listOf("phase", "run", "chunk", "totalChunks", "completedChunks", "status")) {
                                         if (state.optString("phase") != "cancelling" && event.has(key)) state.put(if (key == "status") "message" else key, event.get(key))
                                     }
+                                    if (event.has("readyChunk")) {
+                                        val chunk = event.getJSONObject("readyChunk")
+                                        val list = state.optJSONArray("readyChunks") ?: JSONArray()
+                                        val idx = chunk.optInt("index", -1)
+                                        var exists = false
+                                        for (i in 0 until list.length()) {
+                                            if (list.getJSONObject(i).optInt("index", -2) == idx) { exists = true; break }
+                                        }
+                                        if (!exists) list.put(chunk)
+                                        state.put("readyChunks", list)
+                                    }
                                     state.put("lastWorkerEvent", event)
                                     persist(); record("progress", event); notifications.notify(NOTIFICATION, notification())
                                 }

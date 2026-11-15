@@ -112,9 +112,17 @@ class EnglishFrontend {
       final payload = phones + (token.whitespace.isEmpty ? '' : ' ');
       final length = payload.runes.length;
       if (length > 400) throw FormatException('Phoneme token too long: "${token.text}".');
-      if (current.runes.length + length > 400) {
-        if (!currentSpeech) throw const FormatException('Excessive punctuation before speech.');
-        flush();
+      final maxChunkRunes = chunks.isEmpty ? 160 : 340;
+      if (current.runes.length + length > maxChunkRunes) {
+        if (!currentSpeech) {
+          if (chunks.isEmpty && current.runes.length + length <= 400) {
+            // Fall back to standard limit if first chunk has long punctuation prefix.
+          } else {
+            throw const FormatException('Excessive punctuation before speech.');
+          }
+        } else {
+          flush();
+        }
       }
       current += payload; currentSpeech |= lexical;
       coverage.add({'text': token.text, 'tag': token.tag, 'rating': token.rating,
@@ -123,7 +131,15 @@ class EnglishFrontend {
         'role': lexical ? 'speech' : 'punctuation'});
       phoneOffset += length;
       cursor = end;
-      if (RegExp(r'[.!?…]').hasMatch(phones)) flush();
+      final isSentenceEnd = RegExp(r'[.!?…]').hasMatch(phones);
+      final isFirstChunkClauseEnd = chunks.isEmpty &&
+          currentSpeech &&
+          current.runes.length >= 60 &&
+          RegExp(r'[,;:—–]').hasMatch(phones);
+      if (isFirstChunkClauseEnd ||
+          (isSentenceEnd && (chunks.isEmpty || current.runes.length >= 160))) {
+        flush();
+      }
     }
     if (RegExp(r'\S').hasMatch(normalized.text.substring(cursor))) {
       throw const FormatException('Frontend left unprocessed text. No audio generated.');

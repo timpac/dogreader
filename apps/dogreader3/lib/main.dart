@@ -77,6 +77,43 @@ Future<void> main() async {
   offlineNarration = OfflineNarration(
     beforeSelect: (book, index) => audioHandler.unloadChapter(book, index),
     isChapterPlaying: (book, index) => audioHandler.isChapterPlaying(book, index),
+    onStartStreaming: ({
+      required title,
+      required author,
+      required bookId,
+      required chapterIndex,
+      required chapterCount,
+      required initialChunks,
+    }) => audioHandler.startStreamingChapter(
+      title: title,
+      author: author,
+      bookId: bookId,
+      chapterIndex: chapterIndex,
+      chapterCount: chapterCount,
+      initialChunks: initialChunks,
+    ),
+    onAppendStreamingChunk: ({
+      required bookId,
+      required chapterIndex,
+      required chunkIndex,
+      required wavPath,
+      required int durationMs,
+    }) => audioHandler.appendStreamingChunk(
+      bookId: bookId,
+      chapterIndex: chapterIndex,
+      chunkIndex: chunkIndex,
+      wavPath: wavPath,
+      durationMs: durationMs,
+    ),
+    onFinishStreaming: ({
+      required bookId,
+      required chapterIndex,
+      finalWavPath,
+    }) => audioHandler.finishStreamingChapter(
+      bookId: bookId,
+      chapterIndex: chapterIndex,
+      finalWavPath: finalWavPath,
+    ),
   );
   unawaited(offlineNarration.initialize());
   unawaited(NativeMediaDiagnostics.start(diagnostics));
@@ -2164,21 +2201,23 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
     subscriptions.add(
       player.positionStream.listen((value) {
         if (!mounted) return;
-        setState(() => position = value);
+        setState(() => position = audioHandler.isStreamingChapter ? audioHandler.effectivePosition : value);
       }),
     );
 
     subscriptions.add(
       player.durationStream.listen((value) {
-        if (mounted && value != null) {
-          setState(() => duration = value);
+        if (!mounted) return;
+        final next = audioHandler.isStreamingChapter ? audioHandler.effectiveDuration : value;
+        if (next != null) {
+          setState(() => duration = next);
         }
       }),
     );
 
     subscriptions.add(
       player.processingStateStream.listen((state) {
-        if (state == ja.ProcessingState.completed) {
+        if (state == ja.ProcessingState.completed && !audioHandler.isStreamingChapter) {
           if (mounted) {
             setState(() {
               playing = false;
@@ -2189,9 +2228,23 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
       }),
     );
 
+    offlineNarration.addListener(offlineChanged);
     narrationDelivery.addListener(deliveryChanged);
     unawaited(narrationDelivery.reconcile());
     restore();
+  }
+
+  void offlineChanged() {
+    if (!mounted) return;
+    if (audioHandler.isStreamingChapter && audioHandler.mediaItem.value?.id == chapterKey) {
+      setState(() {
+        audioPath ??= 'streaming://$chapterKey';
+        duration = audioHandler.effectiveDuration ?? duration;
+        position = audioHandler.effectivePosition;
+      });
+    } else {
+      setState(() {});
+    }
   }
 
   String? lastDelivery;
@@ -2215,6 +2268,13 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
     bool active() => mounted && generation == _restoreGeneration &&
         (ModalRoute.of(context)?.isCurrent ?? true);
     try {
+      if (audioHandler.isStreamingChapter && audioHandler.mediaItem.value?.id == chapterKey) {
+        audioPath = 'streaming://$chapterKey';
+        duration = audioHandler.effectiveDuration ?? Duration.zero;
+        position = audioHandler.effectivePosition;
+        playing = player.playing;
+        return;
+      }
       await narrationDelivery.waitForDownload(widget.book.id, widget.chapterIndex);
       if (!active()) return;
       final root = await getApplicationDocumentsDirectory();
@@ -2411,6 +2471,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
 
   @override
   void dispose() {
+    offlineNarration.removeListener(offlineChanged);
     narrationDelivery.removeListener(deliveryChanged);
     ++_restoreGeneration;
     for (final sub in subscriptions) {
@@ -2419,9 +2480,30 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
     super.dispose();
   }
 
+  Future<void> startRealtimeOffline() async {
+    try {
+      setState(() => error = null);
+      await offlineNarration.generate(
+        bookId: widget.book.id,
+        bookTitle: widget.book.title,
+        index: widget.chapterIndex,
+        chapter: widget.book.chapters[widget.chapterIndex],
+        sid: 3,
+        threads: 2,
+        author: widget.book.author,
+        chapterCount: widget.book.chapters.length,
+        streamPlayback: true,
+      );
+    } catch (e) {
+      if (mounted) setState(() => error = '$e');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final hasAudio = audioPath != null;
+    final streamingThis = audioHandler.isStreamingChapter &&
+        audioHandler.mediaItem.value?.id == chapterKey;
     final maxMs = duration.inMilliseconds > 0
         ? duration.inMilliseconds.toDouble()
         : 1.0;
@@ -2463,13 +2545,44 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
                 ),
                 const SizedBox(height: 20),
                 if (loading) const CircularProgressIndicator(),
-                if (!loading && !hasAudio)
+                if (!loading && !hasAudio) ...[
+                  if (offlineNarration.isStreaming) ...[
+                    const CircularProgressIndicator(),
+                    const SizedBox(height: 12),
+                    Text(offlineNarration.status, textAlign: TextAlign.center),
+                    const SizedBox(height: 8),
+                    TextButton(
+                      onPressed: () => offlineNarration.cancel(),
+                      child: const Text('Cancel offline generation'),
+                    ),
+                  ] else ...[
+                    if (offlineNarration.ready && !offlineNarration.busy) ...[
+                      FilledButton.icon(
+                        onPressed: startRealtimeOffline,
+                        icon: const Icon(Icons.play_arrow),
+                        label: const Text('Play Real-Time (Offline)'),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    Text(
+                      narrationDelivery.books[widget.book.id]?[widget.chapterIndex] == null
+                          ? 'Narration is not downloaded yet. Finished cloud audio downloads automatically.'
+                          : narrationDeliveryLabel(narrationDelivery.books[widget.book.id]?[widget.chapterIndex]),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ],
+                if (streamingThis && offlineNarration.active) ...[
+                  const SizedBox(height: 8),
                   Text(
-                    narrationDelivery.books[widget.book.id]?[widget.chapterIndex] == null
-                        ? 'Narration is not downloaded yet. Finished cloud audio downloads automatically.'
-                        : narrationDeliveryLabel(narrationDelivery.books[widget.book.id]?[widget.chapterIndex]),
+                    audioHandler.isStreamingBuffering
+                        ? 'Buffering next segment… (${offlineNarration.status})'
+                        : 'Streaming offline (${offlineNarration.status})'
+                          '${offlineNarration.timeToFirstAudioMs != null ? ' • First audio ${(offlineNarration.timeToFirstAudioMs! / 1000).toStringAsFixed(1)}s' : ''}',
                     textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodySmall,
                   ),
+                ],
                 if (!hasAudio && canRetryNarrationDownload(narrationDelivery.books[widget.book.id]?[widget.chapterIndex]))
                   TextButton.icon(
                     onPressed: narrationDelivery.deliveryInFlight(widget.book.id, widget.chapterIndex) ? null : () async {

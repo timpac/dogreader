@@ -97,9 +97,41 @@ class FakePlayer implements AudioPlayer {
     if (emitStateOnStop) emitState();
     if (playback != null && !playback!.isCompleted) playback!.complete();
   }
+  final List<AudioSource> playlistSources = [];
+  @override
+  int? currentIndex = 0;
+
+  @override
+  Future<Duration?> setAudioSources(
+    List<AudioSource> sources, {
+    bool preload = true,
+    int? initialIndex,
+    Duration? initialPosition,
+    ShuffleOrder? shuffleOrder,
+  }) async {
+    loads++;
+    if (preparing != null) await preparing!.future;
+    if (loadError != null) throw loadError!;
+    playlistSources
+      ..clear()
+      ..addAll(sources);
+    currentIndex = initialIndex ?? 0;
+    audioSource = sources.isEmpty ? null : sources.first;
+    position = initialPosition ?? Duration.zero;
+    processingState = ProcessingState.ready;
+    emitState();
+    return duration;
+  }
+
+  @override
+  Future<void> addAudioSource(AudioSource source) async {
+    playlistSources.add(source);
+  }
+
   @override
   Future<void> seek(Duration? target, {int? index}) async {
     if (!ignoreSeek) {
+      if (index != null) currentIndex = index;
       position = target ?? Duration.zero;
       if (processingState == ProcessingState.completed) {
         processingState = ProcessingState.ready;

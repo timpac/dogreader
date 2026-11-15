@@ -49,7 +49,16 @@ class _OfflineNarrationScreenState extends State<OfflineNarrationScreen> {
     if (mounted) setState(() => starting = false);
   }
 
-  Future<void> generate() async {
+  Future<void> _saveSettings() => File('${controller.root}/offline-settings.json').writeAsString(
+        jsonEncode({
+          'sid': sid,
+          'threads': threads,
+          'variant': controller.selectedVariant.name,
+        }),
+        flush: true,
+      );
+
+  Future<void> generate({bool streamPlayback = false}) async {
     if (recording != null) {
       final accepted = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
         title: const Text('Generate another offline recording?'),
@@ -59,9 +68,20 @@ class _OfflineNarrationScreenState extends State<OfflineNarrationScreen> {
       if (accepted != true) return;
     }
     await action(() async {
-      await File('${controller.root}/offline-settings.json').writeAsString(jsonEncode({'sid': sid, 'threads': threads}), flush: true);
-      await controller.generate(bookId: widget.bookId, bookTitle: widget.bookTitle,
-        index: index, chapter: widget.chapters[index], sid: sid, threads: threads);
+      await _saveSettings();
+      await controller.generate(
+        bookId: widget.bookId,
+        bookTitle: widget.bookTitle,
+        index: index,
+        chapter: widget.chapters[index],
+        sid: sid,
+        threads: threads,
+        chapterCount: widget.chapters.length,
+        streamPlayback: streamPlayback,
+      );
+      if (streamPlayback && mounted) {
+        await widget.onPlay(index);
+      }
     });
   }
 
@@ -74,17 +94,42 @@ class _OfflineNarrationScreenState extends State<OfflineNarrationScreen> {
     final chapter = current?['chapter'];
     final ownJob = chapter is Map && chapter['key'] == '${widget.bookId}:$index';
     final item = recording;
+    final isInt8 = controller.selectedVariant == OfflineModelVariant.int8;
+    final downloadLabel = isInt8 ? 'Download INT8 offline files (155 MB)' : 'Download FP32 offline files (372 MB)';
+    final setupHint = isInt8
+        ? 'Optional download: INT8 132.4 MB + English frontend 22.2 MB. Recommended for real-time Pixel playback. Allow 600 MB free during setup.'
+        : 'Optional download: FP32 349.9 MB + English frontend 22.2 MB. Allow 1.5 GB free during setup. Keep this screen open during installation.';
     return Scaffold(appBar: AppBar(title: const Text('Kokoro Offline')), body: ListView(
       padding: const EdgeInsets.all(20), children: [
         Text(widget.bookTitle, style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 12),
-        const Text('FP32 • Misaki English • entirely on this device after installation. Cloud Chirp and cloud Kokoro remain available on the narration screen.'),
+        const Text('Kokoro • Misaki English • entirely on this device after installation. Cloud Chirp and cloud Kokoro remain available on the narration screen.'),
         const SizedBox(height: 12),
         DropdownButtonFormField<int>(key: ValueKey('chapter-$index'), initialValue: index, isExpanded: true,
           decoration: const InputDecoration(labelText: 'Chapter'),
           items: [for (var i = 0; i < widget.chapters.length; i++) DropdownMenuItem(value: i,
             child: Text('${i + 1}. ${widget.chapters[i].title}', overflow: TextOverflow.ellipsis))],
           onChanged: busy ? null : (value) => setState(() => index = value!)),
+        const SizedBox(height: 12),
+        DropdownButtonFormField<OfflineModelVariant>(
+          key: ValueKey('variant-${controller.selectedVariant.name}'),
+          initialValue: controller.selectedVariant,
+          isExpanded: true,
+          decoration: const InputDecoration(labelText: 'Offline model'),
+          items: [
+            DropdownMenuItem(
+              value: OfflineModelVariant.int8,
+              child: Text('INT8 (Fast real-time • 132 MB)${controller.int8Ready ? " ✓" : ""}'),
+            ),
+            DropdownMenuItem(
+              value: OfflineModelVariant.fp32,
+              child: Text('FP32 (High quality • 350 MB)${controller.fp32Ready ? " ✓" : ""}'),
+            ),
+          ],
+          onChanged: busy ? null : (value) {
+            if (value != null) controller.setVariant(value);
+          },
+        ),
         const SizedBox(height: 12),
         DropdownButtonFormField<int>(key: ValueKey('voice-$sid'), initialValue: sid, decoration: const InputDecoration(labelText: 'Offline voice'),
           items: [for (final voice in offlineVoices.entries) DropdownMenuItem(value: voice.key, child: Text(voice.value))],
@@ -93,16 +138,26 @@ class _OfflineNarrationScreenState extends State<OfflineNarrationScreen> {
           items: [for (final n in [1, 2, 4]) DropdownMenuItem(value: n, child: Text('$n'))],
           onChanged: busy ? null : (value) => setState(() => threads = value!)),
         const SizedBox(height: 16),
-        Text(controller.ready ? 'Offline files installed.' : 'Optional download: FP32 349.9 MB + English frontend 22.2 MB. Allow 1.5 GB free during setup. Keep this screen open during installation.'),
+        Text(controller.ready ? 'Offline files installed.' : setupHint),
         if (!controller.ready) OutlinedButton(onPressed: busy ? null : () => action(controller.install),
-          child: const Text('Download offline files (372 MB)')),
+          child: Text(downloadLabel)),
         const SizedBox(height: 16),
-        FilledButton.icon(onPressed: busy || !controller.ready ? null : generate,
-          icon: const Icon(Icons.offline_bolt), label: const Text('Generate chapter offline')),
+        FilledButton.icon(
+          onPressed: busy || !controller.ready ? null : () => generate(streamPlayback: true),
+          icon: const Icon(Icons.play_circle_filled),
+          label: const Text('Play Real-Time (Offline)'),
+        ),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          onPressed: busy || !controller.ready ? null : () => generate(streamPlayback: false),
+          icon: const Icon(Icons.offline_bolt),
+          label: const Text('Generate chapter offline (batch)'),
+        ),
         if (controller.active) ...[
           const SizedBox(height: 12),
           LinearProgressIndicator(value: total > 0 ? completed / total : null),
-          Text('$completed/$total chunks saved'),
+          Text('$completed/$total chunks saved'
+            '${controller.timeToFirstAudioMs != null ? " • First audio ${(controller.timeToFirstAudioMs! / 1000).toStringAsFixed(1)}s" : ""}'),
           Text(chapter is Map ? '${chapter['bookTitle']} • ${chapter['chapterTitle']}' : ''),
           OutlinedButton(onPressed: () => action(controller.cancel), child: const Text('Cancel offline generation')),
         ],
@@ -112,7 +167,7 @@ class _OfflineNarrationScreenState extends State<OfflineNarrationScreen> {
         SelectableText(controller.status),
         if (item != null) ...[
           const Divider(height: 32),
-          Text('Completed • Kokoro Offline FP32 • ${item['voice']}'),
+          Text('Completed • Kokoro Offline • ${item['voice']}'),
           Text('${((item['result'] as Map)['audioSeconds'] as num).toStringAsFixed(1)} seconds of audio'),
           FilledButton.icon(onPressed: starting ? null : () => action(() async {
             await controller.select(item);
@@ -127,7 +182,7 @@ class _OfflineNarrationScreenState extends State<OfflineNarrationScreen> {
         if (error != null) Text(error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
         TextButton(onPressed: () => showLicensePage(context: context, applicationName: 'Dogreader 3.0'), child: const Text('Offline component licenses')),
         const SizedBox(height: 16),
-        const Text('You can switch apps or lock the screen during generation. The progress notification offers Cancel. Android time quotas and battery restrictions still apply. Names are best-effort; unresolved input reports an error. Completed PCM chunks are retained for retry; no automatic restart.'),
+        const Text('You can switch apps or lock the screen during generation and playback. The progress notification offers Cancel. Android time quotas and battery restrictions still apply. Completed PCM chunks are retained for retry.'),
       ]));
   });
 }

@@ -71,11 +71,12 @@ Future<void> runGenerationService() async {
       if (event['result'] != null)
         results.add(Map<String, dynamic>.from(event['result'] as Map));
       final progress = <String, dynamic>{};
-      for (final key in ['phase', 'run', 'chunk', 'totalChunks', 'completedChunks', 'status']) {
+      for (final key in ['phase', 'run', 'chunk', 'totalChunks', 'completedChunks', 'readyChunk', 'status']) {
         if (event.containsKey(key)) progress[key] = event[key];
       }
-      if (progress.isNotEmpty)
+      if (progress.isNotEmpty) {
         await generationChannel.invokeMethod('progress', jsonEncode(progress));
+      }
     }
   } catch (e) {
     message = '$e';
