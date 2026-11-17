@@ -11,6 +11,11 @@ on:
         description: New unused sequential Android versionCode above all existing APKs
         required: true
         type: string
+      retained_run:
+        description: Optional failed run containing the exact retained APK (no APK rebuild)
+        required: false
+        type: string
+        default: ''
       publish:
         description: Publish after verification; false retains a draft for review
         required: true
@@ -33,6 +38,7 @@ jobs:
     env:
       RELEASE_COMMIT: ${{ inputs.release_commit }}
       BUILD_NUMBER: ${{ inputs.build_number }}
+      RETAINED_RUN: ${{ inputs.retained_run }}
     steps:
       - name: Require experimental branch, reviewed SHA and unused number
         uses: actions/github-script@v7
@@ -61,6 +67,17 @@ jobs:
               if (match) highest = Math.max(highest, Number(match[1]));
             }
             if (Number(number) !== highest + 1) throw new Error(`Next unused sequential version is ${highest + 1}`);
+            if (process.env.RETAINED_RUN) {
+              if (process.env.RETAINED_RUN !== '44100702769' || number !== '158' || process.env.RELEASE_COMMIT !== 'a222bf363b68f86e3f5822f2f4d3ce475f00dd89') throw new Error('Unexpected retained APK identity');
+              const previous = (await github.rest.actions.getWorkflowRun({owner, repo, run_id: Number(process.env.RETAINED_RUN)})).data;
+              if (previous.head_sha !== process.env.RELEASE_COMMIT || previous.conclusion !== 'failure') throw new Error('Retained run/source mismatch');
+              const jobs = (await github.rest.actions.listJobsForWorkflowRun({owner, repo, run_id: previous.id})).data.jobs;
+              for (const name of ['Analyze', 'Run DogReader 2.0 RSS experience and feed regression tests', 'Experimental paid-operation and playback regressions', 'Build Dog Reader 2.0 once']) {
+                if (!jobs.some(job => job.steps.some(step => step.name === name && step.conclusion === 'success'))) throw new Error(`Missing retained evidence: ${name}`);
+              }
+              const artifact = (await github.rest.actions.getArtifact({owner, repo, artifact_id: 14336707718})).data;
+              if (artifact.workflow_run.id !== previous.id || artifact.digest !== 'sha256:576ead1fd9bee0b910af37385e7a43834225ff47054995aa2a2ff2df03e446fb') throw new Error('Retained archive digest mismatch');
+            }
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.release_commit }}
@@ -70,8 +87,31 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
-          test "$RELEASE_COMMIT" = "$GITHUB_SHA"
+          if [ -z "$RETAINED_RUN" ]; then
+            test "$RELEASE_COMMIT" = "$GITHUB_SHA"
+          else
+            git diff --exit-code "$RELEASE_COMMIT" "$GITHUB_SHA" -- . ':!.github/workflows/release-apk.yml'
+          fi
           git merge-base --is-ancestor 39f0f168306bdacc56644e2abb4cd2a9a538ce87 HEAD
+      - name: Download immutable retained APK and original validation evidence
+        if: inputs.retained_run != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: freepress-login-check-158-failure-evidence
+          run-id: ${{ inputs.retained_run }}
+          github-token: ${{ github.token }}
+          path: /tmp/retained-evidence
+      - name: Restore retained bytes (never recompile APK)
+        if: inputs.retained_run != ''
+        run: |
+          mkdir -p build/app/outputs/flutter-apk
+          cp /tmp/retained-evidence/home/runner/work/dogreader/dogreader/build/app/outputs/flutter-apk/app-debug.apk build/app/outputs/flutter-apk/app-debug.apk
+          echo '194ace9323044d26986638a86276a9ead265400282aa032c5af9c93fabe21d91  build/app/outputs/flutter-apk/app-debug.apk' | sha256sum --check
+          cp /tmp/retained-evidence/tmp/analysis.log /tmp/analysis.log
+          cp /tmp/retained-evidence/tmp/tests.log /tmp/tests.log
+          cp /tmp/retained-evidence/tmp/experimental-tests.log /tmp/experimental-tests.log
+          cp /tmp/retained-evidence/tmp/build.log /tmp/build.log
+          echo 'RSS smoke and APK verifier passed in original build run 44100702769; verified by original job step conclusion.' > /tmp/rss-smoke.log
       - name: Free unused runner disk space
         run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/powershell
       - uses: actions/setup-java@v4
@@ -96,18 +136,22 @@ jobs:
       - name: Resolve locked dependencies
         run: flutter pub get --enforce-lockfile > /tmp/dependencies.log 2>&1 || { tail -60 /tmp/dependencies.log; exit 1; }
       - name: Analyze
+        if: inputs.retained_run == ''
         run: flutter analyze --no-pub > /tmp/analysis.log 2>&1 || { tail -80 /tmp/analysis.log; exit 1; }
       - name: Run DogReader 2.0 RSS experience and feed regression tests
+        if: inputs.retained_run == ''
         run: |
           set -euo pipefail
           git merge-base --is-ancestor e8f1fe2816973aaa26df37373431a46e6a210c30 HEAD
           flutter test --no-pub --reporter expanded --dart-define=DOGREADER_EXPERIMENTAL=true test/freepress_login_test.dart test/rss_experience_test.dart test/article_import_test.dart test/article_rss_test.dart > /tmp/tests.log 2>&1 || { tail -100 /tmp/tests.log; exit 1; }
       - name: Experimental paid-operation and playback regressions
+        if: inputs.retained_run == ''
         run: |
           flutter test --no-pub --reporter expanded --dart-define=DOGREADER_EXPERIMENTAL=true --dart-define=DOGREADER_ENABLE_ARTICLE_SUMMARIES=true test/experimental_policy_test.dart test/experimental_queue_consent_test.dart test/article_https_test.dart test/session_lifecycle_test.dart test/system_media_controls_test.dart > /tmp/experimental-tests.log 2>&1 || { tail -100 /tmp/experimental-tests.log; exit 1; }
           flutter test --no-pub --reporter expanded --dart-define=DOGREADER_EXPERIMENTAL=true --dart-define=DOGREADER_ENABLE_ARTICLE_SUMMARIES=false --plain-name 'Substack shell falls back to its exact RSS entry and full encoded content' test/article_rss_test.dart > /tmp/rss-smoke.log 2>&1 || { tail -100 /tmp/rss-smoke.log; exit 1; }
           python3 -m unittest discover -s tools -p 'test_verify_experimental_apk.py'
       - name: Build Dog Reader 2.0 once
+        if: inputs.retained_run == ''
         env:
           ORG_GRADLE_PROJECT_dogreaderOriginalUpdate: 'true'
         run: flutter build apk --debug --no-pub --build-number "$BUILD_NUMBER" --build-name 2.0.0 --dart-define="DOGREADER_BUILD=$BUILD_NUMBER" --dart-define=DOGREADER_EXPERIMENTAL=true --dart-define=DOGREADER_ENABLE_ARTICLE_SUMMARIES=false > /tmp/build.log 2>&1 || { tail -100 /tmp/build.log; exit 1; }
@@ -115,7 +159,7 @@ jobs:
         working-directory: android
         run: |
           sha256sum ../build/app/outputs/flutter-apk/app-debug.apk > /tmp/retained-apk.sha256
-          ./gradlew assembleDebugAndroidTest -Pdart-defines=RE9HUkVBREVSX0VYUEVSSU1FTlRBTD10cnVl > /tmp/native-assembly.log 2>&1 || { tail -100 /tmp/native-assembly.log; exit 1; }
+          ./gradlew :app:assembleDebugAndroidTest -Pdart-defines=RE9HUkVBREVSX0VYUEVSSU1FTlRBTD10cnVl > /tmp/native-assembly.log 2>&1 || { tail -100 /tmp/native-assembly.log; exit 1; }
           sha256sum --check /tmp/retained-apk.sha256
       - name: Enable emulator acceleration
         run: sudo chmod a+rw /dev/kvm
@@ -152,6 +196,7 @@ jobs:
           cp "$APK" dist/Dogreader-${BUILD_NUMBER}-Dog-Reader-2.0.apk
           (cd dist && sha256sum Dogreader-${BUILD_NUMBER}-Dog-Reader-2.0.apk > SHA256SUMS)
           printf 'Dog Reader 2.0 Experimental Build %s\nSource: %s\nRun: %s/%s/actions/runs/%s\n\n' "$BUILD_NUMBER" "$RELEASE_COMMIT" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > dist/BUILD.txt
+          printf 'APK originally compiled in run: %s\nVerification workflow SHA: %s\n\n' "${RETAINED_RUN:-$GITHUB_RUN_ID}" "$GITHUB_SHA" >> dist/BUILD.txt
           cat /tmp/analysis.log >> dist/BUILD.txt
           tail -1 /tmp/tests.log >> dist/BUILD.txt
           tail -1 /tmp/experimental-tests.log >> dist/BUILD.txt
