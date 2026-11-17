@@ -107,6 +107,9 @@ class FreePressLoginActivity : Activity() {
             }
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                    // Secure publisher-owned page resources may include verification
+                    // frames on another host. Restrict top-level navigation only.
+                    if (!request.isForMainFrame) return request.url.scheme != "https"
                     if (allowedUrl(request.url.toString())) return false
                     status.text = "This destination cannot open in the login check. Use the site's email sign-in if available."
                     return true
