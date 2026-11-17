@@ -156,12 +156,17 @@ jobs:
         env:
           ORG_GRADLE_PROJECT_dogreaderOriginalUpdate: 'true'
         run: flutter build apk --debug --no-pub --build-number "$BUILD_NUMBER" --build-name 2.0.0 --dart-define="DOGREADER_BUILD=$BUILD_NUMBER" --dart-define=DOGREADER_EXPERIMENTAL=true --dart-define=DOGREADER_ENABLE_ARTICLE_SUMMARIES=false > /tmp/build.log 2>&1 || { tail -100 /tmp/build.log; exit 1; }
+      - name: Set up the pinned Gradle version for native test assembly
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+          cache-disabled: true
       - name: Assemble native policy tests without rebuilding the retained APK
         working-directory: android
         run: |
           printf 'sdk.dir=%s\nflutter.sdk=%s\nflutter.versionName=2.0.0\nflutter.versionCode=%s\nflutter.buildMode=debug\n' "$ANDROID_HOME" "$FLUTTER_ROOT" "$BUILD_NUMBER" > local.properties
           sha256sum ../build/app/outputs/flutter-apk/app-debug.apk > /tmp/retained-apk.sha256
-          ./gradlew :app:assembleDebugAndroidTest -Pdart-defines=RE9HUkVBREVSX0VYUEVSSU1FTlRBTD10cnVl > /tmp/native-assembly.log 2>&1 || { tail -100 /tmp/native-assembly.log; exit 1; }
+          gradle :app:assembleDebugAndroidTest -Pdart-defines=RE9HUkVBREVSX0VYUEVSSU1FTlRBTD10cnVl > /tmp/native-assembly.log 2>&1 || { tail -100 /tmp/native-assembly.log; exit 1; }
           sha256sum --check /tmp/retained-apk.sha256
       - name: Enable emulator acceleration
         run: sudo chmod a+rw /dev/kvm
