@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:fullBackupContent="@xml/freepress_backup_rules"
+        android:dataExtractionRules="@xml/freepress_data_extraction_rules">
+        <activity android:name="com.example.audiobook_app.FreePressLoginActivity"
+            android:exported="false" android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+    </application>
+</manifest>

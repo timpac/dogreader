@@ -6,6 +6,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : AudioServiceActivity() {
+    private var freePressChannel: MethodChannel? = null
     private var shareChannel: MethodChannel? = null
     private val pendingShares = mutableListOf<String>()
     private var shareListenerReady = false
@@ -13,6 +14,15 @@ class MainActivity : AudioServiceActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         acceptShare(intent)
+        if (packageName == "com.example.audiobook_app.experimental") {
+            freePressChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dogreader/freepress")
+            freePressChannel?.setMethodCallHandler { call, result ->
+                if (call.method == "openLoginCheck") {
+                    startActivity(Intent().setClassName(this, "com.example.audiobook_app.FreePressLoginActivity"))
+                    result.success(null)
+                } else result.notImplemented()
+            }
+        }
         shareChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dogreader/article_share")
         shareChannel?.setMethodCallHandler { call, result ->
             if (call.method == "takePendingTexts") {
@@ -40,6 +50,8 @@ class MainActivity : AudioServiceActivity() {
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        freePressChannel?.setMethodCallHandler(null)
+        freePressChannel = null
         shareChannel?.setMethodCallHandler(null)
         shareChannel = null
         shareListenerReady = false

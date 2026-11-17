@@ -94,3 +94,11 @@ The backend is maintained separately in `timpac/dogreader-cloud`. An app build
 does not deploy it. This consolidation changes no backend code or infrastructure;
 current queue operation and real production narration are not verified here.
 See [project status](PROJECT_STATUS.md) and [baseline evidence](docs/BASELINE_135.md).
+
+## The Free Press sign-in feasibility check (DogReader 2.0 only)
+
+Settings → The Free Press: test sign-in opens a private device-local Android
+browser. Chrome login is separate. Build 158 checks login, subscriber access and
+session persistence before signed-in importing is implemented. RSS discovery and
+existing data are preserved. See [phone test steps](docs/FREEPRESS_LOGIN_CHECK.md).
+Do not share credentials, codes or sign-in links in chat.

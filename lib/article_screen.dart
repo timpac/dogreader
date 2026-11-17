@@ -1,3 +1,4 @@
+import 'freepress_login.dart';
 import 'package:flutter/material.dart';
 
 import 'article_import.dart';
@@ -67,6 +68,7 @@ class _ArticleImportScreenState extends State<ArticleImportScreen> {
       builder: (context, _) => ListView(
         padding: const EdgeInsets.all(22),
         children: [
+          const FreePressLoginTile(),
           TextField(
             controller: url,
             keyboardType: TextInputType.url,

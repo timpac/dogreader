@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   apk:
-    if: (github.ref == 'refs/heads/experimental/dog-reader-2-installation' || github.ref == 'refs/heads/feature/dogreader2-rss-experience') && github.actor == github.repository_owner
+    if: github.ref == 'refs/heads/task/dogreader2-freepress-signin' && github.actor == github.repository_owner
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -40,7 +40,7 @@ jobs:
           script: |
             const {owner, repo} = context.repo;
             const metadata = (await github.rest.repos.get({owner, repo})).data;
-            const allowedRefs = ['refs/heads/experimental/dog-reader-2-installation', 'refs/heads/feature/dogreader2-rss-experience'];
+            const allowedRefs = ['refs/heads/task/dogreader2-freepress-signin'];
             if (metadata.default_branch !== 'dogreader-oct22-update' || !allowedRefs.includes(context.ref)) throw new Error('Experimental branch/default mismatch');
             if (Number(process.env.GITHUB_RUN_ATTEMPT) !== 1) throw new Error('Inspect retained assets before a new explicitly authorized dispatch; do not rerun');
             if (!/^[0-9a-f]{40}$/.test(process.env.RELEASE_COMMIT)) throw new Error('Full lowercase source SHA required');
@@ -66,11 +66,12 @@ jobs:
           ref: ${{ inputs.release_commit }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Require integrated build-141 ancestry on the experimental branch
+      - name: Require verified build-157 ancestry on the task branch
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
-          git merge-base --is-ancestor 9807f066242ca9e0738bd153dd8486b7c5a5de6b HEAD
+          test "$RELEASE_COMMIT" = "$GITHUB_SHA"
+          git merge-base --is-ancestor 39f0f168306bdacc56644e2abb4cd2a9a538ce87 HEAD
       - name: Free unused runner disk space
         run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/powershell
       - uses: actions/setup-java@v4
@@ -100,7 +101,7 @@ jobs:
         run: |
           set -euo pipefail
           git merge-base --is-ancestor e8f1fe2816973aaa26df37373431a46e6a210c30 HEAD
-          flutter test --no-pub --reporter expanded --dart-define=DOGREADER_EXPERIMENTAL=true test/rss_experience_test.dart > /tmp/tests.log 2>&1 || { tail -100 /tmp/tests.log; exit 1; }
+          flutter test --no-pub --reporter expanded --dart-define=DOGREADER_EXPERIMENTAL=true test/freepress_login_test.dart test/rss_experience_test.dart test/article_import_test.dart test/article_rss_test.dart > /tmp/tests.log 2>&1 || { tail -100 /tmp/tests.log; exit 1; }
       - name: Experimental paid-operation and playback regressions
         run: |
           flutter test --no-pub --reporter expanded --dart-define=DOGREADER_EXPERIMENTAL=true --dart-define=DOGREADER_ENABLE_ARTICLE_SUMMARIES=true test/experimental_policy_test.dart test/experimental_queue_consent_test.dart test/article_https_test.dart test/session_lifecycle_test.dart test/system_media_controls_test.dart > /tmp/experimental-tests.log 2>&1 || { tail -100 /tmp/experimental-tests.log; exit 1; }
@@ -110,6 +111,27 @@ jobs:
         env:
           ORG_GRADLE_PROJECT_dogreaderOriginalUpdate: 'true'
         run: flutter build apk --debug --no-pub --build-number "$BUILD_NUMBER" --build-name 2.0.0 --dart-define="DOGREADER_BUILD=$BUILD_NUMBER" --dart-define=DOGREADER_EXPERIMENTAL=true --dart-define=DOGREADER_ENABLE_ARTICLE_SUMMARIES=false > /tmp/build.log 2>&1 || { tail -100 /tmp/build.log; exit 1; }
+      - name: Assemble native policy tests without rebuilding the retained APK
+        working-directory: android
+        run: |
+          sha256sum ../build/app/outputs/flutter-apk/app-debug.apk > /tmp/retained-apk.sha256
+          ./gradlew assembleDebugAndroidTest -Pdart-defines=RE9HUkVBREVSX0VYUEVSSU1FTlRBTD10cnVl > /tmp/native-assembly.log 2>&1 || { tail -100 /tmp/native-assembly.log; exit 1; }
+          sha256sum --check /tmp/retained-apk.sha256
+      - name: Enable emulator acceleration
+        run: sudo chmod a+rw /dev/kvm
+      - name: Native policy and private-manifest checks (no accounts or site traffic)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_2
+          disable-animations: true
+          script: |
+            adb install -r build/app/outputs/flutter-apk/app-debug.apk
+            adb install -r build/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+            adb shell am instrument -w -r -e class com.example.audiobook_app.FreePressPolicyTest com.example.audiobook_app.experimental.runner/androidx.test.runner.AndroidJUnitRunner > /tmp/freepress-native-tests.log
+            cat /tmp/freepress-native-tests.log
+            grep -F 'OK (2 tests)' /tmp/freepress-native-tests.log
       - name: Verify signature, package, version and build-135 coexistence
         env:
           GH_TOKEN: ${{ github.token }}
@@ -134,7 +156,9 @@ jobs:
           tail -1 /tmp/tests.log >> dist/BUILD.txt
           tail -1 /tmp/experimental-tests.log >> dist/BUILD.txt
           tail -1 /tmp/rss-smoke.log >> dist/BUILD.txt
+          cat /tmp/freepress-native-tests.log >> dist/BUILD.txt
           cat /tmp/isolation.txt >> dist/BUILD.txt
+          cp docs/FREEPRESS_LOGIN_CHECK.md dist/FREEPRESS_LOGIN_CHECK.md
           cat /tmp/apk-certificates.txt >> dist/BUILD.txt
           cat /tmp/apk-identity.txt >> dist/BUILD.txt
           cat dist/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
@@ -162,12 +186,12 @@ jobs:
             const apk = fs.readFileSync(`dist/${name}`);
             const sha256 = digest(apk);
             const run = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
-            const body = `Source: ${source}\nBuild: ${number}\nActions: ${run}\nAPK SHA-256: ${sha256}\nPackage: com.example.audiobook_app.experimental\nSigning certificate SHA-256: c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177\n\nIncludes pronunciation dictionary, HTML article import, public RSS/Atom fallback and article cleanup. Corrects the HTTPS connection bug behind HTTP 400 by using TLS with validated DNS pinning and hostname/certificate checks. Feed requests also revalidate caches and retain HTTP/XML failure causes. Phone acceptance remains outstanding. Whole-book execution is out of scope and remains inaccessible. Live ACT acceptance and physical dual-app tests remain outstanding. Dog Reader 2.0 experimental app: installs separately from original Dogreader. Independent library, recordings, preferences and positions. One explicitly approved chapter or preview request at a time; batch/whole-book generation and AI summaries disabled. No backend deployment. APK manifest comparison verifies co-installation identities; physical dual-app/media-control acceptance remains separate.`;
+            const body = `Source: ${source}\nBuild: ${number}\nActions: ${run}\nAPK SHA-256: ${sha256}\nPackage: com.example.audiobook_app.experimental\nSigning certificate SHA-256: c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177\n\nLOGIN FEASIBILITY CHECK ONLY. Adds a device-local Android embedded browser for The Free Press / Substack sign-in. Chrome sessions are separate. Open Settings → The Free Press: test sign-in. Enter credentials only inside the app. Verify a paid article opens, then close/reopen DogReader and check access again. Report only the outcome and any visible non-secret error; never send passwords, codes, cookies or sign-in links. Full signed-in article import is pending this device test. No PDF fallback selected.\n\nWebView debugging is disabled, console output is suppressed, no JavaScript bridge or session export exists, and WebView profile directories are excluded from cloud backup and device transfer. Sign-in is performed directly with the publisher. Forget login clears only embedded-browser site storage. Existing RSS discovery, subscriptions, libraries, positions, narration and downloaded audio formats are unchanged. This is an in-place update to build 157 (same experimental package and signing identity); do not uninstall or clear storage. Unit/regression and offline Android policy tests are included in BUILD.txt. Actual subscriber login reliability is not yet established. No production merge or backend deployment.`;
             const release = (await github.rest.repos.createRelease({
               owner, repo, tag_name: tag, target_commitish: source,
               name: `Dog Reader 2.0 — Experimental build ${number}`, body, draft: true, prerelease: true, make_latest: 'false'
             })).data;
-            for (const filename of [name, 'SHA256SUMS', 'BUILD.txt']) {
+            for (const filename of [name, 'SHA256SUMS', 'BUILD.txt', 'FREEPRESS_LOGIN_CHECK.md']) {
               const data = fs.readFileSync(`dist/${filename}`);
               const asset = (await github.rest.repos.uploadReleaseAsset({
                 owner, repo, release_id: release.id, name: filename, data,
@@ -193,3 +217,17 @@ jobs:
             await core.summary.addHeading(`Dog Reader 2.0 ${number}: ${verified.draft ? 'verified draft; publication pending' : 'published'}`)
               .addLink('GitHub Release', verified.html_url)
               .addRaw(`\n\nSource: ${source}\n\nAPK SHA-256: ${sha256}\n`).write();
+      - name: Retain APK and verification evidence if a later step fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: freepress-login-check-${{ inputs.build_number }}-failure-evidence
+          path: |
+            build/app/outputs/flutter-apk/app-debug.apk
+            /tmp/analysis.log
+            /tmp/tests.log
+            /tmp/experimental-tests.log
+            /tmp/native-assembly.log
+            /tmp/freepress-native-tests.log
+            /tmp/build.log
+          retention-days: 7
