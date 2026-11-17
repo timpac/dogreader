@@ -173,7 +173,7 @@ jobs:
       - name: Experimental paid-operation and playback regressions
         if: inputs.retained_run == ''
         run: |
-          flutter test --no-pub --reporter expanded --dart-define=DOGREADER_EXPERIMENTAL=true --dart-define=DOGREADER_ENABLE_ARTICLE_SUMMARIES=true test/experimental_policy_test.dart test/experimental_queue_consent_test.dart test/article_https_test.dart test/session_lifecycle_test.dart test/system_media_controls_test.dart > /tmp/experimental-tests.log 2>&1 || { tail -100 /tmp/experimental-tests.log; exit 1; }
+          flutter test --no-pub --reporter expanded --dart-define=DOGREADER_EXPERIMENTAL=true --dart-define=DOGREADER_ENABLE_ARTICLE_SUMMARIES=true test/experimental_policy_test.dart test/experimental_queue_consent_test.dart test/article_https_test.dart test/session_lifecycle_test.dart test/system_media_controls_test.dart test/article_narration_queue_test.dart test/article_navigation_test.dart test/article_dictionary_integration_test.dart > /tmp/experimental-tests.log 2>&1 || { tail -100 /tmp/experimental-tests.log; exit 1; }
           flutter test --no-pub --reporter expanded --dart-define=DOGREADER_EXPERIMENTAL=true --dart-define=DOGREADER_ENABLE_ARTICLE_SUMMARIES=false --plain-name 'Substack shell falls back to its exact RSS entry and full encoded content' test/article_rss_test.dart > /tmp/rss-smoke.log 2>&1 || { tail -100 /tmp/rss-smoke.log; exit 1; }
           python3 -m unittest discover -s tools -p 'test_verify_experimental_apk.py'
       - name: Build Dog Reader 2.0 once
@@ -221,9 +221,9 @@ jobs:
           script: |
             adb install -r build/app/outputs/flutter-apk/app-debug.apk
             adb install -r build/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-            adb shell am instrument -w -r -e class com.example.audiobook_app.FreePressPolicyTest com.example.audiobook_app.experimental.runner/androidx.test.runner.AndroidJUnitRunner > /tmp/freepress-native-tests.log
+            adb shell am instrument -w -r -e class com.example.audiobook_app.FreePressPolicyTest,com.example.audiobook_app.FreePressExtractionTest com.example.audiobook_app.experimental.runner/androidx.test.runner.AndroidJUnitRunner > /tmp/freepress-native-tests.log
             cat /tmp/freepress-native-tests.log
-            grep -F 'OK (2 tests)' /tmp/freepress-native-tests.log
+            grep -F 'OK (6 tests)' /tmp/freepress-native-tests.log
       - name: Verify signature, package, version and build-135 coexistence
         env:
           GH_TOKEN: ${{ github.token }}
@@ -250,9 +250,9 @@ jobs:
           tail -1 /tmp/experimental-tests.log >> dist/BUILD.txt
           tail -1 /tmp/rss-smoke.log >> dist/BUILD.txt
           cat /tmp/freepress-native-tests.log >> dist/BUILD.txt
-          printf '\nNative test classes compiled from: a2d568a20a3ab7ee7a716273acd81e3279c8bf1f (retained run 44104164234); test package re-signed with target key for instrumentation.\n' >> dist/BUILD.txt
+          printf '\nNative extraction and policy test source: %s; test package signed with target key.\n' "$RELEASE_COMMIT" >> dist/BUILD.txt
           cat /tmp/isolation.txt >> dist/BUILD.txt
-          cp docs/FREEPRESS_LOGIN_CHECK.md dist/FREEPRESS_LOGIN_CHECK.md
+          cp docs/FREEPRESS_IMPORT.md dist/FREEPRESS_IMPORT.md
           cat /tmp/apk-certificates.txt >> dist/BUILD.txt
           cat /tmp/apk-identity.txt >> dist/BUILD.txt
           cat dist/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
@@ -290,13 +290,13 @@ jobs:
             const apk = fs.readFileSync(`dist/${name}`);
             const sha256 = digest(apk);
             const run = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
-            const body = `Source: ${source}\nBuild: ${number}\nActions: ${run}\nAPK SHA-256: ${sha256}\nPackage: com.example.audiobook_app.experimental\nSigning certificate SHA-256: c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177\n\nLOGIN FEASIBILITY CHECK ONLY. Adds a device-local Android embedded browser for The Free Press / Substack sign-in. Chrome sessions are separate. Open Settings → The Free Press: test sign-in. Enter credentials only inside the app. Verify a paid article opens, then close/reopen DogReader and check access again. Report only the outcome and any visible non-secret error; never send passwords, codes, cookies or sign-in links. Full signed-in article import is pending this device test. No PDF fallback selected.\n\nWebView debugging is disabled, console output is suppressed, no JavaScript bridge or session export exists, and WebView profile directories are excluded from cloud backup and device transfer. Sign-in is performed directly with the publisher. Forget login clears only embedded-browser site storage. Existing RSS discovery, subscriptions, libraries, positions, narration and downloaded audio formats are unchanged. This is an in-place update to build 157 (same experimental package and signing identity); do not uninstall or clear storage. Unit/regression and offline Android policy tests are included in BUILD.txt. Actual subscriber login reliability is not yet established. No production merge or backend deployment.`;
+            const body = `Source: ${source}\nBuild: ${number}\nActions: ${run}\nAPK SHA-256: ${sha256}\nPackage: com.example.audiobook_app.experimental\nSigning certificate SHA-256: c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177\n\nImports full Free Press articles through your existing device-local publisher login, then opens the normal offline DogReader reader. Keep RSS for discovery: open an RSS post and tap Read full article with my subscription, or paste a Free Press article URL into Import a web article. On the publisher page tap Save and read in DogReader, check the ending, and confirm Save and read. Subsequent opens of the saved copy use no browser or network.\n\nThe owner confirmed build 158 can sign in, show complete paid articles and retain paid access after force-stop. Build ${number} adds visible-article extraction and the reader handoff; actual paid capture acceptance on the phone remains pending. No PDF fallback.\n\nLogin cookies and site storage stay in the same private on-device WebView profile, excluded from cloud backup and device transfer. No cookie export, JavaScript bridge, hidden publisher state, login form capture or backend import requests. Only the approved visible article text and a public canonical URL leave the browser for local saving. Queries and fragments never enter the saved article. WebView debugging, console forwarding, screenshots and autofill remain disabled for authentication. The browser is destroyed after capture.\n\nSaved full copies have content-specific IDs so existing preview text, reading positions, narration and downloaded audio remain intact. Legacy files and IDs are unchanged; only new full copies carry an optional localRevision flag. RSS subscriptions and flags are unchanged. Install over build 157/158 without uninstalling or clearing data. Same experimental package and signing certificate. Original DogReader and DogReader 3.0 branches were not changed. One explicitly approved narration request at a time remains the existing policy. No merge or backend deployment.\n\nActions analysis, focused import/RSS/data-preservation/playback regressions, six offline Android WebView/extraction/policy tests, signature/package/version and coexistence checks passed before publication. The APK was compiled once; release asset round-trip hashes were checked. Physical update and real subscriber capture acceptance remain separate phone checks.`;
             if (!release) release = (await github.rest.repos.createRelease({
               owner, repo, tag_name: tag, target_commitish: source,
               name: `Dog Reader 2.0 — Experimental build ${number}`, body, draft: true, prerelease: true, make_latest: 'false'
             })).data;
-            release = (await github.rest.repos.updateRelease({owner, repo, release_id: release.id, tag_name: tag, target_commitish: source, body, name: `Dog Reader 2.0 — Build ${number}: Free Press sign-in check`})).data;
-            for (const filename of [name, 'SHA256SUMS', 'BUILD.txt', 'FREEPRESS_LOGIN_CHECK.md']) {
+            release = (await github.rest.repos.updateRelease({owner, repo, release_id: release.id, tag_name: tag, target_commitish: source, body, name: `Dog Reader 2.0 — Build ${number}: Free Press full article import`})).data;
+            for (const filename of [name, 'SHA256SUMS', 'BUILD.txt', 'FREEPRESS_IMPORT.md']) {
               const data = fs.readFileSync(`dist/${filename}`);
               const asset = (await github.rest.repos.uploadReleaseAsset({
                 owner, repo, release_id: release.id, name: filename, data,
@@ -326,7 +326,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: freepress-login-check-${{ inputs.build_number }}-failure-evidence
+          name: freepress-import-${{ inputs.build_number }}-failure-evidence
           path: |
             build/app/outputs/flutter-apk/app-debug.apk
             build/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk
@@ -336,4 +336,8 @@ jobs:
             /tmp/native-assembly.log
             /tmp/freepress-native-tests.log
             /tmp/build.log
+            /tmp/apk-certificates.txt
+            /tmp/apk-identity.txt
+            /tmp/isolation.txt
+            dist/
           retention-days: 7

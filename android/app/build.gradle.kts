@@ -62,6 +62,7 @@ android {
         sourceSets.getByName("main") {
             java.srcDir("src/freepress/kotlin")
             res.srcDir("src/freepress/res")
+            assets.srcDir("src/freepress/assets")
         }
         sourceSets.getByName("androidTest").java.srcDir("src/freepressAndroidTest/java")
         for (variant in listOf("debug", "profile", "release")) {

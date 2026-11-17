@@ -3,6 +3,9 @@ package com.example.audiobook_app
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Intent
+import org.json.JSONObject
+import org.json.JSONTokener
 import android.graphics.Bitmap
 import android.net.Uri
 import android.net.http.SslError
@@ -25,14 +28,25 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 
-/** Device-only feasibility check. No DOM, cookie, credential or URL export. */
+/** Device-local publisher session. Only an explicit article capture can return text. */
 class FreePressLoginActivity : Activity() {
     private lateinit var browser: WebView
     private lateinit var status: TextView
+    private lateinit var importButton: Button
+    private var pageLoading = false
+    private var capturing = false
 
     companion object {
         private var profileInitialized = false
         const val HOME = "https://www.thefp.com/"
+
+        fun articleUrl(value: String): String? = try {
+            val uri = Uri.parse(value)
+            if (value.length <= 8192 && allowedUrl(value) && uri.host?.lowercase() in setOf("thefp.com", "www.thefp.com") &&
+                Regex("^/(?:p|cp)/[A-Za-z0-9_-]+/?$").matches(uri.path ?: "")) {
+                "https://www.thefp.com${uri.path!!.trimEnd('/')}"
+            } else null
+        } catch (_: Exception) { null }
 
         fun allowedUrl(value: String): Boolean = try {
             val uri = Uri.parse(value)
@@ -57,7 +71,7 @@ class FreePressLoginActivity : Activity() {
             if (Build.VERSION.SDK_INT >= 26) importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
         }
         status = TextView(this).apply {
-            text = "Login check: sign in here, open a paid article, then close and reopen. Chrome login is separate. Import is pending this check."
+            text = "Sign in here if needed. Open an article, then tap Save and read to use DogReader's offline reader. Chrome login is separate."
         }
         layout.addView(status)
         val toolbar = LinearLayout(this)
@@ -87,6 +101,12 @@ class FreePressLoginActivity : Activity() {
                 else status.text = "Only HTTPS links on The Free Press or Substack can open here. Other sign-in providers are not supported by this check."
             }
         })
+        importButton = Button(this).apply {
+            text = "Save and read in DogReader"
+            isEnabled = false
+            setOnClickListener { captureArticle() }
+        }
+        layout.addView(importButton)
         browser = WebView(this).apply {
             isSaveEnabled = false
             settings.apply {
@@ -115,14 +135,22 @@ class FreePressLoginActivity : Activity() {
                     return true
                 }
                 override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
-                    status.text = "Loading…"
+                    pageLoading = true
+                    importButton.isEnabled = false
+                    status.text = "Loading article…"
                 }
                 override fun onPageFinished(view: WebView, url: String?) {
                     CookieManager.getInstance().flush()
-                    status.text = "${Uri.parse(url ?: HOME).host ?: "The Free Press"} · Device-only login check · Import pending"
+                    pageLoading = false
+                    importButton.isEnabled = articleUrl(url ?: "") != null && !capturing
+                    status.text = if (importButton.isEnabled) "Article ready. Save it to read and listen in DogReader." else "Sign in here, then open a Free Press article."
                 }
                 override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                    if (request.isForMainFrame) status.text = "Page could not load. Check your connection, then reload."
+                    if (request.isForMainFrame) {
+                        pageLoading = false
+                        importButton.isEnabled = false
+                        status.text = "Page could not load. Check your connection, then reload."
+                    }
                 }
                 override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
                     handler.cancel()
@@ -132,7 +160,62 @@ class FreePressLoginActivity : Activity() {
         }
         layout.addView(browser, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(layout)
-        browser.loadUrl(HOME)
+        browser.loadUrl(articleUrl(intent.getStringExtra("articleUrl") ?: "") ?: HOME)
+    }
+
+    private fun captureArticle() {
+        val source = articleUrl(browser.url ?: "") ?: return
+        if (pageLoading || capturing) return
+        capturing = true
+        importButton.isEnabled = false
+        try {
+            val script = assets.open("freepress_extract.js").bufferedReader().use { it.readText() }
+            browser.evaluateJavascript(script) { raw ->
+                if (isFinishing || isDestroyed) return@evaluateJavascript
+                try {
+                    if (pageLoading || articleUrl(browser.url ?: "") != source) throw IllegalStateException()
+                    val payload = JSONTokener(raw).nextValue() as? String ?: throw IllegalStateException()
+                    if (payload.length > 220000) throw IllegalStateException()
+                    val captured = JSONObject(payload)
+                    if (captured.has("error")) {
+                        status.text = when (captured.getString("error")) {
+                            "PAYWALL" -> "This page still shows a subscriber preview. Sign in and open the complete article before saving."
+                            "TOO_LARGE" -> "This article is too large for a single import. No article was saved."
+                            else -> "Article text is not ready. Wait for it to load, then try again."
+                        }
+                        resetCapture()
+                        return@evaluateJavascript
+                    }
+                    captured.put("url", source) // Public canonical URL only; never a sign-in query or fragment.
+                    val blocks = captured.getJSONArray("blocks")
+                    val ending = blocks.getJSONObject(blocks.length() - 1).getString("text").takeLast(700)
+                    AlertDialog.Builder(this)
+                        .setTitle("Save full article?")
+                        .setMessage("${captured.getString("title")}\n\nLast paragraph:\n$ending\n\nConfirm this is the article's ending. A separate full-text copy keeps existing recordings and reading positions available.")
+                        .setNegativeButton("Cancel") { _, _ -> resetCapture() }
+                        .setOnCancelListener { resetCapture() }
+                        .setPositiveButton("Save and read") { _, _ ->
+                            // Recheck navigation after the review dialog before returning article-only data.
+                            if (!pageLoading && articleUrl(browser.url ?: "") == source) {
+                                browser.stopLoading()
+                                setResult(RESULT_OK, Intent().putExtra("article", captured.toString()))
+                                finish()
+                            } else resetCapture()
+                        }.show()
+                } catch (_: Exception) {
+                    status.text = "This article could not be captured. Reload it and try again."
+                    resetCapture()
+                }
+            }
+        } catch (_: Exception) {
+            status.text = "This article could not be captured. Please try again."
+            resetCapture()
+        }
+    }
+
+    private fun resetCapture() {
+        capturing = false
+        importButton.isEnabled = !pageLoading && articleUrl(browser.url ?: "") != null
     }
 
     private fun forgetLogin() {
@@ -166,6 +249,7 @@ class FreePressLoginActivity : Activity() {
     override fun onDestroy() {
         if (::browser.isInitialized) {
             browser.stopLoading()
+            (browser.parent as? android.view.ViewGroup)?.removeView(browser)
             browser.destroy()
         }
         super.onDestroy()

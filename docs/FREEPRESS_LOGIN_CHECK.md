@@ -66,3 +66,11 @@ session. Signing, package/version, coexistence with original Dogreader, release
 asset round-trip hashes and published source tag are checked separately.
 Actual phone login, session persistence, subscriber article access and dual-app
 behavior require the owner's test. No backend change or deployment is included.
+
+## Owner's result and continuation (2026-11-17)
+
+The owner confirmed sign-in, full paid-article access and persistence after
+force-stop inside build 158 on the phone. Browser reading was slow. The next
+implementation captures the article locally and returns to DogReader's normal
+reader; see [Free Press importing](FREEPRESS_IMPORT.md). The build 158 APK and
+its published artifacts are unchanged.

@@ -673,7 +673,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
       padding: const EdgeInsets.all(22),
       children: [
         Text('Settings', style: Theme.of(context).textTheme.headlineMedium),
-        if (dogreaderExperimental) const FreePressLoginTile(),
+        if (dogreaderExperimental) FreePressLoginTile(library: articles, onOpenArticle: openArticle),
         ListTile(
           contentPadding: EdgeInsets.zero,
           leading: const Icon(Icons.record_voice_over_outlined),

@@ -7,6 +7,7 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : AudioServiceActivity() {
     private var freePressChannel: MethodChannel? = null
+    private var pendingFreePress: MethodChannel.Result? = null
     private var shareChannel: MethodChannel? = null
     private val pendingShares = mutableListOf<String>()
     private var shareListenerReady = false
@@ -17,9 +18,16 @@ class MainActivity : AudioServiceActivity() {
         if (packageName == "com.example.audiobook_app.experimental") {
             freePressChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dogreader/freepress")
             freePressChannel?.setMethodCallHandler { call, result ->
-                if (call.method == "openLoginCheck") {
-                    startActivity(Intent().setClassName(this, "com.example.audiobook_app.FreePressLoginActivity"))
-                    result.success(null)
+                if (call.method == "openArticle") {
+                    if (pendingFreePress != null) {
+                        result.error("BUSY", "An article is already open.", null)
+                    } else {
+                        pendingFreePress = result
+                        val articleIntent = Intent().setClassName(this, "com.example.audiobook_app.FreePressLoginActivity")
+                        articleIntent.putExtra("articleUrl", call.argument<String>("url"))
+                        @Suppress("DEPRECATION")
+                        startActivityForResult(articleIntent, 0x4650)
+                    }
                 } else result.notImplemented()
             }
         }
@@ -32,6 +40,16 @@ class MainActivity : AudioServiceActivity() {
             } else {
                 result.notImplemented()
             }
+        }
+    }
+
+    @Deprecated("Legacy result callback used by the Flutter host")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 0x4650) {
+            val reply = pendingFreePress
+            pendingFreePress = null
+            reply?.success(if (resultCode == RESULT_OK) data?.getStringExtra("article") else null)
         }
     }
 
@@ -50,6 +68,8 @@ class MainActivity : AudioServiceActivity() {
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        pendingFreePress?.success(null)
+        pendingFreePress = null
         freePressChannel?.setMethodCallHandler(null)
         freePressChannel = null
         shareChannel?.setMethodCallHandler(null)
