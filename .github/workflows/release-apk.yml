@@ -67,7 +67,10 @@ jobs:
               const match = /^(?:v|dogreader-|build-)([0-9]+)(?:$|[-.])/.exec(tag.name);
               if (match) highest = Math.max(highest, Number(match[1]));
             }
-            if (Number(number) !== highest + 1) throw new Error(`Next unused sequential version is ${highest + 1}`);
+            if (Number(number) !== highest + 1) {
+              const retainedDraft = releases.find(r => r.id === 448770160);
+              if (!(process.env.RETAINED_RUN === '44100702769' && number === '158' && highest === 158 && retainedDraft?.draft && retainedDraft.tag_name === 'v158-dog-reader-2.0' && retainedDraft.target_commitish === process.env.RELEASE_COMMIT && retainedDraft.assets.length === 0)) throw new Error(`Next unused sequential version is ${highest + 1}`);
+            }
             if (process.env.RETAINED_RUN) {
               if (process.env.RETAINED_RUN !== '44100702769' || number !== '158' || process.env.RELEASE_COMMIT !== 'a222bf363b68f86e3f5822f2f4d3ce475f00dd89') throw new Error('Unexpected retained APK identity');
               const previous = (await github.rest.actions.getWorkflowRun({owner, repo, run_id: Number(process.env.RETAINED_RUN)})).data;
@@ -256,21 +259,28 @@ jobs:
             const tag = `v${number}-dog-reader-2.0`;
             const name = `Dogreader-${number}-Dog-Reader-2.0.apk`;
             const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
-            for (const request of [
-              () => github.rest.repos.getReleaseByTag({owner, repo, tag}),
-              () => github.rest.git.getRef({owner, repo, ref: `tags/${tag}`})
-            ]) {
-              try { await request(); } catch (error) { if (error.status === 404) continue; throw error; }
-              throw new Error('Release/tag already exists; refusing replacement');
+            let release = null;
+            try { release = (await github.rest.repos.getReleaseByTag({owner, repo, tag})).data; }
+            catch (error) { if (error.status !== 404) throw error; }
+            if (release) {
+              if (release.id !== 448770160 || !release.draft || release.target_commitish !== source || release.assets.length !== 0 || process.env.RETAINED_RUN !== '44100702769') throw new Error('Refusing to change an unrelated or nonempty release');
+              const existingRef = (await github.rest.git.getRef({owner, repo, ref: `tags/${tag}`})).data;
+              if (existingRef.object.type !== 'commit' || existingRef.object.sha !== source) throw new Error('Existing source tag mismatch');
+            } else {
+              try {
+                await github.rest.git.getRef({owner, repo, ref: `tags/${tag}`});
+                throw new Error('Existing tag without the expected draft; refusing reuse');
+              } catch (error) { if (error.status !== 404) throw error; }
             }
             const apk = fs.readFileSync(`dist/${name}`);
             const sha256 = digest(apk);
             const run = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
             const body = `Source: ${source}\nBuild: ${number}\nActions: ${run}\nAPK SHA-256: ${sha256}\nPackage: com.example.audiobook_app.experimental\nSigning certificate SHA-256: c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177\n\nLOGIN FEASIBILITY CHECK ONLY. Adds a device-local Android embedded browser for The Free Press / Substack sign-in. Chrome sessions are separate. Open Settings → The Free Press: test sign-in. Enter credentials only inside the app. Verify a paid article opens, then close/reopen DogReader and check access again. Report only the outcome and any visible non-secret error; never send passwords, codes, cookies or sign-in links. Full signed-in article import is pending this device test. No PDF fallback selected.\n\nWebView debugging is disabled, console output is suppressed, no JavaScript bridge or session export exists, and WebView profile directories are excluded from cloud backup and device transfer. Sign-in is performed directly with the publisher. Forget login clears only embedded-browser site storage. Existing RSS discovery, subscriptions, libraries, positions, narration and downloaded audio formats are unchanged. This is an in-place update to build 157 (same experimental package and signing identity); do not uninstall or clear storage. Unit/regression and offline Android policy tests are included in BUILD.txt. Actual subscriber login reliability is not yet established. No production merge or backend deployment.`;
-            const release = (await github.rest.repos.createRelease({
+            if (!release) release = (await github.rest.repos.createRelease({
               owner, repo, tag_name: tag, target_commitish: source,
               name: `Dog Reader 2.0 — Experimental build ${number}`, body, draft: true, prerelease: true, make_latest: 'false'
             })).data;
+            release = (await github.rest.repos.updateRelease({owner, repo, release_id: release.id, body, name: `Dog Reader 2.0 — Build ${number}: Free Press sign-in check`})).data;
             for (const filename of [name, 'SHA256SUMS', 'BUILD.txt', 'FREEPRESS_LOGIN_CHECK.md']) {
               const data = fs.readFileSync(`dist/${filename}`);
               const asset = (await github.rest.repos.uploadReleaseAsset({
