@@ -295,7 +295,7 @@ jobs:
               owner, repo, tag_name: tag, target_commitish: source,
               name: `Dog Reader 2.0 — Experimental build ${number}`, body, draft: true, prerelease: true, make_latest: 'false'
             })).data;
-            release = (await github.rest.repos.updateRelease({owner, repo, release_id: release.id, body, name: `Dog Reader 2.0 — Build ${number}: Free Press sign-in check`})).data;
+            release = (await github.rest.repos.updateRelease({owner, repo, release_id: release.id, tag_name: tag, target_commitish: source, body, name: `Dog Reader 2.0 — Build ${number}: Free Press sign-in check`})).data;
             for (const filename of [name, 'SHA256SUMS', 'BUILD.txt', 'FREEPRESS_LOGIN_CHECK.md']) {
               const data = fs.readFileSync(`dist/${filename}`);
               const asset = (await github.rest.repos.uploadReleaseAsset({
@@ -309,7 +309,7 @@ jobs:
             let verified = (await github.rest.repos.getRelease({owner, repo, release_id: release.id})).data;
             if (verified.tag_name !== tag || verified.target_commitish !== source || !verified.draft) throw new Error('Release identity changed');
             if (process.env.PUBLISH === 'true') {
-              verified = (await github.rest.repos.updateRelease({owner, repo, release_id: release.id, draft: false, prerelease: true, make_latest: 'false'})).data;
+              verified = (await github.rest.repos.updateRelease({owner, repo, release_id: release.id, tag_name: tag, target_commitish: source, draft: false, prerelease: true, make_latest: 'false'})).data;
               verified = (await github.rest.repos.getRelease({owner, repo, release_id: release.id})).data;
               if (verified.draft) throw new Error('Release not published');
               const ref = (await github.rest.git.getRef({owner, repo, ref: `tags/${tag}`})).data;
