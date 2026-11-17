@@ -1,6 +1,8 @@
+import 'freepress_login.dart';
 import 'package:flutter/material.dart';
 
 import 'article_import.dart';
+import 'app_identity.dart';
 import 'article_library.dart';
 import 'article_summary.dart' show articleSummariesDisabledMessage;
 
@@ -34,6 +36,19 @@ class _ArticleImportScreenState extends State<ArticleImportScreen> {
 
   void enqueue() {
     try {
+      final provided = Uri.tryParse(url.text.trim());
+      if (dogreaderExperimental && provided != null &&
+          {'thefp.com', 'www.thefp.com', 'substack.com', 'www.substack.com'}.contains(provided.host.toLowerCase()) &&
+          RegExp(r'^/(?:sign-in|login|account|auth)(?:/|$)').hasMatch(provided.path)) {
+        setState(() => error = 'Use the Free Press sign-in screen for login links.');
+        return;
+      }
+      final paidUrl = freePressArticleUrl(url.text.trim());
+      if (dogreaderExperimental && paidUrl != null) {
+        openFreePressArticle(context, library: widget.library,
+          onOpenArticle: widget.openArticle, initialUrl: paidUrl);
+        return;
+      }
       final job = widget.library.enqueue(url.text);
       setState(() {
         error = null;
@@ -67,6 +82,8 @@ class _ArticleImportScreenState extends State<ArticleImportScreen> {
       builder: (context, _) => ListView(
         padding: const EdgeInsets.all(22),
         children: [
+          FreePressLoginTile(library: widget.library,
+            onOpenArticle: widget.openArticle, initialUrl: widget.initialUrl),
           TextField(
             controller: url,
             keyboardType: TextInputType.url,

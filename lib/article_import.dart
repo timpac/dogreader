@@ -234,6 +234,7 @@ class ImportedArticle {
     this.depth,
     this.originalId,
     this.originalContentHash,
+    this.localRevision = false,
     Map<String, dynamic>? usage,
   }) : blocks = List.unmodifiable(blocks),
        usage = usage == null ? null : Map.unmodifiable(usage);
@@ -241,6 +242,9 @@ class ImportedArticle {
   final String? author, published, originalId, originalContentHash;
   final String? publication, originalUrl;
   final List<ArticleBlock> blocks;
+  // Only new, explicit device captures use a content-specific identity. All
+  // legacy files/IDs remain unchanged; previews and their audio are immutable.
+  final bool localRevision;
   final SummaryDepth? depth;
   final Map<String, dynamic>? usage;
   String get text => blocks.map((b) => b.text).join('\n\n');
@@ -261,7 +265,7 @@ class ImportedArticle {
   }
 
   String get id => depth == null
-      ? 'article_${articleDigest(sourceUrl)}'
+      ? 'article_${articleDigest(localRevision ? 'device-article\n$sourceUrl\n$contentHash' : sourceUrl)}'
       : '${originalId}_${depth!.name}_${contentHash.substring(0, 16)}';
   ReaderChapter get chapter {
     final output = StringBuffer();
@@ -314,6 +318,7 @@ class ImportedArticle {
     'depth': depth?.name,
     'originalId': originalId,
     'originalContentHash': originalContentHash,
+    if (localRevision) 'localRevision': true,
     'textSha256': contentHash,
     'textLengthUtf16': text.length,
     'usage': usage,
@@ -336,6 +341,7 @@ class ImportedArticle {
           : SummaryDepth.values.byName(value['depth'] as String),
       originalId: value['originalId'] as String?,
       originalContentHash: value['originalContentHash'] as String?,
+      localRevision: value['localRevision'] == true,
       usage: (value['usage'] as Map?)?.cast<String, dynamic>(),
     );
     // Legacy version-1 files without these additive checks retain exact text.

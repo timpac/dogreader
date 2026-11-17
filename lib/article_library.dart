@@ -99,6 +99,44 @@ class ArticleLibrary extends ChangeNotifier {
     return job;
   }
 
+  /// Serialized with ordinary imports; never replaces legacy text or audio IDs.
+  Future<ImportedArticle> saveDeviceArticle(ImportedArticle captured) {
+    if (!captured.localRevision || captured.depth != null) {
+      throw const ArticleImportException('Invalid device article.');
+    }
+    final result = Completer<ImportedArticle>();
+    _pending = _pending.catchError((Object _) {}).then((_) async {
+      try {
+        await load();
+        final existing = articles.where((a) => a.id == captured.id).firstOrNull;
+        if (existing != null) {
+          result.complete(existing);
+          return;
+        }
+        await (await store).save(captured);
+        articles.add(captured);
+        notifyListeners();
+        result.complete(captured);
+      } catch (_) {
+        result.completeError(const ArticleImportException(
+          'The article could not be saved. Your existing library is unchanged.',
+        ));
+      }
+    });
+    return result.future;
+  }
+
+  ImportedArticle? deviceArticleForUrl(String url) {
+    final parsed = Uri.tryParse(url);
+    if (parsed == null || parsed.scheme != 'https' ||
+        !{'thefp.com', 'www.thefp.com'}.contains(parsed.host.toLowerCase())) {
+      return null;
+    }
+    final source = parsed.replace(query: '', fragment: '');
+    return articles.reversed.where((a) => a.localRevision &&
+      sameArticleUrl(Uri.parse(a.sourceUrl), source)).firstOrNull;
+  }
+
   Future<void> get settled => _pending;
   ImportedArticle? savedSummary(ImportedArticle article, SummaryDepth depth) =>
       articles

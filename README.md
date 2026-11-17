@@ -94,3 +94,17 @@ The backend is maintained separately in `timpac/dogreader-cloud`. An app build
 does not deploy it. This consolidation changes no backend code or infrastructure;
 current queue operation and real production narration are not verified here.
 See [project status](PROJECT_STATUS.md) and [baseline evidence](docs/BASELINE_135.md).
+
+## The Free Press subscriber articles (DogReader 2.0 only)
+
+Keep RSS for discovery. Open a Free Press feed post and tap **Read full article
+with my subscription**, or paste its URL into **Import a web article**. Your
+existing device login opens that article. Tap **Save and read in DogReader**,
+confirm the ending, and read the saved full copy in the normal offline reader.
+Later opens of the saved copy avoid the website entirely. Existing previews,
+positions and recordings stay available under their existing IDs.
+
+The owner verified build 158 sign-in, paid access and persistence after force-stop.
+Subscriber capture in build 159 still needs phone acceptance. See
+[importing details and checks](docs/FREEPRESS_IMPORT.md). Credentials, cookies and
+sign-in links remain inside the private device browser; do not send them in chat.

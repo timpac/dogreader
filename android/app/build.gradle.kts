@@ -57,6 +57,19 @@ android {
         versionName = flutter.versionName
     }
 
+    // This source set is absent from original Dogreader builds.
+    if (experimentalBuild) {
+        sourceSets.getByName("main") {
+            java.srcDir("src/freepress/kotlin")
+            res.srcDir("src/freepress/res")
+            assets.srcDir("src/freepress/assets")
+        }
+        sourceSets.getByName("androidTest").java.srcDir("src/freepressAndroidTest/java")
+        for (variant in listOf("debug", "profile", "release")) {
+            sourceSets.maybeCreate(variant).manifest.srcFile("src/freepress/AndroidManifest.xml")
+        }
+    }
+
     // CI uses the recovered Chromebook key to preserve Android update compatibility.
     // Local builds retain their normal Android debug signing behavior.
     signingConfigs {

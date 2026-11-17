@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../article_import.dart';
+import '../app_identity.dart';
+import '../freepress_login.dart';
 import '../article_library.dart';
 import '../article_summary.dart';
 import 'rss_authors.dart';
@@ -83,7 +85,7 @@ class _RssHomeScreenState extends State<RssHomeScreen> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: widget.controller,
+      listenable: Listenable.merge([widget.controller, widget.articleLibrary]),
       builder: (context, _) {
         final articles = widget.controller.queryArticles(
           mode: _mode,
@@ -280,6 +282,7 @@ class _RssHomeScreenState extends State<RssHomeScreen> {
                           final article = articles[index];
                           return _RssArticleListCard(
                             article: article,
+                            savedFull: widget.articleLibrary.deviceArticleForUrl(article.url) != null,
                             onTap: () => _openArticleReader(
                               context,
                               articles,
@@ -292,7 +295,7 @@ class _RssHomeScreenState extends State<RssHomeScreen> {
                             onListen: () {
                               widget.controller.markRead(article.id, true);
                               widget.onOpenArticle(
-                                article.toImportedArticle(),
+                                widget.articleLibrary.deviceArticleForUrl(article.url) ?? article.toImportedArticle(),
                                 true,
                               );
                             },
@@ -567,7 +570,16 @@ class _RssHomeScreenState extends State<RssHomeScreen> {
     BuildContext context,
     List<RssArticle> currentList,
     int initialIndex,
-  ) {
+  ) async {
+    await widget.articleLibrary.load();
+    if (!context.mounted) return;
+    final selected = currentList[initialIndex];
+    final saved = widget.articleLibrary.deviceArticleForUrl(selected.url);
+    if (saved != null) {
+      await widget.controller.markRead(selected.id, true);
+      widget.onOpenArticle(saved, false);
+      return;
+    }
     Navigator.push(
       context,
       MaterialPageRoute<void>(
@@ -590,8 +602,10 @@ class _RssArticleListCard extends StatelessWidget {
     required this.onToggleRead,
     required this.onToggleStar,
     required this.onListen,
+    this.savedFull = false,
   });
 
+  final bool savedFull;
   final RssArticle article;
   final VoidCallback onTap;
   final VoidCallback onToggleRead;
@@ -683,7 +697,10 @@ class _RssArticleListCard extends StatelessWidget {
               const SizedBox(height: 10),
               Row(
                 children: [
-                  _ContentStatusChip(status: article.contentStatus),
+                  if (savedFull)
+                    const Text('Full text saved offline', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600))
+                  else
+                    _ContentStatusChip(status: article.contentStatus),
                   if (article.isPrioritized) ...[
                     const SizedBox(width: 6),
                     Container(
@@ -1075,6 +1092,19 @@ class _RssArticleReadingScreenState extends State<RssArticleReadingScreen> {
                 ),
               ),
               const SizedBox(height: 14),
+              if (dogreaderExperimental && freePressArticleUrl(article.url) != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: FilledButton.icon(
+                    key: const Key('rss_freepress_import'),
+                    onPressed: () => openFreePressArticle(context,
+                      library: widget.articleLibrary, onOpenArticle: widget.onOpenArticle,
+                      initialUrl: article.url, author: article.displayAuthor,
+                      published: article.publishedAt?.toUtc().toIso8601String()),
+                    icon: const Icon(Icons.download_for_offline_outlined),
+                    label: const Text('Read full article with my subscription'),
+                  ),
+                ),
 
               // Diagnostic Banner when content is not full
               if (isExtracting)
@@ -1186,7 +1216,7 @@ class _RssArticleReadingScreenState extends State<RssArticleReadingScreen> {
                   FilledButton.icon(
                     key: const Key('rss_article_narrate_button'),
                     onPressed: () {
-                      widget.onOpenArticle(article.toImportedArticle(), true);
+                      widget.onOpenArticle(widget.articleLibrary.deviceArticleForUrl(article.url) ?? article.toImportedArticle(), true);
                     },
                     icon: const Icon(Icons.headphones_rounded),
                     label: const Text('Listen / Narrate'),
