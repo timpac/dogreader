@@ -37,7 +37,7 @@ public class FreePressPolicyTest {
             context.getResources().getIdentifier("freepress_backup_rules", "xml", context.getPackageName()));
         int exclusions = 0;
         while (rules.next() != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
-            if ("exclude".equals(rules.getName())) {
+            if (rules.getEventType() == org.xmlpull.v1.XmlPullParser.START_TAG && "exclude".equals(rules.getName())) {
                 assertEquals("root", rules.getAttributeValue(null, "domain"));
                 assertTrue(rules.getAttributeValue(null, "path").startsWith("app_webview"));
                 exclusions++;

@@ -91,7 +91,8 @@ jobs:
           if [ -z "$RETAINED_RUN" ]; then
             test "$RELEASE_COMMIT" = "$GITHUB_SHA"
           else
-            git diff --exit-code "$RELEASE_COMMIT" "$GITHUB_SHA" -- . ':!.github/workflows/release-apk.yml'
+            git diff --exit-code "$RELEASE_COMMIT" "$GITHUB_SHA" -- . ':!.github/workflows/release-apk.yml' ':!android/app/src/freepressAndroidTest'
+            git checkout "$GITHUB_SHA" -- android/app/src/freepressAndroidTest
           fi
           git merge-base --is-ancestor 39f0f168306bdacc56644e2abb4cd2a9a538ce87 HEAD
       - name: Download immutable retained APK and original validation evidence
@@ -276,6 +277,7 @@ jobs:
           name: freepress-login-check-${{ inputs.build_number }}-failure-evidence
           path: |
             build/app/outputs/flutter-apk/app-debug.apk
+            build/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk
             /tmp/analysis.log
             /tmp/tests.log
             /tmp/experimental-tests.log
