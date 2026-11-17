@@ -31,6 +31,9 @@ import 'article_import.dart';
 import 'article_library.dart';
 import 'article_screen.dart';
 import 'article_share.dart';
+import 'rss/rss_controller.dart';
+import 'rss/rss_screens.dart';
+import 'rss/rss_shelf.dart';
 
 late final DogreaderAudioHandler audioHandler;
 
@@ -157,6 +160,7 @@ class LibraryScreen extends StatefulWidget {
 
 class _LibraryScreenState extends State<LibraryScreen> {
   late final ArticleLibrary articles;
+  late final RssLibraryController rss;
   final List<String> _sharedUrls = [];
   bool _showingShare = false;
   int selectedTab = 0;
@@ -207,6 +211,28 @@ class _LibraryScreenState extends State<LibraryScreen> {
     }
   }
 
+  void openRssHome({
+    RssArticleFilterMode? initialMode,
+    String? subscriptionId,
+    String? folderId,
+    String? authorId,
+  }) {
+    Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => RssHomeScreen(
+          controller: rss,
+          articleLibrary: articles,
+          onOpenArticle: openArticle,
+          initialMode: initialMode ?? RssArticleFilterMode.all,
+          initialSubscriptionId: subscriptionId,
+          initialFolderId: folderId,
+          initialAuthorId: authorId,
+        ),
+      ),
+    );
+  }
+
   void articleDetails(ImportedArticle article) {
     Navigator.push(context, MaterialPageRoute<void>(builder: (_) => ArticleDetailScreen(
       article: article, library: articles, openArticle: openArticle)));
@@ -215,6 +241,22 @@ class _LibraryScreenState extends State<LibraryScreen> {
   void openBook(ImportedBook book, {bool articleText = false}) {
     final article = articles.articles.where((a) => a.id == book.id).firstOrNull;
     if (!articleText && article != null) { articleDetails(article); return; }
+    final rssArticle = rss.articleById(book.id);
+    if (!articleText && rssArticle != null) {
+      Navigator.push(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => RssArticleReadingScreen(
+            controller: rss,
+            articleLibrary: articles,
+            initialArticleId: rssArticle.id,
+            orderedArticleIds: [rssArticle.id],
+            onOpenArticle: openArticle,
+          ),
+        ),
+      );
+      return;
+    }
     setState(() {
       lastOpened[book.id] = DateTime.now().microsecondsSinceEpoch;
       sortBooks();
@@ -244,6 +286,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
   void openChapters(ImportedBook book) {
     final article = articles.articles.where((a) => a.id == book.id).firstOrNull;
     if (article != null) { articleDetails(article); return; }
+    final rssArticle = rss.articleById(book.id);
+    if (rssArticle != null) {
+      openArticle(rssArticle.toImportedArticle(), true);
+      return;
+    }
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -263,6 +310,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
     articles = ArticleLibrary(getApplicationDocumentsDirectory());
     articles.addListener(_articlesChanged);
     articles.load().catchError((Object _) {});
+    rss = RssLibraryController(getApplicationDocumentsDirectory());
+    rss.addListener(_articlesChanged);
+    rss.load().catchError((Object _) {});
     loadLibrary();
     ArticleShare.listen(_receiveArticleShare).catchError((Object _) {});
   }
@@ -270,8 +320,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
   void _articlesChanged() {
     if (!mounted) return;
     setState(() {
-      books.removeWhere((b) => b.id.startsWith('article_'));
+      books.removeWhere(
+        (b) => b.id.startsWith('article_') || b.id.startsWith('rss_article_'),
+      );
       books.addAll(articles.articles.map(articleBook));
+      books.addAll(
+        rss.librarySavedArticles.map((a) => articleBook(a.toImportedArticle())),
+      );
       sortBooks();
     });
   }
@@ -305,6 +360,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
     ArticleShare.stop();
     articles.removeListener(_articlesChanged);
     articles.dispose();
+    rss.removeListener(_articlesChanged);
+    rss.dispose();
     super.dispose();
   }
 
@@ -366,11 +423,15 @@ class _LibraryScreenState extends State<LibraryScreen> {
         }
       }
       await articles.load();
+      await rss.load();
       if (!mounted) return;
       setState(() {
         books.clear();
         books.addAll(restored);
         books.addAll(articles.articles.map(articleBook));
+        books.addAll(
+          rss.librarySavedArticles.map((a) => articleBook(a.toImportedArticle())),
+        );
         sortBooks();
       });
     } catch (_) {
@@ -680,7 +741,43 @@ class _LibraryScreenState extends State<LibraryScreen> {
             color: Theme.of(context).colorScheme.onSurfaceVariant,
           ),
         ),
-        const SizedBox(height: 26),
+        const SizedBox(height: 20),
+        RssLibraryShelf(
+          controller: rss,
+          onOpenRssHome: openRssHome,
+          onOpenAddFeed: () => Navigator.push(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) => RssSubscriptionsAndOpmlScreen(controller: rss),
+            ),
+          ),
+          onOpenAuthors: () async {
+            final authorId = await Navigator.push<String>(
+              context,
+              MaterialPageRoute<String>(
+                builder: (_) => RssAuthorsScreen(controller: rss),
+              ),
+            );
+            if (authorId != null && mounted) {
+              openRssHome(
+                initialMode: RssArticleFilterMode.all,
+                authorId: authorId,
+              );
+            }
+          },
+          onOpenRules: () => Navigator.push(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) => RssRulesScreen(controller: rss),
+            ),
+          ),
+          onOpenOpml: () => Navigator.push(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) => RssSubscriptionsAndOpmlScreen(controller: rss),
+            ),
+          ),
+        ),
         if (books.isEmpty) _emptyLibrary(),
         for (final book in books)
           Card(

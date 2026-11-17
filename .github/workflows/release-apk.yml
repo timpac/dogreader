@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   apk:
-    if: github.ref == 'refs/heads/experimental/dog-reader-2-installation' && github.actor == github.repository_owner
+    if: (github.ref == 'refs/heads/experimental/dog-reader-2-installation' || github.ref == 'refs/heads/feature/dogreader2-rss-experience') && github.actor == github.repository_owner
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -40,7 +40,8 @@ jobs:
           script: |
             const {owner, repo} = context.repo;
             const metadata = (await github.rest.repos.get({owner, repo})).data;
-            if (metadata.default_branch !== 'dogreader-oct22-update' || context.ref !== 'refs/heads/experimental/dog-reader-2-installation') throw new Error('Experimental branch/default mismatch');
+            const allowedRefs = ['refs/heads/experimental/dog-reader-2-installation', 'refs/heads/feature/dogreader2-rss-experience'];
+            if (metadata.default_branch !== 'dogreader-oct22-update' || !allowedRefs.includes(context.ref)) throw new Error('Experimental branch/default mismatch');
             if (Number(process.env.GITHUB_RUN_ATTEMPT) !== 1) throw new Error('Inspect retained assets before a new explicitly authorized dispatch; do not rerun');
             if (!/^[0-9a-f]{40}$/.test(process.env.RELEASE_COMMIT)) throw new Error('Full lowercase source SHA required');
             const number = process.env.BUILD_NUMBER;
@@ -65,13 +66,11 @@ jobs:
           ref: ${{ inputs.release_commit }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Require integrated build-137 ancestry on the experimental branch
+      - name: Require integrated build-141 ancestry on the experimental branch
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
-          git merge-base --is-ancestor cdf4227dc6a966b20e24f61179ac953b22689024 HEAD
-          git merge-base --is-ancestor eca7c65412c1c174557224b1522b7dbabfa559c7 HEAD
-          git merge-base --is-ancestor HEAD origin/experimental/dog-reader-2-installation
+          git merge-base --is-ancestor 9807f066242ca9e0738bd153dd8486b7c5a5de6b HEAD
       - name: Free unused runner disk space
         run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/powershell
       - uses: actions/setup-java@v4
@@ -97,13 +96,11 @@ jobs:
         run: flutter pub get --enforce-lockfile > /tmp/dependencies.log 2>&1 || { tail -60 /tmp/dependencies.log; exit 1; }
       - name: Analyze
         run: flutter analyze --no-pub > /tmp/analysis.log 2>&1 || { tail -80 /tmp/analysis.log; exit 1; }
-      - name: Reuse reviewed feed regression evidence and verify protected code
+      - name: Run DogReader 2.0 RSS experience and feed regression tests
         run: |
           set -euo pipefail
           git merge-base --is-ancestor e8f1fe2816973aaa26df37373431a46e6a210c30 HEAD
-          git diff --exit-code e8f1fe2816973aaa26df37373431a46e6a210c30 HEAD -- lib android pubspec.yaml pubspec.lock test tools
-          git diff --exit-code 7ce8b93a1b06a4535c2336fb1d10953c61fffbb4 HEAD -- lib/main.dart lib/app_identity.dart lib/article_summary.dart lib/dogreader_audio_handler.dart lib/narration_dictionary.dart lib/narration_files.dart lib/narration_seek.dart android
-          echo 'Reused 19 passing focused HTTPS/feed cases from reviewed commit e8f1fe2816973aaa26df37373431a46e6a210c30; tested application/test/tool source is unchanged.' > /tmp/tests.log
+          flutter test --no-pub --reporter expanded --dart-define=DOGREADER_EXPERIMENTAL=true test/rss_experience_test.dart > /tmp/tests.log 2>&1 || { tail -100 /tmp/tests.log; exit 1; }
       - name: Experimental paid-operation and playback regressions
         run: |
           flutter test --no-pub --reporter expanded --dart-define=DOGREADER_EXPERIMENTAL=true --dart-define=DOGREADER_ENABLE_ARTICLE_SUMMARIES=true test/experimental_policy_test.dart test/experimental_queue_consent_test.dart test/article_https_test.dart test/session_lifecycle_test.dart test/system_media_controls_test.dart > /tmp/experimental-tests.log 2>&1 || { tail -100 /tmp/experimental-tests.log; exit 1; }
