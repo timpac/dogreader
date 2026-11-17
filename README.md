@@ -1,5 +1,12 @@
 # Dogreader
 
+## Original DogReader progress repair (build 156)
+
+Build 156 repairs reading/listening persistence from the verified original
+build-153 source. Continue Reading follows the last active section; Continue
+Listening restores the independent audio position. Earlier-section visits retain
+furthest progress. See [the audit, tests and Android acceptance checklist](docs/PROGRESS_PERSISTENCE_AUDIT.md).
+
 Dogreader is a Flutter Android EPUB reader with cloud-generated narration,
 offline chapter audio, saved reading/listening positions, background and
 continuous playback, Android media controls, and Light / Dark / Follow system

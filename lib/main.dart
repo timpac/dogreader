@@ -14,6 +14,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:audio_service/audio_service.dart';
 
 import 'dogreader_audio_handler.dart';
+import 'book_progress.dart';
 import 'media_diagnostics.dart';
 import 'native_media_diagnostics.dart';
 import 'app_theme.dart';
@@ -52,7 +53,7 @@ Future<void> main() async {
   diagnostics.record(MediaDiagnosticEvent.processStarted, {'build': dogreaderBuild});
 
   audioHandler = await AudioService.init(
-    builder: () => DogreaderAudioHandler(diagnostics: diagnostics),
+    builder: () => DogreaderAudioHandler(diagnostics: diagnostics, progress: bookProgress),
     config: const AudioServiceConfig(
       androidNotificationChannelId: 'com.example.audiobook_app.audio',
       androidNotificationChannelName: 'Dogreader narration',
@@ -61,6 +62,7 @@ Future<void> main() async {
     ),
   );
 
+  audioHandler.observeLifecycle();
   await audioHandler.initializeAudioSession();
   unawaited(NativeMediaDiagnostics.start(diagnostics));
 
@@ -145,7 +147,9 @@ class ImportedBook {
 }
 
 class LibraryScreen extends StatefulWidget {
-  const LibraryScreen({super.key, this.appearance});
+  const LibraryScreen({super.key, this.appearance, this.progressStore});
+
+  final BookProgress? progressStore;
 
   final ThemePreferences? appearance;
 
@@ -160,35 +164,18 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
   int selectedTab = 0;
   bool importing = false;
   final List<ImportedBook> books = [];
-  final Map<String, Map<String, int>> progress = {};
-  final Map<String, Map<String, int>> chapterProgress = {};
-  final Map<String, int> lastOpened = {};
-  Future<void> _pendingStateWrite = Future<void>.value();
+  BookProgress get progress => widget.progressStore ?? bookProgress;
 
   void sortBooks() {
     books.sort((a, b) {
-      final recent = (lastOpened[b.id] ?? 0).compareTo(lastOpened[a.id] ?? 0);
+      final recent = progress.lastOpened(b.id).compareTo(progress.lastOpened(a.id));
       if (recent != 0) return recent;
       return b.id.compareTo(a.id);
     });
   }
 
-  Future<void> persistReadingState() {
-    final snapshot = jsonEncode({
-      'positions': progress,
-      'chapterProgress': chapterProgress,
-      'lastOpened': lastOpened,
-    });
-    _pendingStateWrite = _pendingStateWrite.catchError((Object _) {}).then((
-      _,
-    ) async {
-      final directory = await bookDirectory();
-      final stateFile = File('${directory.parent.path}/reading_state.json');
-      final temporary = File('${stateFile.path}.tmp');
-      await temporary.writeAsString(snapshot);
-      await temporary.rename(stateFile.path);
-    });
-    return _pendingStateWrite;
+  void _progressChanged() {
+    if (mounted) setState(sortBooks);
   }
 
   ImportedBook articleBook(ImportedArticle article) => ImportedBook(
@@ -214,12 +201,11 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
     final article = articles.articles.where((a) => a.id == book.id).firstOrNull;
     if (!articleText && article != null) { articleDetails(article); return; }
     setState(() {
-      lastOpened[book.id] = DateTime.now().microsecondsSinceEpoch;
       sortBooks();
     });
-    persistReadingState().catchError((Object _) {});
+    progress.opened(book.id).catchError((Object _) {});
 
-    final saved = progress[book.id];
+    final saved = progress.continuePosition(book.id);
     final chapter = (saved?['chapter'] ?? 0).clamp(0, book.chapters.length - 1);
     final offset = (saved?['offset'] ?? 0).clamp(
       0,
@@ -234,6 +220,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
           chapterIndex: chapter,
           initialOffset: offset,
           onSave: (chapter, offset) => saveProgress(book.id, chapter, offset),
+          progressStore: progress,
         ),
       ),
     );
@@ -247,9 +234,10 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
       MaterialPageRoute(
         builder: (_) => ChapterListScreen(
           book: book,
-          saved: progress[book.id],
+          saved: progress.continuePosition(book.id),
+          progressStore: progress,
           onSave: (chapter, offset) => saveProgress(book.id, chapter, offset),
-          chapterOffsets: chapterProgress[book.id] ?? {},
+          chapterOffsets: const {},
         ),
       ),
     );
@@ -259,6 +247,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    progress.addListener(_progressChanged);
     narrationDelivery.start();
     articles = ArticleLibrary(getApplicationDocumentsDirectory());
     articles.addListener(_articlesChanged);
@@ -307,6 +296,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
 
   @override
   void dispose() {
+    progress.removeListener(_progressChanged);
     ArticleShare.stop();
     articles.removeListener(_articlesChanged);
     WidgetsBinding.instance.removeObserver(this);
@@ -325,30 +315,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
   Future<void> loadLibrary() async {
     try {
       final directory = await bookDirectory();
-      final stateFile = File('${directory.parent.path}/reading_state.json');
-      if (await stateFile.exists()) {
-        final data =
-            jsonDecode(await stateFile.readAsString()) as Map<String, dynamic>;
-        final recent = data['lastOpened'] as Map<String, dynamic>? ?? {};
-        for (final entry in recent.entries) {
-          lastOpened[entry.key] = (entry.value as num?)?.toInt() ?? 0;
-        }
-        final history = data['chapterProgress'] as Map<String, dynamic>? ?? {};
-        for (final entry in history.entries) {
-          if (entry.value is Map) {
-            chapterProgress[entry.key] = (entry.value as Map).map((key, value) =>
-              MapEntry(key.toString(), (value as num?)?.toInt() ?? 0));
-          }
-        }
-        final positions = data['positions'] as Map<String, dynamic>? ?? {};
-        for (final entry in positions.entries) {
-          final position = entry.value as Map<String, dynamic>;
-          progress[entry.key] = {
-            'chapter': (position['chapter'] as num?)?.toInt() ?? 0,
-            'offset': (position['offset'] as num?)?.toInt() ?? 0,
-          };
-        }
-      }
+      await progress.load();
       final restored = <ImportedBook>[];
       await for (final entity in directory.list()) {
         if (entity is! File || !entity.path.endsWith('.epub')) continue;
@@ -385,15 +352,11 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
     }
   }
 
-  Future<void> saveProgress(String id, int chapter, int offset) async {
-    progress[id] = {'chapter': chapter, 'offset': offset};
-    final offsets = chapterProgress.putIfAbsent(id, () => {});
-    final key = '$chapter';
-    if (offset > (offsets[key] ?? 0)) offsets[key] = offset;
+  Future<void> saveProgress(String id, int chapter, int offset, {bool activate = true}) async {
     try {
-      await persistReadingState();
+      await progress.saveReading(id, chapter, offset, activate: activate);
     } catch (_) {
-      /* Don't interrupt reading for a save failure. */
+      // Keep the reader usable while retaining the last valid on-disk record.
     }
   }
 
@@ -864,17 +827,27 @@ class ChapterListScreen extends StatelessWidget {
   final Map<String, int>? saved;
   final SavePosition onSave;
   final Map<String, int> chapterOffsets;
+  final BookProgress? progressStore;
   const ChapterListScreen({
     super.key,
     required this.book,
     required this.saved,
     required this.onSave,
     required this.chapterOffsets,
+    this.progressStore,
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: progressStore ?? bookProgress,
+    builder: (context, _) => buildOverview(context),
+  );
+
+  Widget buildOverview(BuildContext context) {
+    final saved = progressStore?.continuePosition(book.id) ?? this.saved;
     final lastChapter = saved?['chapter'] ?? 0;
+    final furthest = progressStore?.furthestChapter(book.id);
+    final listening = progressStore?.listeningChapter(book.id);
     return Scaffold(
       appBar: AppBar(
         title: Text(book.title),
@@ -906,6 +879,17 @@ class ChapterListScreen extends StatelessWidget {
               label: const Text('Listen / Generate narration'),
             ),
           ),
+          if (listening != null && listening >= 0 && listening < book.chapters.length)
+            TextButton.icon(
+              icon: const Icon(Icons.headphones),
+              label: Text('Continue listening: ${book.chapters[listening].title}'),
+              onPressed: () => Navigator.push(context, MaterialPageRoute<void>(
+                builder: (_) => ChapterNarrationScreen(book: book,
+                  chapterIndex: listening, onSave: onSave))),
+            ),
+          if (furthest != null && furthest != lastChapter)
+            Padding(padding: const EdgeInsets.all(8), child: Text(
+              'Furthest reached: ${book.chapters[furthest.clamp(0, book.chapters.length - 1)].title}')),
           Expanded(
             child: ListView.builder(
               padding: const EdgeInsets.all(14),
@@ -937,10 +921,11 @@ class ChapterListScreen extends StatelessWidget {
                 final chapter = book.chapters[index];
                 final savedOffset = math.max(
                   chapterOffsets['$index'] ?? 0,
-                  saved != null && saved!['chapter'] == index
-                      ? (saved!['offset'] ?? 0) : 0,
+                  saved != null && saved['chapter'] == index
+                      ? (saved['offset'] ?? 0) : 0,
                 );
                 final fraction =
+                    progressStore?.sectionFraction(book.id, index, chapter.text.length) ??
                     (savedOffset / math.max(1, chapter.text.length)).clamp(
                       0.0,
                       1.0,
@@ -960,7 +945,8 @@ class ChapterListScreen extends StatelessWidget {
                       color: Theme.of(context).colorScheme.primary,
                     ),
                   ),
-                  trailing: const Icon(Icons.chevron_right),
+                  trailing: fraction >= 1 ? const Icon(Icons.check_circle_outline,
+                    semanticLabel: 'Section completed') : const Icon(Icons.chevron_right),
                   onTap: () => openChapter(context, index),
                 );
               },
@@ -972,6 +958,7 @@ class ChapterListScreen extends StatelessWidget {
   }
 
   void openChapter(BuildContext context, int index, {bool resume = false}) {
+    final saved = progressStore?.continuePosition(book.id) ?? this.saved;
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -980,6 +967,7 @@ class ChapterListScreen extends StatelessWidget {
           chapterIndex: index,
           initialOffset: resume ? (saved?['offset'] ?? 0) : 0,
           onSave: onSave,
+          progressStore: progressStore,
         ),
       ),
     );
@@ -1610,6 +1598,8 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
 }
 
 class ReadingScreen extends StatefulWidget {
+  final BookProgress? progressStore;
+  final SavePosition? onCheckpoint;
   final ImportedBook book;
   final int chapterIndex;
   final int initialOffset;
@@ -1620,13 +1610,16 @@ class ReadingScreen extends StatefulWidget {
     required this.chapterIndex,
     required this.initialOffset,
     required this.onSave,
+    this.onCheckpoint,
+    this.progressStore,
   });
 
   @override
   State<ReadingScreen> createState() => _ReadingScreenState();
 }
 
-class _ReadingScreenState extends State<ReadingScreen> {
+class _ReadingScreenState extends State<ReadingScreen> with WidgetsBindingObserver {
+  Object? _readingSession;
   double fontSize = 19;
   late int chapterIndex;
   late int currentOffset;
@@ -1644,9 +1637,10 @@ class _ReadingScreenState extends State<ReadingScreen> {
   void initState() {
     super.initState();
     unawaited(narrationDelivery.reconcile());
+    WidgetsBinding.instance.addObserver(this);
     chapterIndex = widget.chapterIndex;
     currentOffset = widget.initialOffset;
-    widget.onSave(chapterIndex, currentOffset);
+    _saveReading(chapterIndex, currentOffset, activate: true);
   }
 
   TextSpan styledPage(int start, int end) {
@@ -1796,7 +1790,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
         controller = PageController(initialPage: currentPage, keepPage: false);
         _paginating = false;
       });
-      saveCurrent();
+      saveCurrent(activate: false);
       if (oldController != null) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           oldController.dispose();
@@ -1867,15 +1861,33 @@ class _ReadingScreenState extends State<ReadingScreen> {
     jumpToPage(selected);
   }
 
-  void saveCurrent() {
-    widget.onSave(chapterIndex, currentOffset);
+  void _saveReading(int chapter, int offset, {required bool activate}) {
+    final store = widget.progressStore;
+    if (store != null) {
+      if (activate) _readingSession = store.startReading(widget.book.id);
+      unawaited(store.saveReading(widget.book.id, chapter, offset,
+        activate: activate, session: _readingSession).catchError((Object _) {}));
+    } else {
+      final save = activate ? widget.onSave : widget.onCheckpoint ?? widget.onSave;
+      unawaited(save(chapter, offset).catchError((Object _) {}));
+    }
+  }
+
+  void saveCurrent({bool activate = true}) {
+    final visible = ModalRoute.of(context)?.isCurrent ?? true;
+    _saveReading(chapterIndex, currentOffset, activate: activate && visible);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    saveCurrent(activate: false);
   }
 
   void changeChapter(int next) {
     if (next < 0 || next >= widget.book.chapters.length) return;
     unawaited(narrationDelivery.reconcile());
     if (next > chapterIndex) {
-      widget.onSave(chapterIndex, widget.book.chapters[chapterIndex].text.length);
+      _saveReading(chapterIndex, widget.book.chapters[chapterIndex].text.length, activate: false);
     }
     setState(() {
       chapterIndex = next;
@@ -1897,7 +1909,12 @@ class _ReadingScreenState extends State<ReadingScreen> {
         curve: Curves.easeOut,
       );
     } else if (target >= pages.length) {
-      changeChapter(chapterIndex + 1);
+      if (chapterIndex == widget.book.chapters.length - 1) {
+        currentOffset = widget.book.chapters[chapterIndex].text.length;
+        saveCurrent();
+      } else {
+        changeChapter(chapterIndex + 1);
+      }
     } else if (target < 0 && chapterIndex > 0) {
       changeChapter(chapterIndex - 1);
     }
@@ -1906,7 +1923,9 @@ class _ReadingScreenState extends State<ReadingScreen> {
   @override
   void dispose() {
     ++_paginationGeneration;
-    saveCurrent();
+    WidgetsBinding.instance.removeObserver(this);
+    // Do not use ModalRoute.of(context) during disposal.
+    _saveReading(chapterIndex, currentOffset, activate: false);
     controller?.dispose();
     super.dispose();
   }
@@ -1914,6 +1933,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
   @override
   Widget build(BuildContext context) {
     final chapter = widget.book.chapters[chapterIndex];
+    final pageChapter = chapterIndex;
     return Scaffold(
       appBar: AppBar(
         title: Text(
@@ -1994,6 +2014,7 @@ class _ReadingScreenState extends State<ReadingScreen> {
                   controller: controller,
                   itemCount: pages.length,
                   onPageChanged: (index) {
+                    if (pageChapter != chapterIndex || _paginating || index >= starts.length) return;
                     currentPage = index;
                     currentOffset = starts[index];
                     saveCurrent();
@@ -2081,6 +2102,7 @@ class ChapterNarrationScreen extends StatefulWidget {
 
 class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
   final player = audioHandler.player;
+  late int chapterIndex;
   final List<StreamSubscription<dynamic>> subscriptions = [];
   bool playing = false;
   bool loading = true;
@@ -2093,7 +2115,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
 
   int _restoreGeneration = 0;
 
-  String get chapterKey => '${widget.book.id}:${widget.chapterIndex}';
+  String get chapterKey => '${widget.book.id}:$chapterIndex';
 
   Future<File> get stateFile async {
     final root = await getApplicationDocumentsDirectory();
@@ -2121,6 +2143,21 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
   @override
   void initState() {
     super.initState();
+    chapterIndex = widget.chapterIndex;
+    subscriptions.add(audioHandler.mediaItem.listen((item) {
+      final prefix = '${widget.book.id}:';
+      if (!mounted || loading || item == null || !item.id.startsWith(prefix)) return;
+      final index = int.tryParse(item.id.substring(prefix.length));
+      if (index == null || index < 0 || index >= widget.book.chapters.length || index == chapterIndex) return;
+      setState(() {
+        ++_restoreGeneration;
+        chapterIndex = index;
+        audioPath = audioHandler.activeAudioPath;
+        position = player.position;
+        duration = player.duration ?? Duration.zero;
+        loading = false;
+      });
+    }));
 
     subscriptions.add(
       player.playerStateStream.listen((state) {
@@ -2166,7 +2203,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
   String? lastDelivery;
   void deliveryChanged() {
     if (!mounted) return;
-    final next = narrationDelivery.books[widget.book.id]?[widget.chapterIndex]?['delivery'] as String?;
+    final next = narrationDelivery.books[widget.book.id]?[chapterIndex]?['delivery'] as String?;
     final completed = next == 'downloaded' && lastDelivery != next;
     lastDelivery = next;
     if (completed && !loading && (ModalRoute.of(context)?.isCurrent ?? true) &&
@@ -2184,14 +2221,14 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
     bool active() => mounted && generation == _restoreGeneration &&
         (ModalRoute.of(context)?.isCurrent ?? true);
     try {
-      await narrationDelivery.waitForDownload(widget.book.id, widget.chapterIndex);
+      await narrationDelivery.waitForDownload(widget.book.id, chapterIndex);
       if (!active()) return;
       final root = await getApplicationDocumentsDirectory();
       final localFile = File(
-        '${root.path}/narration/${widget.book.id}_${widget.chapterIndex}.mp3',
+        '${root.path}/narration/${widget.book.id}_$chapterIndex.mp3',
       );
 
-      if (!narrationDelivery.deliveryInFlight(widget.book.id, widget.chapterIndex)) {
+      if (!narrationDelivery.deliveryInFlight(widget.book.id, chapterIndex)) {
         await recoverNarrationFile(localFile);
       }
       final data = await readState();
@@ -2212,7 +2249,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
         path = localFile.path;
         if (!active()) return;
         savedPosition = entry is Map ? (entry['positionMs'] as num?)?.toInt() ?? 0 : 0;
-        await updateState({'path': path, 'positionMs': savedPosition});
+        await updateState({'path': path});
       }
 
       if (!active()) return;
@@ -2220,10 +2257,10 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
         audioPath = path;
         Future<void> load() => audioHandler.loadChapter(
           path: path!,
-          title: widget.book.chapters[widget.chapterIndex].title,
+          title: widget.book.chapters[chapterIndex].title,
           author: widget.book.author,
           bookId: widget.book.id,
-          chapterIndex: widget.chapterIndex,
+          chapterIndex: chapterIndex,
           chapterCount: widget.book.chapters.length,
           startPosition: Duration(milliseconds: savedPosition),
           isCurrent: active,
@@ -2300,19 +2337,19 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
       final folder = Directory('${root.path}/narration');
       await folder.create(recursive: true);
       final target = File(
-        '${folder.path}/${widget.book.id}_${widget.chapterIndex}.mp3',
+        '${folder.path}/${widget.book.id}_$chapterIndex.mp3',
       );
       if (!mounted) return;
-      await audioHandler.unloadChapter(widget.book.id, widget.chapterIndex);
+      await audioHandler.unloadChapter(widget.book.id, chapterIndex);
       if (!mounted) return;
       await File(picked.path!).copy(target.path);
       if (mounted) setState(() => duration = Duration.zero);
       await audioHandler.loadChapter(
         path: target.path,
-        title: widget.book.chapters[widget.chapterIndex].title,
+        title: widget.book.chapters[chapterIndex].title,
         author: widget.book.author,
         bookId: widget.book.id,
-        chapterIndex: widget.chapterIndex,
+        chapterIndex: chapterIndex,
         chapterCount: widget.book.chapters.length,
         forceReload: true,
         isCurrent: () => mounted,
@@ -2380,6 +2417,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
 
   @override
   void dispose() {
+    unawaited(audioHandler.checkpointPosition());
     narrationDelivery.removeListener(deliveryChanged);
     ++_restoreGeneration;
     for (final sub in subscriptions) {
@@ -2427,29 +2465,29 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  widget.book.chapters[widget.chapterIndex].title,
+                  widget.book.chapters[chapterIndex].title,
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 20),
                 if (loading) const CircularProgressIndicator(),
                 if (!loading && !hasAudio)
                   Text(
-                    narrationDelivery.books[widget.book.id]?[widget.chapterIndex] == null
+                    narrationDelivery.books[widget.book.id]?[chapterIndex] == null
                         ? 'Narration is not downloaded yet. Finished cloud audio downloads automatically.'
-                        : narrationDeliveryLabel(narrationDelivery.books[widget.book.id]?[widget.chapterIndex]),
+                        : narrationDeliveryLabel(narrationDelivery.books[widget.book.id]?[chapterIndex]),
                     textAlign: TextAlign.center,
                   ),
-                if (!hasAudio && canRetryNarrationDownload(narrationDelivery.books[widget.book.id]?[widget.chapterIndex]))
+                if (!hasAudio && canRetryNarrationDownload(narrationDelivery.books[widget.book.id]?[chapterIndex]))
                   TextButton.icon(
-                    onPressed: narrationDelivery.deliveryInFlight(widget.book.id, widget.chapterIndex) ? null : () async {
+                    onPressed: narrationDelivery.deliveryInFlight(widget.book.id, chapterIndex) ? null : () async {
                       try {
-                        await narrationDelivery.retryDownload(widget.book.id, widget.chapterIndex);
+                        await narrationDelivery.retryDownload(widget.book.id, chapterIndex);
                       } catch (_) {
                         if (mounted) setState(() => error = 'Download interrupted. Retry Download when connected.');
                       }
                     },
                     icon: const Icon(Icons.cloud_download_outlined),
-                    label: Text(narrationDelivery.downloading(widget.book.id, widget.chapterIndex)
+                    label: Text(narrationDelivery.downloading(widget.book.id, chapterIndex)
                         ? 'Downloading…' : 'Retry Download'),
                   ),
                 const SizedBox(height: 16),
