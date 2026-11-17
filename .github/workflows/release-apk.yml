@@ -78,6 +78,8 @@ jobs:
               }
               const artifact = (await github.rest.actions.getArtifact({owner, repo, artifact_id: 14336707718})).data;
               if (artifact.workflow_run.id !== previous.id || artifact.digest !== 'sha256:576ead1fd9bee0b910af37385e7a43834225ff47054995aa2a2ff2df03e446fb') throw new Error('Retained archive digest mismatch');
+              const nativeArtifact = (await github.rest.actions.getArtifact({owner, repo, artifact_id: 14338316366})).data;
+              if (nativeArtifact.workflow_run.id !== 44104164234 || nativeArtifact.digest !== 'sha256:25764bed1d42bc61cb2e2975381db3a85e8ff8dfb4f965fef4735700a14e3aeb') throw new Error('Retained native test archive mismatch');
             }
       - uses: actions/checkout@v4
         with:
@@ -103,10 +105,19 @@ jobs:
           run-id: ${{ inputs.retained_run }}
           github-token: ${{ github.token }}
           path: /tmp/retained-evidence
+      - name: Download immutable compiled native test package
+        if: inputs.retained_run != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: freepress-login-check-158-failure-evidence
+          run-id: '44104164234'
+          github-token: ${{ github.token }}
+          path: /tmp/retained-native-tests
       - name: Restore retained bytes (never recompile APK)
         if: inputs.retained_run != ''
         run: |
-          mkdir -p build/app/outputs/flutter-apk
+          mkdir -p build/app/outputs/flutter-apk build/app/outputs/apk/androidTest/debug
+          cp /tmp/retained-native-tests/home/runner/work/dogreader/dogreader/build/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk build/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk
           cp /tmp/retained-evidence/home/runner/work/dogreader/dogreader/build/app/outputs/flutter-apk/app-debug.apk build/app/outputs/flutter-apk/app-debug.apk
           echo '194ace9323044d26986638a86276a9ead265400282aa032c5af9c93fabe21d91  build/app/outputs/flutter-apk/app-debug.apk' | sha256sum --check
           cp /tmp/retained-evidence/tmp/analysis.log /tmp/analysis.log
@@ -121,6 +132,7 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: subosito/flutter-action@v2
+        if: inputs.retained_run == ''
         with:
           channel: stable
           flutter-version: '3.47.7'
@@ -136,6 +148,7 @@ jobs:
           keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey > /tmp/certificate.txt
           grep -Fqi 'C5:CC:08:D9:75:7C:0E:92:89:3A:71:62:04:A2:6F:EB:61:57:F5:35:0A:00:DB:B0:B7:96:20:49:D6:D9:D1:77' /tmp/certificate.txt
       - name: Resolve locked dependencies
+        if: inputs.retained_run == ''
         run: flutter pub get --enforce-lockfile > /tmp/dependencies.log 2>&1 || { tail -60 /tmp/dependencies.log; exit 1; }
       - name: Analyze
         if: inputs.retained_run == ''
@@ -158,17 +171,30 @@ jobs:
           ORG_GRADLE_PROJECT_dogreaderOriginalUpdate: 'true'
         run: flutter build apk --debug --no-pub --build-number "$BUILD_NUMBER" --build-name 2.0.0 --dart-define="DOGREADER_BUILD=$BUILD_NUMBER" --dart-define=DOGREADER_EXPERIMENTAL=true --dart-define=DOGREADER_ENABLE_ARTICLE_SUMMARIES=false > /tmp/build.log 2>&1 || { tail -100 /tmp/build.log; exit 1; }
       - name: Set up the pinned Gradle version for native test assembly
+        if: inputs.retained_run == ''
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
           cache-disabled: true
       - name: Assemble native policy tests without rebuilding the retained APK
+        if: inputs.retained_run == ''
         working-directory: android
         run: |
           printf 'sdk.dir=%s\nflutter.sdk=%s\nflutter.versionName=2.0.0\nflutter.versionCode=%s\nflutter.buildMode=debug\n' "$ANDROID_HOME" "$FLUTTER_ROOT" "$BUILD_NUMBER" > local.properties
           sha256sum ../build/app/outputs/flutter-apk/app-debug.apk > /tmp/retained-apk.sha256
           gradle :app:assembleDebugAndroidTest -Pdart-defines=RE9HUkVBREVSX0VYUEVSSU1FTlRBTD10cnVl > /tmp/native-assembly.log 2>&1 || { tail -100 /tmp/native-assembly.log; exit 1; }
           sha256sum --check /tmp/retained-apk.sha256
+      - name: Sign only the retained native test package with the verified target key
+        run: |
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          TEST_APK=build/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          "$BUILD_TOOLS/apksigner" sign --ks "$HOME/.android/debug.keystore" --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android --out /tmp/signed-native-tests.apk "$TEST_APK"
+          mv /tmp/signed-native-tests.apk "$TEST_APK"
+          "$BUILD_TOOLS/apksigner" verify --print-certs "$TEST_APK" > /tmp/test-certificates.txt
+          grep -Fqi 'c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177' /tmp/test-certificates.txt
+          if [ -n "$RETAINED_RUN" ]; then
+            echo '194ace9323044d26986638a86276a9ead265400282aa032c5af9c93fabe21d91  build/app/outputs/flutter-apk/app-debug.apk' | sha256sum --check
+          fi
       - name: Enable emulator acceleration
         run: sudo chmod a+rw /dev/kvm
       - name: Native policy and private-manifest checks (no accounts or site traffic)
@@ -210,6 +236,7 @@ jobs:
           tail -1 /tmp/experimental-tests.log >> dist/BUILD.txt
           tail -1 /tmp/rss-smoke.log >> dist/BUILD.txt
           cat /tmp/freepress-native-tests.log >> dist/BUILD.txt
+          printf '\nNative test classes compiled from: a2d568a20a3ab7ee7a716273acd81e3279c8bf1f (retained run 44104164234); test package re-signed with target key for instrumentation.\n' >> dist/BUILD.txt
           cat /tmp/isolation.txt >> dist/BUILD.txt
           cp docs/FREEPRESS_LOGIN_CHECK.md dist/FREEPRESS_LOGIN_CHECK.md
           cat /tmp/apk-certificates.txt >> dist/BUILD.txt
