@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:epubx/epubx.dart' hide Image;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:google_fonts/google_fonts.dart';
 import 'package:audio_service/audio_service.dart';
 
@@ -889,7 +890,7 @@ Future<void> runChapterAudioAction(
   }
 }
 
-class ChapterListScreen extends StatelessWidget {
+class ChapterListScreen extends StatefulWidget {
   final ImportedBook book;
   final Map<String, int>? saved;
   final SavePosition onSave;
@@ -905,6 +906,15 @@ class ChapterListScreen extends StatelessWidget {
   });
 
   @override
+  State<ChapterListScreen> createState() => _ChapterListScreenState();
+}
+
+class _ChapterListScreenState extends State<ChapterListScreen> {
+  ImportedBook get book => widget.book;
+  SavePosition get onSave => widget.onSave;
+  BookProgress? get progressStore => widget.progressStore;
+
+  @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: progressStore ?? bookProgress,
     builder: (context, _) => BookNarrationStatus(
@@ -914,131 +924,405 @@ class ChapterListScreen extends StatelessWidget {
     ),
   );
 
+  final Set<int> _selected = {};
+  bool _selecting = false;
+
+  void _exitSelection() => setState(() {
+    _selecting = false;
+    _selected.clear();
+  });
+
+  void _toggle(int index) => setState(() {
+    if (!_selected.add(index)) _selected.remove(index);
+  });
+
+  void _startSelection(int index) {
+    unawaited(HapticFeedback.selectionClick());
+    setState(() {
+      _selecting = true;
+      _selected.add(index);
+    });
+  }
+
+  Future<void> _generate(Set<int> chapters) async {
+    final result = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      isDismissible: false,
+      enableDrag: false,
+      builder: (_) => NarrationQueueScreen(
+        book: book,
+        onSave: onSave,
+        generationChapters: Set.unmodifiable(chapters),
+      ),
+    );
+    if (!mounted || result == null) return;
+    _exitSelection();
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(result)));
+  }
+
+  Iterable<int> get _allChapters =>
+      Iterable<int>.generate(book.chapters.length);
+
+  Widget _selectionActions() => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 12),
+    child: Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 4,
+      children: [
+        Text('${_selected.length} selected'),
+        TextButton(
+          onPressed: _selected.length == book.chapters.length
+              ? null
+              : () => setState(() => _selected.addAll(_allChapters)),
+          child: const Text('Select All'),
+        ),
+        TextButton(
+          onPressed: _selected.isEmpty ? null : () => setState(_selected.clear),
+          child: const Text('Clear'),
+        ),
+        TextButton(onPressed: _exitSelection, child: const Text('Cancel')),
+      ],
+    ),
+  );
+
+  Widget _narrationMenu() => MenuAnchor(
+    menuChildren: [
+      MenuItemButton(
+        onPressed: () => setState(() => _selecting = true),
+        child: const Text('Select chapters'),
+      ),
+      MenuItemButton(
+        onPressed: () => _generate(_allChapters.toSet()),
+        child: const Text('Generate entire book'),
+      ),
+      MenuItemButton(
+        onPressed: () => openBookNarration(context, book, onSave),
+        child: const Text('Narration settings'),
+      ),
+    ],
+    builder: (context, controller, _) => TextButton.icon(
+      onPressed: book.chapters.isEmpty
+          ? null
+          : () {
+              if (controller.isOpen) {
+                controller.close();
+              } else {
+                controller.open();
+              }
+            },
+      icon: const Icon(Icons.expand_more),
+      label: const Text('Narration'),
+    ),
+  );
+
   Widget buildOverview(
     BuildContext context,
     ChapterAudioPresentation Function(int) narration,
   ) {
-    final saved = progressStore?.continuePosition(book.id) ?? this.saved;
+    final saved = progressStore?.continuePosition(book.id) ?? widget.saved;
     final lastChapter = saved?['chapter'] ?? 0;
     final furthest = progressStore?.furthestChapter(book.id);
     final listening = progressStore?.listeningChapter(book.id);
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(book.title),
-      ),
-      body: Column(
-        children: [
-          TextButton.icon(
-            onPressed: () => openBookNarration(context, book, onSave),
-            icon: const Icon(Icons.headphones_outlined),
-            label: const Text('Book narration'),
-          ),
-          if (listening != null && listening >= 0 && listening < book.chapters.length)
-            TextButton.icon(
-              icon: const Icon(Icons.headphones),
-              label: Text('Continue listening: ${book.chapters[listening].title}'),
-              onPressed: () => Navigator.push(context, MaterialPageRoute<void>(
-                builder: (_) => ChapterNarrationScreen(book: book,
-                  chapterIndex: listening, onSave: onSave))),
-            ),
-          if (furthest != null && furthest != lastChapter)
-            Padding(padding: const EdgeInsets.all(8), child: Text(
-              'Furthest reached: ${book.chapters[furthest.clamp(0, book.chapters.length - 1)].title}')),
-          Expanded(
-            child: ListView.builder(
-              padding: const EdgeInsets.all(14),
-              itemCount: book.chapters.length + (saved == null ? 0 : 1),
-              itemBuilder: (context, row) {
-                if (saved != null && row == 0) {
-                  return Card(
-                    child: ListTile(
-                      leading: Icon(Icons.bookmark, color: Theme.of(context).colorScheme.primary),
-                      title: const Text('Continue reading'),
-                      subtitle: Text(
-                        book
-                            .chapters[lastChapter.clamp(
-                              0,
-                              book.chapters.length - 1,
-                            )]
-                            .title,
-                      ),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: () => openChapter(
-                        context,
-                        lastChapter.clamp(0, book.chapters.length - 1),
-                        resume: true,
-                      ),
-                    ),
-                  );
-                }
-                final index = row - (saved == null ? 0 : 1);
-                final chapter = book.chapters[index];
-                final savedOffset = math.max(
-                  chapterOffsets['$index'] ?? 0,
-                  saved != null && saved['chapter'] == index
-                      ? (saved['offset'] ?? 0) : 0,
-                );
-                final fraction =
-                    progressStore?.sectionFraction(book.id, index, chapter.text.length) ??
-                    (savedOffset / math.max(1, chapter.text.length)).clamp(
-                      0.0,
-                      1.0,
-                    );
-
-                final audio = narration(index);
-                final action = audio.action;
-                return ListTile(
-                  title: Text(chapter.title),
-                  subtitle: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const SizedBox(height: 6),
-                      LinearProgressIndicator(value: fraction, minHeight: 3),
-                      const SizedBox(height: 4),
-                      Text(audio.label),
-                      if (action != null)
-                        TextButton(
-                          onPressed: () => runChapterAudioAction(
-                            context, book, index, onSave, action,
+    final hasChapters = book.chapters.isNotEmpty;
+    final showResume = hasChapters && saved != null && !_selecting;
+    return PopScope(
+      canPop: !_selecting,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _selecting) _exitSelection();
+      },
+      child: Scaffold(
+        appBar: AppBar(title: Text(book.title)),
+        body: Column(
+          children: [
+            if (_selecting) _selectionActions() else _narrationMenu(),
+            Expanded(
+              child: CustomScrollView(
+                slivers: [
+                  SliverToBoxAdapter(
+                    child: Column(
+                      children: [
+                        if (!_selecting &&
+                            listening != null &&
+                            listening >= 0 &&
+                            listening < book.chapters.length)
+                          TextButton.icon(
+                            icon: const Icon(Icons.headphones),
+                            label: Text(
+                              'Continue listening: ${book.chapters[listening].title}',
+                            ),
+                            onPressed: () => openChapterPlayer(
+                              context,
+                              book,
+                              listening,
+                              onSave,
+                            ),
                           ),
-                          child: Text(action.label),
-                        ),
-                    ],
+                        if (!_selecting &&
+                            hasChapters &&
+                            furthest != null &&
+                            furthest != lastChapter)
+                          Padding(
+                            padding: const EdgeInsets.all(8),
+                            child: Text(
+                              'Furthest reached: ${book.chapters[furthest.clamp(0, book.chapters.length - 1)].title}',
+                            ),
+                          ),
+                        if (showResume)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 14),
+                            child: Card(
+                              child: ListTile(
+                                leading: Icon(
+                                  Icons.bookmark,
+                                  color: Theme.of(context).colorScheme.primary,
+                                ),
+                                title: const Text('Continue reading'),
+                                subtitle: Text(
+                                  book
+                                      .chapters[lastChapter.clamp(
+                                        0,
+                                        book.chapters.length - 1,
+                                      )]
+                                      .title,
+                                ),
+                                trailing: const Icon(Icons.chevron_right),
+                                onTap: () => openChapter(
+                                  context,
+                                  lastChapter.clamp(
+                                    0,
+                                    book.chapters.length - 1,
+                                  ),
+                                  resume: true,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (fraction >= 1)
-                        const Icon(Icons.check_circle_outline,
-                          semanticLabel: 'Section completed'),
-                      PopupMenuButton<bool>(
-                        tooltip: 'Narration actions for ${chapter.title}',
-                        onSelected: (manage) {
-                          if (manage) {
-                            openBookNarration(context, book, onSave, chapter: index);
-                          } else {
-                            openChapterPlayer(context, book, index, onSave);
-                          }
-                        },
-                        itemBuilder: (_) => const [
-                          PopupMenuItem(value: true, child: Text('Manage narration')),
-                          PopupMenuItem(value: false, child: Text('Open player')),
-                        ],
-                      ),
-                    ],
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(14, 4, 14, 14),
+                    sliver: SliverList.builder(
+                      itemCount: book.chapters.length,
+                      itemBuilder: (context, index) =>
+                          _chapterRow(context, index, narration(index), saved),
+                    ),
                   ),
-                  onTap: () => openChapter(context, index),
-                );
-              },
+                ],
+              ),
+            ),
+          ],
+        ),
+        bottomNavigationBar: _selecting
+            ? SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: FilledButton(
+                    onPressed: _selected.isEmpty
+                        ? null
+                        : () => _generate(_selected),
+                    child: Text('Generate (${_selected.length})'),
+                  ),
+                ),
+              )
+            : null,
+      ),
+    );
+  }
+
+  Widget _chapterRow(
+    BuildContext context,
+    int index,
+    ChapterAudioPresentation audio,
+    Map<String, int>? saved,
+  ) {
+    final chapter = book.chapters[index];
+    final colors = Theme.of(context).colorScheme;
+    final selected = _selected.contains(index);
+    final current = saved?['chapter'] == index;
+    final last = index == book.chapters.length - 1;
+    final savedOffset = math.max(
+      widget.chapterOffsets['$index'] ?? 0,
+      current ? (saved?['offset'] ?? 0) : 0,
+    );
+    final fraction =
+        progressStore?.sectionFraction(book.id, index, chapter.text.length) ??
+        (savedOffset / math.max(1, chapter.text.length)).clamp(0.0, 1.0);
+    final job = narrationDelivery.books[book.id]?[index];
+    final active =
+        narrationDelivery.downloading(book.id, index) ||
+        const ['waiting', 'queued', 'generating'].contains(job?['status']);
+    final failed =
+        job?['status'] == 'error' ||
+        job?['failureStage'] == 'generation' ||
+        job?['delivery'] == 'failed';
+    final ready =
+        audio.hasRecording || audio.action == ChapterAudioAction.download;
+    final narrationTitle = 'Narration for ${chapter.title} · ${audio.label}';
+    const targetWidth = 56.0;
+
+    return Material(
+      key: ValueKey('chapter-row-$index'),
+      color: Color.alphaBlend(
+        colors.primary.withValues(alpha: selected ? 0.19 : current ? 0.09 : 0),
+        colors.surfaceContainerLow,
+      ),
+      borderRadius: BorderRadius.vertical(
+        top: index == 0 ? const Radius.circular(16) : Radius.zero,
+        bottom: last ? const Radius.circular(16) : Radius.zero,
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        children: [
+          Padding(
+            padding: EdgeInsets.only(right: _selecting ? 0 : targetWidth),
+            child: Semantics(
+              checked: _selecting ? selected : null,
+              child: InkWell(
+                onTap: _selecting
+                    ? () => _toggle(index)
+                    : () => openChapter(context, index),
+                onLongPress: _selecting ? null : () => _startSelection(index),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 56),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    child: Row(
+                      children: [
+                        if (_selecting)
+                          ExcludeSemantics(
+                            child: Icon(
+                              selected
+                                  ? Icons.check_box
+                                  : Icons.check_box_outline_blank,
+                              color: selected
+                                  ? colors.primary
+                                  : colors.onSurfaceVariant,
+                            ),
+                          ),
+                        if (_selecting) const SizedBox(width: 10),
+                        Expanded(child: Text(chapter.title)),
+                        if (!_selecting && fraction >= 1)
+                          Icon(
+                            Icons.check_circle_outline,
+                            size: 16,
+                            color: colors.onSurfaceVariant,
+                            semanticLabel: 'Section completed',
+                          ),
+                        if (_selecting) const SizedBox(width: 8),
+                        if (_selecting)
+                          _headphones(active, failed, ready, colors),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             ),
           ),
+          if (!_selecting)
+            Positioned(
+              top: 0,
+              bottom: 0,
+              right: 0,
+              width: targetWidth,
+              child: Semantics(
+                label: narrationTitle,
+                button: true,
+                child: Tooltip(
+                  message: narrationTitle,
+                  excludeFromSemantics: true,
+                  triggerMode: TooltipTriggerMode.manual,
+                  child: InkWell(
+                    onTap: () => openBookNarration(
+                      context,
+                      book,
+                      onSave,
+                      chapter: index,
+                    ),
+                    onLongPress: () => _startSelection(index),
+                    child: Center(
+                      child: _headphones(active, failed, ready, colors),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          if (!last || (!_selecting && fraction > 0))
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: IgnorePointer(
+                child: LinearProgressIndicator(
+                  value: _selecting ? 0 : fraction,
+                  minHeight: 1,
+                  borderRadius: BorderRadius.zero,
+                  stopIndicatorRadius: 0,
+                  trackGap: 0,
+                  backgroundColor: last
+                      ? Colors.transparent
+                      : colors.outlineVariant,
+                  color: colors.primary.withValues(alpha: 0.45),
+                ),
+              ),
+            ),
         ],
       ),
     );
   }
 
+  Widget _headphones(
+    bool active,
+    bool failed,
+    bool ready,
+    ColorScheme colors,
+  ) => SizedBox(
+    width: 40,
+    height: 40,
+    child: Stack(
+      alignment: Alignment.center,
+      children: [
+        Image.asset(
+          'assets/images/chapter_headphones.webp',
+          width: 40,
+          height: 40,
+          excludeFromSemantics: true,
+        ),
+        if (active || failed || ready)
+          Positioned(
+            right: 0,
+            bottom: 0,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: colors.surface,
+                shape: BoxShape.circle,
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(2),
+                child: active
+                    ? const SizedBox.square(
+                        dimension: 9,
+                        child: CircularProgressIndicator(strokeWidth: 1.5),
+                      )
+                    : Icon(
+                        failed ? Icons.error_outline : Icons.circle,
+                        size: failed ? 11 : 7,
+                        color: failed ? colors.error : colors.primary,
+                      ),
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
+
   void openChapter(BuildContext context, int index, {bool resume = false}) {
-    final saved = progressStore?.continuePosition(book.id) ?? this.saved;
+    final saved = progressStore?.continuePosition(book.id) ?? widget.saved;
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -1058,8 +1342,13 @@ class NarrationQueueScreen extends StatefulWidget {
   final ImportedBook book;
   final SavePosition onSave;
   final int? initialChapter;
+  final Set<int>? generationChapters;
   const NarrationQueueScreen({
-    super.key, required this.book, required this.onSave, this.initialChapter,
+    super.key,
+    required this.book,
+    required this.onSave,
+    this.initialChapter,
+    this.generationChapters,
   });
   @override
   State<NarrationQueueScreen> createState() => _NarrationQueueScreenState();
@@ -1071,7 +1360,10 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   bool previewing = false;
   int previewSequence = 0;
   final Set<int> selected = {};
-  final Map<int, Map<String, dynamic>> jobs = {};
+  late final Map<int, Map<String, dynamic>> jobs = narrationDelivery.books
+      .putIfAbsent(widget.book.id, () => {});
+  static final Set<String> _checkingBooks = {};
+  bool submitting = false;
   String host = '';
   String token = '';
   bool busy = false;
@@ -1103,25 +1395,38 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
           for (final entry in bookJobs.entries) {
             final index = int.tryParse(entry.key.toString());
             if (index != null && entry.value is Map) {
-              jobs[index] = Map<String, dynamic>.from(entry.value as Map);
+              jobs.putIfAbsent(
+                index,
+                () => Map<String, dynamic>.from(entry.value as Map),
+              );
             }
           }
         }
       }
     } catch (_) {}
-    narrationDelivery.attachBook(widget.book.id, jobs);
     final root = await getApplicationDocumentsDirectory();
     for (var index = 0; index < widget.book.chapters.length; index++) {
       final file = File('${root.path}/narration/${widget.book.id}_$index.mp3');
-      if (!narrationDelivery.deliveryInFlight(widget.book.id, index)) await recoverNarrationFile(file);
+      if (!narrationDelivery.deliveryInFlight(widget.book.id, index)) {
+        await recoverNarrationFile(file);
+      }
       final localAvailable = await file.exists() && await file.length() >= 1000;
       if (jobs[index] != null) jobs[index]!['localAvailable'] = localAvailable;
-      if (localAvailable && jobs[index]?['previousRecording'] == null &&
-          (jobs[index]?['delivery'] == null || jobs[index]?['delivery'] == 'downloaded') &&
-          !['waiting', 'queued', 'generating', 'error'].contains(jobs[index]?['status'])) {
+      if (localAvailable &&
+          jobs[index]?['previousRecording'] == null &&
+          (jobs[index]?['delivery'] == null ||
+              jobs[index]?['delivery'] == 'downloaded') &&
+          ![
+            'waiting',
+            'queued',
+            'generating',
+            'error',
+          ].contains(jobs[index]?['status'])) {
         jobs[index] = {
           ...?jobs[index],
-          'status': 'ready', 'delivery': 'downloaded', 'localAvailable': true,
+          'status': 'ready',
+          'delivery': 'downloaded',
+          'localAvailable': true,
           'id': jobs[index]?['id'],
         };
       }
@@ -1132,7 +1437,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       final chapter = focusedChapter;
       if (chapter != null && jobs[chapter] == null) selected.add(chapter);
     });
-    await checkJobs();
+    if (widget.generationChapters == null) await checkJobs();
   }
 
   Future<void> save() async {
@@ -1140,9 +1445,14 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     narrationDelivery.token = token;
     narrationDelivery.attachBook(widget.book.id, jobs);
     await narrationDelivery.save();
+    await savePreference();
+  }
+
+  Future<void> savePreference() async {
+    final preference = NarrationPreference(narrationEngine, narrator);
     await updateNarrationJson(await queueFile, (data) {
-      data['narrator'] = narrator;
-      data['engine'] = narrationEngine;
+      data['narrator'] = preference.voice;
+      data['engine'] = preference.engine;
     });
   }
 
@@ -1244,12 +1554,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     setState(() {
       selected.clear();
       for (var i = 0; i < widget.book.chapters.length; i++) {
-        final status = jobs[i]?['status'];
-        if (status == null ||
-            (status == 'error' && jobs[i]?['localAvailable'] != true &&
-                jobs[i]?['previousRecording'] == null)) {
-          selected.add(i);
-        }
+        if (_needsGeneration(i)) selected.add(i);
       }
       notice = selected.isEmpty
           ? 'All chapters are already generated or queued.'
@@ -1329,18 +1634,44 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   }
 
   Future<void> regenerate(int index) async {
-    if (busy || narrationDelivery.deliveryInFlight(widget.book.id, index)) return;
+    if (busy ||
+        _checkingBooks.contains(widget.book.id) ||
+        narrationDelivery.deliveryInFlight(widget.book.id, index)) {
+      return;
+    }
     final preference = NarrationPreference(narrationEngine, narrator);
-    final confirmed = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
-      title: const Text('Regenerate narration?'),
-      content: Text('Generate ${widget.book.chapters[index].title} with ${recordingLabel(preference.toJson())}? '
-          'The current download is replaced only after the new audio downloads successfully.'),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-        FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Generate narration')),
-      ],
-    ));
-    if (confirmed != true || !mounted || busy || narrationDelivery.deliveryInFlight(widget.book.id, index)) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Regenerate narration?'),
+        content: Text(
+          'Generate ${widget.book.chapters[index].title} with ${recordingLabel(preference.toJson())}? '
+          'The current download is replaced only after the new audio downloads successfully.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Generate narration'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true ||
+        !mounted ||
+        busy ||
+        _checkingBooks.contains(widget.book.id) ||
+        narrationDelivery.deliveryInFlight(widget.book.id, index) ||
+        const [
+          'waiting',
+          'queued',
+          'generating',
+        ].contains(jobs[index]?['status'])) {
+      return;
+    }
     if (host.isEmpty || token.isEmpty) {
       setState(() => notice = 'Connect Dogreader Cloud first.');
       return;
@@ -1348,56 +1679,224 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     setState(() {
       jobs[index] = {
         'previousRecording': jobs[index]?['previousRecording'] ?? jobs[index],
-        'status': 'waiting', ...preference.toJson(),
-        'narration_dictionary': narrationDictionary.effective(widget.book.id).toJson(),
+        'status': 'waiting',
+        ...preference.toJson(),
+        'narration_dictionary': narrationDictionary
+            .effective(widget.book.id)
+            .toJson(),
       };
     });
     await save();
     await checkJobs();
   }
 
+  bool _needsGeneration(int index) {
+    final job = jobs[index];
+    if (job == null) return true;
+    return job['status'] == 'error' &&
+        job['localAvailable'] != true &&
+        job['previousRecording'] == null &&
+        job['id'] == null;
+  }
+
   Future<void> confirmGeneration() async {
+    if (busy || selected.isEmpty) return;
+    final requested = Set<int>.of(selected);
     final preference = NarrationPreference(narrationEngine, narrator);
-    final chapters = selected.length == 1
-        ? widget.book.chapters[selected.single].title
-        : '${selected.length} chapters';
+    final downloaded = requested
+        .where((index) => jobs[index]?['localAvailable'] == true)
+        .length;
+    final active = requested
+        .where(
+          (index) => const [
+            'waiting',
+            'queued',
+            'generating',
+          ].contains(jobs[index]?['status']),
+        )
+        .length;
+    final newJobs = requested.where(_needsGeneration).length;
+    final chapter = requested.length == 1
+        ? '\n${widget.book.chapters[requested.single].title}'
+        : '';
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Generate narration?'),
-        content: Text('Generate $chapters with ${recordingLabel(preference.toJson())}?'),
+        title: const Text('Confirm narration generation'),
+        content: Text(
+          '${requested.length} ${requested.length == 1 ? 'chapter' : 'chapters'} selected$chapter\n'
+          '${recordingLabel(preference.toJson())}\n\n'
+          '$downloaded downloaded\n'
+          '$active queued or generating\n'
+          '$newJobs new generation jobs\n\n'
+          'Existing recordings and active jobs will be kept.',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Generate')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(newJobs == 0 ? 'Close' : 'Cancel'),
+          ),
+          if (newJobs > 0)
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text('Generate ($newJobs)'),
+            ),
         ],
+        scrollable: true,
       ),
     );
-    if (mounted && confirmed == true) await generate();
+    if (mounted && confirmed == true) await generate(requested, preference);
   }
 
-  Future<void> generate() async {
-    if (busy || selected.isEmpty) return;
+  Future<void> generate(
+    Set<int> requested,
+    NarrationPreference preference,
+  ) async {
+    if (busy) return;
     if (host.isEmpty || token.isEmpty) {
       setState(() => notice = 'Set your Cloud Run URL and access token first.');
       return;
     }
+    // Recheck after confirmation in case delivery or another view updated jobs.
+    final indices = requested.where(_needsGeneration).toList()..sort();
+    if (indices.isEmpty) {
+      setState(
+        () => notice = 'No new jobs needed. Existing narration was kept.',
+      );
+      return;
+    }
+    final previous = {for (final index in indices) index: jobs[index]};
     setState(() {
       busy = true;
+      submitting = true;
       notice = null;
     });
-    for (final index in selected.toList()..sort()) {
-      jobs[index] = {'status': 'waiting', 'engine': narrationEngine, 'voice': narrator,
-        'narration_dictionary': narrationDictionary.effective(widget.book.id).toJson()};
+    for (final index in indices) {
+      jobs[index] = {
+        'status': 'waiting',
+        ...preference.toJson(),
+        'narration_dictionary': narrationDictionary
+            .effective(widget.book.id)
+            .toJson(),
+      };
     }
-    await save();
-    if (mounted) {
+    try {
+      narrationDelivery.host = host;
+      narrationDelivery.token = token;
+      await narrationDelivery.save();
+    } catch (_) {
+      for (final index in indices) {
+        final job = previous[index];
+        if (job == null) {
+          jobs.remove(index);
+        } else {
+          jobs[index] = job;
+        }
+      }
+      busy = false;
+      submitting = false;
+      if (mounted) {
+        setState(() => notice = 'Could not save narration jobs. Try again.');
+      }
+      return;
+    }
+    busy = false;
+    try {
+      await checkJobs();
+    } catch (_) {
+      // The waiting jobs were saved and remain available for retry.
+    }
+    final submitted = indices
+        .where((index) => jobs[index]?['id'] != null)
+        .length;
+    final waiting = indices
+        .where((index) => jobs[index]?['status'] == 'waiting')
+        .length;
+    final failed = indices.length - submitted - waiting;
+    final result = [
+      '$submitted submitted.',
+      if (waiting > 0) '$waiting saved for retry.',
+      if (failed > 0) '$failed could not be submitted.',
+    ].join(' ');
+    submitting = false;
+    if (!mounted) return;
+    if (widget.generationChapters != null) {
+      Navigator.pop(context, result);
+    } else {
       setState(() {
-        selected.clear();
-        busy = false;
+        selected.removeAll(requested);
+        notice = result;
       });
     }
-    await checkJobs();
   }
+
+  Widget _voiceControls() => NarrationControls(
+    preference: NarrationPreference(narrationEngine, narrator),
+    onChanged: (value) {
+      setState(() {
+        narrationEngine = value.engine;
+        narrator = value.voice;
+      });
+      unawaited(savePreference());
+    },
+    previewing: previewing,
+    onPreview: previewing ? stopPreview : previewVoice,
+  );
+
+  Widget _generationSheet() => PopScope(
+    canPop: !submitting,
+    child: SafeArea(
+      top: false,
+      child: SingleChildScrollView(
+        padding: EdgeInsets.fromLTRB(
+          16,
+          16,
+          16,
+          12 + MediaQuery.viewInsetsOf(context).bottom,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Generate narration',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            Text('${selected.length} ${selected.length == 1 ? 'chapter' : 'chapters'} selected'),
+            if (!submitting)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+              ),
+            if (!loaded)
+              const Center(child: CircularProgressIndicator())
+            else ...[
+              if (notice != null) Text(notice!),
+              if (host.isEmpty || token.isEmpty)
+                TextButton(
+                  onPressed: configure,
+                  child: const Text('Connect narration service'),
+                ),
+              if (!submitting) _voiceControls(),
+              if (submitting)
+                const Center(child: CircularProgressIndicator())
+              else
+                FilledButton(
+                  onPressed:
+                      busy || selected.isEmpty || host.isEmpty || token.isEmpty
+                      ? null
+                      : confirmGeneration,
+                  child: const Text('Review generation'),
+                ),
+            ],
+          ],
+        ),
+      ),
+    ),
+  );
 
   Future<void> repairChapterAudio(int index) async {
     if (busy) return;
@@ -1466,7 +1965,13 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   }
 
   Future<void> checkJobs() async {
-    if (busy || host.isEmpty || token.isEmpty || jobs.isEmpty) return;
+    if (busy ||
+        host.isEmpty ||
+        token.isEmpty ||
+        jobs.isEmpty ||
+        !_checkingBooks.add(widget.book.id)) {
+      return;
+    }
     busy = true;
     try {
       for (final index in jobs.keys.toList()..sort()) {
@@ -1474,13 +1979,25 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         // are reconciled by the app-owned delivery service, never resubmitted.
         if (jobs[index]?['status'] != 'waiting') continue;
         try {
-          final response = await requestJson('POST', '/dogreader/jobs', chapterPayload(index));
-          jobs[index] = {...?jobs[index], ...recordingMetadata(response),
-            'status': response['status'], 'id': response['id']};
+          final response = await requestJson(
+            'POST',
+            '/dogreader/jobs',
+            chapterPayload(index),
+          );
+          jobs[index] = {
+            ...?jobs[index],
+            ...recordingMetadata(response),
+            'status': response['status'],
+            'id': response['id'],
+          };
           await save(); // Persist identity before any download/network follow-up.
         } catch (e) {
           if (e is StateError) {
-            jobs[index] = {...?jobs[index], 'status': 'error', 'error': e.message};
+            jobs[index] = {
+              ...?jobs[index],
+              'status': 'error',
+              'error': e.message,
+            };
           }
           notice = 'Submission interrupted. Saved work will be retried.';
           await save();
@@ -1499,9 +2016,12 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   void initState() {
     super.initState();
     focusedChapter = widget.initialChapter;
+    selected.addAll(widget.generationChapters ?? const <int>{});
     narrationDelivery.addListener(deliveryChanged);
     load();
-    timer = Timer.periodic(const Duration(seconds: 12), (_) => checkJobs());
+    if (widget.generationChapters == null) {
+      timer = Timer.periodic(const Duration(seconds: 12), (_) => checkJobs());
+    }
   }
 
   @override
@@ -1515,6 +2035,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.generationChapters != null) return _generationSheet();
     return Scaffold(
       appBar: AppBar(
         title: Text(focusedChapter == null ? 'Book narration' : 'Chapter narration'),
@@ -1552,15 +2073,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
                 padding: const EdgeInsets.all(12),
                 child: Text(notice!, textAlign: TextAlign.center),
               ),
-            NarrationControls(
-              preference: NarrationPreference(narrationEngine, narrator),
-              onChanged: (value) {
-                setState(() { narrationEngine = value.engine; narrator = value.voice; });
-                save();
-              },
-              previewing: previewing,
-              onPreview: previewing ? stopPreview : previewVoice,
-            ),
+            _voiceControls(),
             TextButton.icon(
               icon: const Icon(Icons.menu_book), label: const Text('Narration Dictionary'),
               onPressed: () async {
@@ -1618,8 +2131,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
                   final audio = narration(index);
                   final action = audio.action;
                   final inFlight = narrationDelivery.deliveryInFlight(widget.book.id, index);
-                  final selectable = !audio.hasRecording &&
-                      (status == null || status == 'error');
+                  final selectable = !audio.hasRecording && _needsGeneration(index);
                   final download = canRetryNarrationDownload(job);
                   final canRegenerate = status == 'ready' || status == 'error';
                   return ListTile(

@@ -103,10 +103,7 @@ void main() {
       expect(find.text('Furthest reached: Section 8'), findsOneWidget);
       final section8 = find.text('Section 8');
       await tester.scrollUntilVisible(section8, 200);
-      final tile8 = find.ancestor(
-        of: section8,
-        matching: find.byType(ListTile),
-      );
+      final tile8 = find.byKey(const ValueKey('chapter-row-7'));
       expect(
         tester
             .widget<LinearProgressIndicator>(
@@ -118,10 +115,7 @@ void main() {
             .value,
         .3,
       );
-      final tile7 = find.ancestor(
-        of: find.text('Section 7'),
-        matching: find.byType(ListTile),
-      );
+      final tile7 = find.byKey(const ValueKey('chapter-row-6'));
       expect(
         find.descendant(
           of: tile7,
