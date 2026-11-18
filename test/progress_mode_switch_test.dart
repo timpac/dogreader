@@ -62,6 +62,15 @@ void main() {
               .writeAsBytes(List.filled(1200, 1));
         }
         await progress.saveAudio('book', 0, const Duration(seconds: 80));
+        await narrationDelivery.load();
+        narrationDelivery.attachBook('book', {
+          for (var i = 0; i < 2; i++)
+            i: {
+              'status': 'ready',
+              'delivery': 'downloaded',
+              'localAvailable': true,
+            },
+        });
       });
       Future<void> drain() async {
         for (var i = 0; i < 60; i++) {
