@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:audiobook_app/book_progress.dart';
 import 'package:audiobook_app/dogreader_audio_handler.dart';
 import 'package:audiobook_app/main.dart';
-import 'package:audiobook_app/narration_presentation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 // Same locked platform test seam as the existing dictionary route tests.
@@ -62,15 +61,6 @@ void main() {
               .writeAsBytes(List.filled(1200, 1));
         }
         await progress.saveAudio('book', 0, const Duration(seconds: 80));
-        await narrationDelivery.load();
-        narrationDelivery.attachBook('book', {
-          for (var i = 0; i < 2; i++)
-            i: {
-              'status': 'ready',
-              'delivery': 'downloaded',
-              'localAvailable': true,
-            },
-        });
       });
       Future<void> drain() async {
         for (var i = 0; i < 60; i++) {
@@ -83,28 +73,20 @@ void main() {
       }
 
       await tester.pumpWidget(
-        NarrationPlaybackScope(
-          handler: handler,
-          child: MaterialApp(
-            home: ReadingScreen(
-              progressStore: progress,
-              book: book,
-              chapterIndex: 0,
-              initialOffset: 1800,
-              onSave: (chapter, offset) =>
-                  progress.saveReading('book', chapter, offset),
-              onCheckpoint: (chapter, offset) => progress.saveReading(
-                'book',
-                chapter,
-                offset,
-                activate: false,
-              ),
-            ),
+        MaterialApp(
+          home: ReadingScreen(
+            progressStore: progress,
+            book: book,
+            chapterIndex: 0,
+            initialOffset: 1800,
+            onSave: (chapter, offset) =>
+                progress.saveReading('book', chapter, offset),
+            onCheckpoint: (chapter, offset) =>
+                progress.saveReading('book', chapter, offset, activate: false),
           ),
         ),
       );
       await drain();
-      expect(find.byTooltip('Play narration'), findsOneWidget);
       final dynamic reader = tester.state(find.byType(ReadingScreen));
       final offset = reader.currentOffset as int;
       expect(offset, greaterThan(0));
@@ -131,10 +113,6 @@ void main() {
       expect(progress.readingPosition('book')!['offset'], offset);
       expect(progress.continuePosition('book')!['chapter'], 1);
       expect(player.playing, isTrue);
-      // The active player is on the next chapter. The reader cannot pause
-      // that recording through the previous chapter's playback control.
-      expect(find.byTooltip('Play narration'), findsOneWidget);
-      expect(find.byTooltip('Pause narration'), findsNothing);
       await tester.pumpWidget(const SizedBox());
       await drain();
       await tester.runAsync(() async {

@@ -111,7 +111,10 @@ jobs:
       - name: Analyze
         run: flutter analyze --no-pub > /tmp/analysis.log 2>&1 || { tail -80 /tmp/analysis.log; exit 1; }
       - name: Run full Flutter regression suite
-        run: flutter test --no-pub --reporter expanded > /tmp/tests.log 2>&1 || { tail -100 /tmp/tests.log; exit 1; }
+        timeout-minutes: 6
+        run: |
+          set -o pipefail
+          flutter test --no-pub --reporter expanded --timeout 90s 2>&1 | tee /tmp/tests.log
       - name: Build the requested original-app update once
         env:
           ORG_GRADLE_PROJECT_dogreaderOriginalUpdate: 'true'
