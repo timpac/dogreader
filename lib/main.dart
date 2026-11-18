@@ -26,6 +26,7 @@ export 'reader_content.dart' show ReaderChapter, StyledRange;
 import 'narration_seek.dart';
 import 'narration_files.dart';
 import 'narration_delivery.dart';
+import 'narration_presentation.dart';
 import 'narration_storage.dart';
 import 'narration_options.dart';
 import 'narration_dictionary.dart';
@@ -69,7 +70,9 @@ Future<void> main() async {
   final appearance = ThemePreferences();
   await appearance.load();
   await narrationDictionary.load();
-  runApp(AudiobookApp(appearance: appearance));
+  runApp(NarrationPlaybackScope(
+    handler: audioHandler, child: AudiobookApp(appearance: appearance),
+  ));
 }
 
 /// Shared entry point for Settings and the book's narration queue.
@@ -822,6 +825,70 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
 
 typedef SavePosition = Future<void> Function(int chapter, int offset);
 
+Future<void> openBookNarration(
+  BuildContext context,
+  ImportedBook book,
+  SavePosition onSave, {
+  int? chapter,
+}) => Navigator.push<void>(context, MaterialPageRoute<void>(
+  builder: (_) => NarrationQueueScreen(
+    book: book, onSave: onSave, initialChapter: chapter,
+  ),
+));
+
+Future<void> openChapterPlayer(
+  BuildContext context,
+  ImportedBook book,
+  int chapter,
+  SavePosition onSave, {
+  bool playOnOpen = false,
+}) => Navigator.push<void>(context, MaterialPageRoute<void>(
+  builder: (_) => ChapterNarrationScreen(
+    book: book, chapterIndex: chapter, onSave: onSave, playOnOpen: playOnOpen,
+  ),
+));
+
+Future<void> runChapterAudioAction(
+  BuildContext context,
+  ImportedBook book,
+  int index,
+  SavePosition onSave,
+  ChapterAudioAction action,
+) async {
+  try {
+    switch (action) {
+      case ChapterAudioAction.generate:
+      case ChapterAudioAction.retryGeneration:
+        await openBookNarration(context, book, onSave, chapter: index);
+      case ChapterAudioAction.download:
+      case ChapterAudioAction.retryDownload:
+        if (!narrationDelivery.deliveryInFlight(book.id, index)) {
+          await narrationDelivery.retryDownload(book.id, index);
+        }
+      case ChapterAudioAction.play:
+      case ChapterAudioAction.pause:
+        final handler = NarrationPlaybackScope.maybeOf(context);
+        if (handler != null && handler.mediaItem.value?.id == '${book.id}:$index') {
+          final playing = handler.playbackState.value.playing;
+          if (action == ChapterAudioAction.pause && playing) {
+            await handler.pause(origin: 'chapter narration controls');
+          } else if (action == ChapterAudioAction.play && !playing) {
+            await handler.play(origin: 'chapter narration controls');
+          }
+        } else if (action == ChapterAudioAction.play) {
+          await openChapterPlayer(context, book, index, onSave, playOnOpen: true);
+        }
+    }
+  } catch (_) {
+    if (!context.mounted) return;
+    final message = action == ChapterAudioAction.download ||
+            action == ChapterAudioAction.retryDownload
+        ? 'Download interrupted. Try again when connected.'
+        : 'Could not open narration. Please try again.';
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+}
+
 class ChapterListScreen extends StatelessWidget {
   final ImportedBook book;
   final Map<String, int>? saved;
@@ -840,10 +907,17 @@ class ChapterListScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: progressStore ?? bookProgress,
-    builder: (context, _) => buildOverview(context),
+    builder: (context, _) => BookNarrationStatus(
+      bookId: book.id,
+      delivery: narrationDelivery,
+      builder: buildOverview,
+    ),
   );
 
-  Widget buildOverview(BuildContext context) {
+  Widget buildOverview(
+    BuildContext context,
+    ChapterAudioPresentation Function(int) narration,
+  ) {
     final saved = progressStore?.continuePosition(book.id) ?? this.saved;
     final lastChapter = saved?['chapter'] ?? 0;
     final furthest = progressStore?.furthestChapter(book.id);
@@ -851,33 +925,13 @@ class ChapterListScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text(book.title),
-        actions: [
-          IconButton(
-            tooltip: 'Generate narration',
-            icon: const Icon(Icons.record_voice_over),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => NarrationQueueScreen(book: book, onSave: onSave),
-              ),
-            ),
-          ),
-        ],
       ),
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            child: FilledButton.icon(
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => NarrationQueueScreen(book: book, onSave: onSave),
-                ),
-              ),
-              icon: const Icon(Icons.headphones),
-              label: const Text('Listen / Generate narration'),
-            ),
+          TextButton.icon(
+            onPressed: () => openBookNarration(context, book, onSave),
+            icon: const Icon(Icons.headphones_outlined),
+            label: const Text('Book narration'),
           ),
           if (listening != null && listening >= 0 && listening < book.chapters.length)
             TextButton.icon(
@@ -931,22 +985,48 @@ class ChapterListScreen extends StatelessWidget {
                       1.0,
                     );
 
+                final audio = narration(index);
+                final action = audio.action;
                 return ListTile(
-                  leading: Icon(
-                    Icons.auto_stories_outlined,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
                   title: Text(chapter.title),
-                  subtitle: Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: LinearProgressIndicator(
-                      value: fraction,
-                      minHeight: 3,
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 6),
+                      LinearProgressIndicator(value: fraction, minHeight: 3),
+                      const SizedBox(height: 4),
+                      Text(audio.label),
+                      if (action != null)
+                        TextButton(
+                          onPressed: () => runChapterAudioAction(
+                            context, book, index, onSave, action,
+                          ),
+                          child: Text(action.label),
+                        ),
+                    ],
                   ),
-                  trailing: fraction >= 1 ? const Icon(Icons.check_circle_outline,
-                    semanticLabel: 'Section completed') : const Icon(Icons.chevron_right),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (fraction >= 1)
+                        const Icon(Icons.check_circle_outline,
+                          semanticLabel: 'Section completed'),
+                      PopupMenuButton<bool>(
+                        tooltip: 'Narration actions for ${chapter.title}',
+                        onSelected: (manage) {
+                          if (manage) {
+                            openBookNarration(context, book, onSave, chapter: index);
+                          } else {
+                            openChapterPlayer(context, book, index, onSave);
+                          }
+                        },
+                        itemBuilder: (_) => const [
+                          PopupMenuItem(value: true, child: Text('Manage narration')),
+                          PopupMenuItem(value: false, child: Text('Open player')),
+                        ],
+                      ),
+                    ],
+                  ),
                   onTap: () => openChapter(context, index),
                 );
               },
@@ -977,7 +1057,10 @@ class ChapterListScreen extends StatelessWidget {
 class NarrationQueueScreen extends StatefulWidget {
   final ImportedBook book;
   final SavePosition onSave;
-  const NarrationQueueScreen({super.key, required this.book, required this.onSave});
+  final int? initialChapter;
+  const NarrationQueueScreen({
+    super.key, required this.book, required this.onSave, this.initialChapter,
+  });
   @override
   State<NarrationQueueScreen> createState() => _NarrationQueueScreenState();
 }
@@ -994,6 +1077,8 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   bool busy = false;
   String? notice;
   Timer? timer;
+  int? focusedChapter;
+  bool loaded = false;
 
   Future<File> get queueFile async {
     final root = await getApplicationDocumentsDirectory();
@@ -1041,7 +1126,12 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         };
       }
     }
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    setState(() {
+      loaded = true;
+      final chapter = focusedChapter;
+      if (chapter != null && jobs[chapter] == null) selected.add(chapter);
+    });
     await checkJobs();
   }
 
@@ -1155,7 +1245,11 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       selected.clear();
       for (var i = 0; i < widget.book.chapters.length; i++) {
         final status = jobs[i]?['status'];
-        if (status == null || status == 'error') selected.add(i);
+        if (status == null ||
+            (status == 'error' && jobs[i]?['localAvailable'] != true &&
+                jobs[i]?['previousRecording'] == null)) {
+          selected.add(i);
+        }
       }
       notice = selected.isEmpty
           ? 'All chapters are already generated or queued.'
@@ -1203,28 +1297,6 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       busy = false;
       if (mounted) setState(() {});
     }
-  }
-
-  Future<void> playChapter(int index) async {
-    final root = await getApplicationDocumentsDirectory();
-    final file = File('${root.path}/narration/${widget.book.id}_$index.mp3');
-    if (!await file.exists()) {
-      if (mounted) {
-        setState(
-          () =>
-              notice = 'Recording not found locally. Try refreshing the queue.',
-        );
-      }
-      return;
-    }
-    if (!mounted) return;
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) =>
-            ChapterNarrationScreen(book: widget.book, chapterIndex: index, onSave: widget.onSave),
-      ),
-    );
   }
 
   Future<void> stopPreview() async {
@@ -1282,6 +1354,25 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     });
     await save();
     await checkJobs();
+  }
+
+  Future<void> confirmGeneration() async {
+    final preference = NarrationPreference(narrationEngine, narrator);
+    final chapters = selected.length == 1
+        ? widget.book.chapters[selected.single].title
+        : '${selected.length} chapters';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Generate narration?'),
+        content: Text('Generate $chapters with ${recordingLabel(preference.toJson())}?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Generate')),
+        ],
+      ),
+    );
+    if (mounted && confirmed == true) await generate();
   }
 
   Future<void> generate() async {
@@ -1407,6 +1498,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   @override
   void initState() {
     super.initState();
+    focusedChapter = widget.initialChapter;
     narrationDelivery.addListener(deliveryChanged);
     load();
     timer = Timer.periodic(const Duration(seconds: 12), (_) => checkJobs());
@@ -1425,173 +1517,207 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Generate narration'),
+        title: Text(focusedChapter == null ? 'Book narration' : 'Chapter narration'),
         actions: [
-          IconButton(
-            tooltip: 'Cloud settings',
-            onPressed: configure,
-            icon: const Icon(Icons.settings),
-          ),
-          IconButton(
-            tooltip: 'Check connection and jobs',
-            onPressed: checkJobs,
-            icon: const Icon(Icons.refresh),
+          PopupMenuButton<String>(
+            tooltip: 'Book narration settings',
+            onSelected: (action) {
+              switch (action) {
+                case 'settings':
+                  configure();
+                case 'connection':
+                  checkConnection();
+                case 'refresh':
+                  checkJobs();
+              }
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'settings', child: Text('Cloud settings')),
+              PopupMenuItem(value: 'connection', child: Text('Check connection')),
+              PopupMenuItem(value: 'refresh', child: Text('Refresh narration status')),
+            ],
           ),
         ],
       ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              children: [
-                Text(
-                  host.isEmpty ? 'Cloud not configured' : 'Cloud: $host',
-                  style: const TextStyle(fontSize: 12),
-                ),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    TextButton(
-                      onPressed: configure,
-                      child: const Text('Settings'),
-                    ),
-                    TextButton(
-                      onPressed: checkConnection,
-                      child: const Text('Check connection'),
-                    ),
-                  ],
-                ),
-                if (notice != null) Text(notice!, textAlign: TextAlign.center),
-              ],
-            ),
-          ),
-          NarrationControls(
-            preference: NarrationPreference(narrationEngine, narrator),
-            onChanged: (value) {
-              setState(() { narrationEngine = value.engine; narrator = value.voice; });
-              save();
-            },
-            previewing: previewing,
-            onPreview: previewing ? stopPreview : previewVoice,
-          ),
-          TextButton.icon(
-            icon: const Icon(Icons.menu_book), label: const Text('Narration Dictionary'),
-            onPressed: () async {
-              await stopPreview();
-              if (!mounted) return;
-              await openNarrationDictionary(this.context,
-                bookTitles: {widget.book.id: widget.book.title}, bookId: widget.book.id,
-                preference: NarrationPreference(narrationEngine, narrator), host: host, token: token);
-              if (mounted) setState(() {});
-            },
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Row(
-              children: [
-                OutlinedButton.icon(
-                  onPressed: selectEntireBook,
-                  icon: const Icon(Icons.select_all),
-                  label: const Text('Entire book'),
-                ),
-                const SizedBox(width: 8),
-                TextButton(
-                  onPressed: () => setState(() => selected.clear()),
-                  child: const Text('Clear selection'),
-                ),
-              ],
-            ),
-          ),
-          if (selected.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(
-                '${selected.length} chapters • ${selected.fold<int>(0, (sum, i) => sum + widget.book.chapters[i].text.length)} characters selected',
-                style: const TextStyle(fontSize: 12),
+      body: CustomScrollView(
+        slivers: [
+          SliverList.list(children: [
+            if (loaded && (host.isEmpty || token.isEmpty))
+              TextButton(
+                onPressed: configure,
+                child: const Text('Connect narration service'),
               ),
+            if (notice != null)
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text(notice!, textAlign: TextAlign.center),
+              ),
+            NarrationControls(
+              preference: NarrationPreference(narrationEngine, narrator),
+              onChanged: (value) {
+                setState(() { narrationEngine = value.engine; narrator = value.voice; });
+                save();
+              },
+              previewing: previewing,
+              onPreview: previewing ? stopPreview : previewVoice,
             ),
-          Expanded(
-            child: ListView.builder(
-              itemCount: widget.book.chapters.length,
-              itemBuilder: (context, index) {
-                final chapter = widget.book.chapters[index];
-                final status = jobs[index]?['status'] as String?;
-                final delivery = jobs[index]?['delivery'];
-                final localReady = jobs[index]?['localAvailable'] == true && delivery == 'downloaded';
-                final voiceLabel = jobs[index] == null ? null : recordingLabel(jobs[index]);
-                return Column(children: [CheckboxListTile(
-                  secondary: localReady || jobs[index]?['localAvailable'] == true || jobs[index]?['previousRecording'] is Map
-                      ? Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              tooltip: localReady ? 'Play downloaded chapter' : 'Play previous recording',
-                              icon: Icon(Icons.play_circle_fill, color: Theme.of(context).colorScheme.primary, size: 32),
-                              onPressed: () => playChapter(index),
-                            ),
-                            if (canRetryNarrationDownload(jobs[index]))
-                              IconButton(
-                                tooltip: 'Retry Download',
-                                icon: const Icon(Icons.cloud_download_outlined),
-                                onPressed: busy || narrationDelivery.deliveryInFlight(widget.book.id, index) ? null : () => repairChapterAudio(index),
-                              ),
-                            IconButton(
-                              tooltip: 'Delete chapter audio',
-                              icon: const Icon(Icons.delete_outline),
-                              onPressed: busy || narrationDelivery.deliveryInFlight(widget.book.id, index) ? null : () => deleteChapterAudio(index),
-                            ),
-                          ],
-                        )
-                      : null,
-                  value: selected.contains(index),
-                  title: Text(chapter.title),
-                  subtitle: Text(
-                    narrationDeliveryLabel(jobs[index]) +
-                        (voiceLabel == null ? '' : ' • $voiceLabel') +
-                        (dictionaryChanged(index) ? ' • Dictionary changed — regenerate to apply' : ''),
-                  ),
-                  onChanged:
-                      status == 'ready' ||
-                          status == 'queued' ||
-                          status == 'generating' ||
-                          status == 'waiting'
-                      ? null
-                      : (value) => setState(() {
-                          if (value == true) {
-                            selected.add(index);
-                          } else {
-                            selected.remove(index);
-                          }
-                        }),
-                ),
-                  if (canRetryNarrationDownload(jobs[index]) && !localReady)
-                    Align(alignment: Alignment.centerRight, child: TextButton.icon(
-                      onPressed: busy || narrationDelivery.deliveryInFlight(widget.book.id, index)
-                          ? null : () => repairChapterAudio(index),
-                      icon: const Icon(Icons.cloud_download_outlined),
-                      label: const Text('Retry Download'),
-                    )),
-                  if (status == 'ready' || status == 'error')
-                    Align(alignment: Alignment.centerRight, child: TextButton(
-                      onPressed: busy || narrationDelivery.deliveryInFlight(widget.book.id, index) ? null : () => regenerate(index),
-                      child: const Text('Regenerate narration'),
-                    )),
-                ]);
+            TextButton.icon(
+              icon: const Icon(Icons.menu_book), label: const Text('Narration Dictionary'),
+              onPressed: () async {
+                await stopPreview();
+                if (!mounted) return;
+                await openNarrationDictionary(this.context,
+                  bookTitles: {widget.book.id: widget.book.title}, bookId: widget.book.id,
+                  preference: NarrationPreference(narrationEngine, narrator), host: host, token: token);
+                if (mounted) setState(() {});
               },
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: FilledButton.icon(
-              onPressed: selected.isEmpty || busy ? null : generate,
-              icon: const Icon(Icons.record_voice_over),
-              label: Text(
-                'Generate narration (${selected.length})',
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Wrap(
+                spacing: 8,
+                children: [
+                  if (focusedChapter != null)
+                    TextButton(
+                      onPressed: () => setState(() => focusedChapter = null),
+                      child: const Text('Show all chapters'),
+                    )
+                  else ...[
+                    OutlinedButton(
+                      onPressed: loaded && !busy ? selectEntireBook : null,
+                      child: const Text('Select entire book'),
+                    ),
+                    TextButton(
+                      onPressed: selected.isEmpty ? null
+                          : () => setState(() => selected.clear()),
+                      child: const Text('Clear selection'),
+                    ),
+                  ],
+                ],
               ),
             ),
-          ),
+            if (selected.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Text(
+                  '${selected.length} chapters • ${selected.fold<int>(0, (sum, i) => sum + widget.book.chapters[i].text.length)} characters selected',
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ),
+          ]),
+          if (loaded)
+            BookNarrationStatus(
+              bookId: widget.book.id,
+              delivery: narrationDelivery,
+              builder: (context, narration) => SliverList.builder(
+                itemCount: focusedChapter == null ? widget.book.chapters.length : 1,
+                itemBuilder: (context, row) {
+                  final index = focusedChapter ?? row;
+                  final job = jobs[index];
+                  final status = job?['status'];
+                  final audio = narration(index);
+                  final action = audio.action;
+                  final inFlight = narrationDelivery.deliveryInFlight(widget.book.id, index);
+                  final selectable = !audio.hasRecording &&
+                      (status == null || status == 'error');
+                  final download = canRetryNarrationDownload(job);
+                  final canRegenerate = status == 'ready' || status == 'error';
+                  return ListTile(
+                    leading: focusedChapter == null
+                        ? Checkbox(
+                            value: selected.contains(index),
+                            semanticLabel: 'Select ${widget.book.chapters[index].title}',
+                            onChanged: !selectable || busy ? null : (checked) {
+                              setState(() {
+                                if (checked == true) {
+                                  selected.add(index);
+                                } else {
+                                  selected.remove(index);
+                                }
+                              });
+                            },
+                          )
+                        : null,
+                    title: Text(widget.book.chapters[index].title),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(audio.label),
+                        if (status == 'error' || job?['delivery'] == 'failed')
+                          Text(narrationDeliveryLabel(job)),
+                        if (job != null) Text(recordingLabel(job)),
+                        if (dictionaryChanged(index))
+                          const Text('Dictionary changed. Regenerate to apply.'),
+                        if (action != null &&
+                            (action == ChapterAudioAction.play ||
+                             action == ChapterAudioAction.pause))
+                          TextButton(
+                            onPressed: () => runChapterAudioAction(
+                              context, widget.book, index, widget.onSave, action,
+                            ),
+                            child: Text(action.label),
+                          )
+                        else if (action != null &&
+                            (action == ChapterAudioAction.download ||
+                             action == ChapterAudioAction.retryDownload))
+                          TextButton(
+                            onPressed: busy || inFlight ? null : () => repairChapterAudio(index),
+                            child: Text(action.label),
+                          )
+                        else if (action == ChapterAudioAction.retryGeneration)
+                          TextButton(
+                            onPressed: busy || inFlight ? null : () => regenerate(index),
+                            child: const Text('Retry generation'),
+                          ),
+                      ],
+                    ),
+                    trailing: PopupMenuButton<String>(
+                      tooltip: 'Narration actions for ${widget.book.chapters[index].title}',
+                      onSelected: (choice) {
+                        switch (choice) {
+                          case 'player':
+                            openChapterPlayer(context, widget.book, index, widget.onSave);
+                          case 'download':
+                            repairChapterAudio(index);
+                          case 'regenerate':
+                            regenerate(index);
+                          case 'delete':
+                            deleteChapterAudio(index);
+                        }
+                      },
+                      itemBuilder: (_) => [
+                        const PopupMenuItem(value: 'player', child: Text('Open player')),
+                        if (download && audio.hasRecording)
+                          PopupMenuItem(value: 'download', enabled: !busy && !inFlight,
+                            child: const Text('Retry download')),
+                        if (canRegenerate)
+                          PopupMenuItem(value: 'regenerate', enabled: !busy && !inFlight,
+                            child: Text(status == 'error' ? 'Retry generation' : 'Regenerate narration')),
+                        if (audio.hasRecording)
+                          PopupMenuItem(value: 'delete', enabled: !busy && !inFlight,
+                            child: const Text('Delete chapter audio')),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            )
+          else
+            const SliverToBoxAdapter(
+              child: Center(child: CircularProgressIndicator()),
+            ),
         ],
+      ),
+      bottomNavigationBar: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: FilledButton(
+            onPressed: selected.isEmpty || busy || !loaded ? null : confirmGeneration,
+            child: Text(focusedChapter != null
+                ? 'Generate narration'
+                : 'Generate narration (${selected.length})'),
+          ),
+        ),
       ),
     );
   }
@@ -1930,6 +2056,27 @@ class _ReadingScreenState extends State<ReadingScreen> with WidgetsBindingObserv
     super.dispose();
   }
 
+  void listenFromCurrentPage() {
+    if (_paginating || pages.isEmpty) return;
+    if (currentPage >= 0 && currentPage < pages.length) {
+      currentOffset = starts[currentPage];
+    }
+    saveCurrent();
+    final textLength = widget.book.chapters[chapterIndex].text.length;
+    final fraction = textLength == 0
+        ? 0.0
+        : (currentOffset / textLength).clamp(0.0, 1.0);
+    final audioChapter = chapterIndex;
+    Navigator.push<void>(context, MaterialPageRoute<void>(
+      builder: (_) => ChapterNarrationScreen(
+        book: widget.book,
+        chapterIndex: audioChapter,
+        onSave: widget.onSave,
+        initialTextFraction: fraction,
+      ),
+    ));
+  }
+
   @override
   Widget build(BuildContext context) {
     final chapter = widget.book.chapters[chapterIndex];
@@ -1942,35 +2089,6 @@ class _ReadingScreenState extends State<ReadingScreen> with WidgetsBindingObserv
           overflow: TextOverflow.ellipsis,
         ),
         actions: [
-          IconButton(
-            tooltip: 'Listen from this page',
-            onPressed: _paginating || pages.isEmpty ? null : () {
-              if (_paginating || pages.isEmpty) return;
-              // Capture the visible page's start offset, not a stale saved
-              // offset from before a page turn or a pagination change.
-              if (pages.isNotEmpty && currentPage >= 0 && currentPage < pages.length) {
-                currentOffset = starts[currentPage];
-              }
-              saveCurrent();
-              final textLength = widget.book.chapters[chapterIndex].text.length;
-              final fraction = textLength == 0
-                  ? 0.0
-                  : (currentOffset / textLength).clamp(0.0, 1.0);
-              final audioChapter = chapterIndex;
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => ChapterNarrationScreen(
-                    book: widget.book,
-                    chapterIndex: audioChapter,
-                    onSave: widget.onSave,
-                    initialTextFraction: fraction,
-                  ),
-                ),
-              );
-            },
-            icon: const Icon(Icons.headphones),
-          ),
           IconButton(
             tooltip: 'Decrease text size',
             onPressed: () => setState(() {
@@ -1991,7 +2109,7 @@ class _ReadingScreenState extends State<ReadingScreen> with WidgetsBindingObserv
         builder: (context, constraints) {
           const horizontalPadding = 24.0;
           const verticalPadding = 20.0;
-          const footerHeight = 38.0;
+          const footerHeight = 48.0;
           final width = math.max(
             100.0,
             constraints.maxWidth - horizontalPadding * 2,
@@ -2047,28 +2165,64 @@ class _ReadingScreenState extends State<ReadingScreen> with WidgetsBindingObserv
               ),
               SizedBox(
                 height: footerHeight,
-                child: InkWell(
-                  onTap: showPageJump,
-                  child: Center(
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
+                child: BookNarrationStatus(
+                  bookId: widget.book.id,
+                  delivery: narrationDelivery,
+                  builder: (context, narration) {
+                    final audio = narration(pageChapter);
+                    final action = audio.action;
+                    final playing = action == ChapterAudioAction.pause;
+                    return Row(
                       children: [
-                        Icon(Icons.tune, size: 15, color: Theme.of(context).colorScheme.primary),
-                        const SizedBox(width: 8),
-                        Flexible(
-                          child: Text(
-                            '${currentPage + 1} / ${pages.length}  •  Tap to jump',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        Expanded(
+                          child: InkWell(
+                            onTap: showPageJump,
+                            child: Center(
+                              child: Text(
+                                '${currentPage + 1} / ${pages.length}  •  Tap to jump',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                ),
+                              ),
                             ),
                           ),
                         ),
+                        if (audio.hasRecording)
+                          IconButton(
+                            tooltip: playing ? 'Pause narration' : 'Play narration',
+                            onPressed: () => runChapterAudioAction(
+                              context, widget.book, pageChapter, widget.onSave, action!,
+                            ),
+                            icon: Icon(playing ? Icons.pause : Icons.play_arrow),
+                          ),
+                        PopupMenuButton<String>(
+                          tooltip: 'Narration',
+                          onSelected: (choice) {
+                            if (choice == 'page') {
+                              listenFromCurrentPage();
+                            } else if (choice == 'player') {
+                              openChapterPlayer(context, widget.book, pageChapter, widget.onSave);
+                            } else {
+                              openBookNarration(context, widget.book, widget.onSave, chapter: pageChapter);
+                            }
+                          },
+                          itemBuilder: (_) => [
+                            PopupMenuItem(enabled: false, child: Text(audio.label)),
+                            const PopupMenuItem(value: 'page', child: Text('Listen from this page')),
+                            const PopupMenuItem(value: 'manage', child: Text('Manage chapter narration')),
+                            const PopupMenuItem(value: 'player', child: Text('Open player')),
+                          ],
+                          child: const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                            child: Text('Narration', maxLines: 1, overflow: TextOverflow.ellipsis),
+                          ),
+                        ),
                       ],
-                    ),
-                  ),
+                    );
+                  },
                 ),
               ),
             ],
@@ -2088,12 +2242,14 @@ class ChapterNarrationScreen extends StatefulWidget {
   // Present only when arriving from the reader; normal player navigation
   // continues to restore the last saved audio position.
   final double? initialTextFraction;
+  final bool playOnOpen;
   const ChapterNarrationScreen({
     super.key,
     required this.book,
     required this.chapterIndex,
     required this.onSave,
     this.initialTextFraction,
+    this.playOnOpen = false,
   });
 
   @override
@@ -2114,6 +2270,7 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
   double speed = 1.0;
 
   int _restoreGeneration = 0;
+  late bool _playOnOpen = widget.playOnOpen;
 
   String get chapterKey => '${widget.book.id}:$chapterIndex';
 
@@ -2291,6 +2448,12 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
         if (!active() || audioHandler.mediaItem.value?.id != chapterKey) return;
         duration = player.duration ?? Duration.zero;
         position = player.position;
+        if (_playOnOpen) {
+          _playOnOpen = false;
+          if (!audioHandler.playbackState.value.playing) {
+            await audioHandler.play(origin: 'chapter narration controls');
+          }
+        }
       }
     } catch (e) {
       if (active()) error = 'Could not load recording: $e';

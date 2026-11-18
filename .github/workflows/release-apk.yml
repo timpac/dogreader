@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   apk:
-    if: (github.ref == 'refs/heads/dogreader-oct22-update' || github.ref == 'refs/heads/fix/156-progress-persistence') && github.actor == github.repository_owner
+    if: (github.ref == 'refs/heads/dogreader-oct22-update' || github.ref == 'refs/heads/fix/156-progress-persistence' || github.ref == 'refs/heads/fix/160-epub-narration') && github.actor == github.repository_owner
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -40,11 +40,16 @@ jobs:
           script: |
             const {owner, repo} = context.repo;
             const metadata = (await github.rest.repos.get({owner, repo})).data;
-            const allowedRefs = new Set(['refs/heads/dogreader-oct22-update', 'refs/heads/fix/156-progress-persistence']);
+            const allowedRefs = new Set([
+              'refs/heads/dogreader-oct22-update',
+              'refs/heads/fix/156-progress-persistence',
+              'refs/heads/fix/160-epub-narration'
+            ]);
             if (metadata.default_branch !== 'dogreader-oct22-update' || !allowedRefs.has(context.ref)) throw new Error('Authorized branch mismatch');
             if (Number(process.env.GITHUB_RUN_ATTEMPT) !== 1) throw new Error('Inspect retained assets before a new explicitly authorized dispatch; do not rerun');
             if (!/^[0-9a-f]{40}$/.test(process.env.RELEASE_COMMIT)) throw new Error('Full lowercase source SHA required');
             const number = process.env.BUILD_NUMBER;
+            if (context.ref === 'refs/heads/fix/160-epub-narration' && number !== '160') throw new Error('This branch is authorized for build 160 only');
             if (!/^[1-9][0-9]*$/.test(number) || Number(number) <= 135 || Number(number) > 2100000000) throw new Error('Invalid new Android versionCode');
             const releases = await github.paginate(github.rest.repos.listReleases, {owner, repo, per_page: 100});
             const tags = await github.paginate(github.rest.repos.listTags, {owner, repo, per_page: 100});
@@ -71,7 +76,10 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
           git merge-base --is-ancestor cdf4227dc6a966b20e24f61179ac953b22689024 HEAD
-          if [ "$GITHUB_REF" = refs/heads/fix/156-progress-persistence ]; then
+          if [ "$GITHUB_REF" = refs/heads/fix/160-epub-narration ]; then
+            git merge-base --is-ancestor 145d29bb4852d390308d9e2c20c0dac49b6aaecd HEAD
+            git merge-base --is-ancestor HEAD origin/fix/160-epub-narration
+          elif [ "$GITHUB_REF" = refs/heads/fix/156-progress-persistence ]; then
             git merge-base --is-ancestor 47bd9a985a1bccadef07f6f2d961433a4898949c HEAD
             git merge-base --is-ancestor HEAD origin/fix/156-progress-persistence
           else
@@ -135,6 +143,7 @@ jobs:
             const crypto = require('crypto');
             const {owner, repo} = context.repo;
             const number = process.env.BUILD_NUMBER;
+            if (context.ref === 'refs/heads/fix/160-epub-narration' && number !== '160') throw new Error('This branch is authorized for build 160 only');
             const source = process.env.RELEASE_COMMIT;
             const tag = `v${number}`;
             const name = `Dogreader-${number}.apk`;
