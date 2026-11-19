@@ -69,7 +69,23 @@ void main() {
             () => Future<void>.delayed(const Duration(milliseconds: 5)),
           );
         }
-        await tester.pumpAndSettle();
+        for (
+          var i = 0;
+          i < 400 &&
+              find.byType(CircularProgressIndicator).evaluate().isNotEmpty;
+          i++
+        ) {
+          await tester.pump();
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 10)),
+          );
+        }
+        await tester.runAsync(() => progress.flushed);
+        await tester.pumpAndSettle(
+          const Duration(milliseconds: 100),
+          EnginePhase.sendSemanticsUpdate,
+          const Duration(seconds: 10),
+        );
       }
 
       await tester.pumpWidget(

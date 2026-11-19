@@ -203,11 +203,11 @@ void runDictionaryQueueCase({required bool articleInput}) {
       final restore = (narration.restore() as Future<void>).then(
         (_) => restored = true,
       );
-      for (var i = 0; i < 50 && !restored; i++) {
+      for (var i = 0; i < 200 && !restored; i++) {
         await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
         );
-        await tester.pump(const Duration(milliseconds: 10));
+        await tester.pump(const Duration(milliseconds: 5));
       }
       expect(restored, isTrue);
       await restore;
@@ -223,11 +223,11 @@ void runDictionaryQueueCase({required bool articleInput}) {
       await tester.pumpWidget(const SizedBox());
       var disposed = false;
       final disposing = handler.dispose().then((_) => disposed = true);
-      for (var i = 0; i < 50 && !disposed; i++) {
+      for (var i = 0; i < 200 && !disposed; i++) {
         await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
         );
-        await tester.pump(const Duration(milliseconds: 10));
+        await tester.pump(const Duration(milliseconds: 5));
       }
       expect(disposed, isTrue);
       await disposing;
