@@ -46,6 +46,10 @@ Priorities, in order:
 - Run broader tests for shared infrastructure, data compatibility, or high-risk changes; do not skip essential safety checks just to save usage.
 - Explain any unusually expensive test/build before doing it when there is a cheaper credible alternative.
 - Batch related fixes into one build when practical, but do not bundle unrelated changes.
+- **Model triage on request**: When the user asks for triage or a model recommendation before starting, do the minimum read-only check needed, recommend a tier (`flash` for routine UI tweaks, single-file fixes, log checks, docs, or CI/release dispatches; `pro` for multi-file state/concurrency bugs, Android lifecycle issues, or architecture work), and wait for confirmation before editing or running heavy commands. When the user explicitly opts in to subagent tiering, delegate routine search/log-parsing subagents to `flash`.
+- **Isolate failing tests first**: While debugging a failure, iterate on only that test file or `--plain-name` case (with concise output such as `-r compact`) until it passes. Do not repeatedly re-run multi-file suites or the full regression suite during a fix loop; run the full suite once before pushing.
+- **Summarize logs instead of dumping raw output**: Filter/aggregate large GCP, GCS, CI, or test logs inside a script before printing—do not dump tens of kilobytes of raw output into context. Avoid continuous polling loops like `gh run watch` that emit hundreds of refresh lines.
+- **Split long phases across fresh threads**: Avoid carrying a long investigation (e.g. 100+ steps of live cloud/log debugging) into a full implementation-and-test cycle in the same conversation. When investigation finishes, offer a brief handoff summary so the user can start a fresh thread for the fix and APK build.
 
 ## Git, releases, and delivery
 - Work from the correct up-to-date base and use a task-specific branch and PR. Do not silently merge.
