@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 
+import 'narration_cost.dart';
 import 'narration_options.dart';
 
 Future<Map<String, dynamic>> narrationRequest(
@@ -96,6 +97,14 @@ Future<File?> generateNarrationPreview({
       'Server returned a different engine or voice. Update the backend.',
     );
   }
+  try {
+    await narrationCostTracker.recordSubmission(
+      jobId: id,
+      engine: preference.engine,
+      voice: preference.voice,
+      characters: text.runes.length,
+    );
+  } catch (_) {}
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
   try {
     final initialUri = Uri.parse(

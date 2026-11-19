@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 
+import 'narration_cost.dart';
 import 'narration_dictionary.dart';
 import 'narration_files.dart';
 import 'narration_options.dart';
@@ -67,7 +68,9 @@ class NarrationDelivery extends ChangeNotifier {
     this.idleTimeout = const Duration(seconds: 45),
     this.diagnosticSink,
     this.chapterResolver,
-  }) : clock = clock ?? DateTime.now;
+    NarrationCostTracker? costTracker,
+  }) : clock = clock ?? DateTime.now,
+       costTracker = costTracker ?? narrationCostTracker;
 
   final Future<Directory> Function() documentsDirectory;
   final Future<void> Function(String, int) beforeReplace;
@@ -75,6 +78,7 @@ class NarrationDelivery extends ChangeNotifier {
   final Duration responseTimeout, idleTimeout;
   final void Function(Map<String, Object?>)? diagnosticSink;
   FutureOr<ReaderChapter?> Function(String book, int index)? chapterResolver;
+  final NarrationCostTracker costTracker;
   final Map<String, Map<int, Map<String, dynamic>>> books = {};
   final Map<String, List<ReaderChapter>> _chapters = {};
   final Map<String, Future<void>> _downloads = {};
@@ -100,6 +104,12 @@ class NarrationDelivery extends ChangeNotifier {
 
   Future<void> _load() async {
     if (_loaded) return;
+    costTracker.configureStorage(
+      usageFile: () async =>
+          File('${(await documentsDirectory()).path}/narration_cost.json'),
+      clock: clock,
+    );
+    await costTracker.load();
     final file = await queueFile;
     if (await file.exists()) {
       final data = jsonDecode(await file.readAsString()) as Map;
@@ -400,6 +410,7 @@ class NarrationDelivery extends ChangeNotifier {
         'This chapter is silent under the current dictionary. Disable its silence rules to generate audio.',
       );
     }
+    job['characters'] = text.runes.length;
     return {
       'title': title,
       'text': text,
@@ -538,8 +549,10 @@ class NarrationDelivery extends ChangeNotifier {
       final status = _statuses.contains(response['status'])
           ? response['status'] as String
           : 'queued';
+      final characters = (payload['text'] as String).runes.length;
       job.addAll(recordingMetadata(response));
       job['id'] = id;
+      job['characters'] = characters;
       job.remove('text');
       job.remove('title');
       job.remove('submissionUncertain');
@@ -553,6 +566,14 @@ class NarrationDelivery extends ChangeNotifier {
         automatic: automatic,
       );
       _log('submission_accepted', book, index, id, automatic: automatic, http: 200);
+      await costTracker.recordSubmission(
+        jobId: id,
+        engine: (job['engine'] as String?) ??
+            (payload['engine'] as String?) ??
+            'google',
+        voice: (job['voice'] as String?) ?? (payload['voice'] as String?),
+        characters: characters,
+      );
       await save();
     } catch (error) {
       if (!identical(books[book]?[index], job)) return;

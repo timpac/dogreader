@@ -30,6 +30,7 @@ import 'narration_delivery.dart';
 import 'narration_presentation.dart';
 import 'narration_storage.dart';
 import 'narration_options.dart';
+import 'narration_cost.dart';
 import 'narration_dictionary.dart';
 import 'narration_dictionary_screen.dart';
 import 'narration_preview.dart';
@@ -71,6 +72,7 @@ Future<void> main() async {
   final appearance = ThemePreferences();
   await appearance.load();
   await narrationDictionary.load();
+  await narrationCostTracker.load();
   runApp(NarrationPlaybackScope(
     handler: audioHandler, child: AudiobookApp(appearance: appearance),
   ));
@@ -680,6 +682,81 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
               ],
             ),
           ),
+        ),
+        const SizedBox(height: 24),
+        ListenableBuilder(
+          listenable: narrationCostTracker,
+          builder: (context, _) {
+            final estimate = narrationCostTracker.estimate();
+            final colors = Theme.of(context).colorScheme;
+            return Card(
+              margin: EdgeInsets.zero,
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'TTS Usage & Monthly Budget (${estimate.monthKey})',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      estimate.shouldSwitchToKokoro
+                          ? 'Google 1M free tier + ${formatUsdAmount(estimate.monthlyCreditLimitUsd)} credit used up — switch to Kokoro (\$0.00).'
+                          : 'Track your 1,000,000 free Google characters + ${formatUsdAmount(estimate.monthlyCreditLimitUsd)}/month Google Pro credit (${formatCharacterCount(estimate.totalCoveredGoogleCharacters)} covered Chirp 3 HD characters total) so you know when to switch to Kokoro.',
+                    ),
+                    const SizedBox(height: 12),
+                    LinearProgressIndicator(
+                      value: estimate.allowanceUsedFraction,
+                      minHeight: 6,
+                      borderRadius: BorderRadius.circular(3),
+                      color: estimate.shouldSwitchToKokoro
+                          ? colors.error
+                          : colors.primary,
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      'Covered Google Chirp allowance: ${formatCharacterCount(estimate.usedGoogleCharacters)} / ${formatCharacterCount(estimate.totalCoveredGoogleCharacters)} chars (${formatCharacterCount(estimate.coveredCharactersRemaining)} left)',
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Free tier: ${formatCharacterCount(estimate.freeCharactersUsed)} / ${formatCharacterCount(estimate.freeCharacterLimit)} chars (${formatCharacterCount(estimate.freeCharactersRemaining)} left)',
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Google Pro credit: ${formatUsdAmount(estimate.creditUsdUsed)} / ${formatUsdAmount(estimate.monthlyCreditLimitUsd)} used (${formatUsdAmount(estimate.creditUsdRemaining)} left • covers ${formatCharacterCount(estimate.creditCharacterAllowance)} Chirp chars)',
+                    ),
+                    if (estimate.outOfPocketUsdUsed > 0) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        'Estimated out-of-pocket this month: ${formatUsdAmount(estimate.outOfPocketUsdUsed)}',
+                        style: TextStyle(
+                          color: colors.error,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                    if (estimate.usedKokoroCharacters > 0) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        'Kokoro generated this month: ${formatCharacterCount(estimate.usedKokoroCharacters)} chars (\$0.00 API cost)',
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: OutlinedButton.icon(
+                        onPressed: () => showNarrationBudgetDialog(context),
+                        icon: const Icon(Icons.tune, size: 18),
+                        label: const Text('Adjust usage / budget'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
         ),
       ],
     );
@@ -1568,6 +1645,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     );
     await narrationDelivery.load();
     await narrationDictionary.load();
+    await narrationCostTracker.load();
     try {
       final file = await queueFile;
       if (await file.exists()) {
@@ -1821,6 +1899,18 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     }
   }
 
+  int _chapterSpokenCharacters(int index) {
+    if (index < 0 || index >= widget.book.chapters.length) return 0;
+    final transformed = narrationDictionary
+        .effective(widget.book.id)
+        .transform(widget.book.chapters[index]);
+    return transformed.text.trim().isEmpty ? 0 : transformed.text.runes.length;
+  }
+
+  int _selectedNewCharacters(Iterable<int> indices) => indices
+      .where(_needsGeneration)
+      .fold<int>(0, (sum, index) => sum + _chapterSpokenCharacters(index));
+
   Future<void> regenerate(int index) async {
     if (busy ||
         _checkingBooks.contains(widget.book.id) ||
@@ -1828,13 +1918,19 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       return;
     }
     final preference = NarrationPreference(narrationEngine, narrator);
+    final estimate = narrationCostTracker.estimate(
+      preference: preference,
+      selectionCharacters: _chapterSpokenCharacters(index),
+    );
+    final costSummary = estimate.confirmationSummary();
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Regenerate narration?'),
         content: Text(
           'Generate ${widget.book.chapters[index].title} with ${recordingLabel(preference.toJson())}? '
-          'The current download is replaced only after the new audio downloads successfully.',
+          'The current download is replaced only after the new audio downloads successfully.'
+          '${costSummary.isEmpty ? '' : '\n\n$costSummary'}',
         ),
         actions: [
           TextButton(
@@ -1917,9 +2013,16 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         )
         .length;
     final newJobs = requested.where(_needsGeneration).length;
+    final newCharacters = _selectedNewCharacters(requested);
+    final estimate = narrationCostTracker.estimate(
+      preference: preference,
+      selectionCharacters: newCharacters,
+    );
+    final costLine = estimate.confirmationSummary();
     final chapter = requested.length == 1
         ? '\n${widget.book.chapters[requested.single].title}'
         : '';
+    var switchedToKokoro = false;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -1930,6 +2033,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
           '$downloaded downloaded\n'
           '$active queued or generating\n'
           '$newJobs new generation jobs\n\n'
+          '${costLine.isEmpty ? '' : '$costLine\n\n'}'
           'Existing recordings and active jobs will be kept.',
         ),
         actions: [
@@ -1937,6 +2041,16 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
             onPressed: () => Navigator.pop(context, false),
             child: Text(newJobs == 0 ? 'Close' : 'Cancel'),
           ),
+          if (newJobs > 0 &&
+              preference.engine == 'google' &&
+              estimate.shouldSwitchToKokoro)
+            TextButton(
+              onPressed: () {
+                switchedToKokoro = true;
+                Navigator.pop(context, false);
+              },
+              child: const Text('Switch to Kokoro'),
+            ),
           if (newJobs > 0)
             FilledButton(
               onPressed: () => Navigator.pop(context, true),
@@ -1946,7 +2060,16 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         scrollable: true,
       ),
     );
-    if (mounted && confirmed == true) await generate(requested, preference);
+    if (!mounted) return;
+    if (switchedToKokoro) {
+      setState(() {
+        narrationEngine = 'kokoro';
+        narrator = narrationVoices['kokoro']!.keys.first;
+      });
+      await savePreference();
+      return;
+    }
+    if (confirmed == true) await generate(requested, preference);
   }
 
   Future<void> generate(
@@ -2058,6 +2181,25 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     onPreview: previewing ? stopPreview : previewVoice,
   );
 
+  Widget _costBanner() => NarrationCostBanner(
+    tracker: narrationCostTracker,
+    preference: NarrationPreference(narrationEngine, narrator),
+    selectionCharacters: _selectedNewCharacters(selected),
+    onSwitchToKokoro: previewing
+        ? null
+        : (value) {
+            setState(() {
+              narrationEngine = value.engine;
+              narrator = value.voice;
+            });
+            unawaited(savePreference());
+          },
+    onAdjustBudget: () async {
+      await showNarrationBudgetDialog(context);
+      if (mounted) setState(() {});
+    },
+  );
+
   Widget _generationSheet() => PopScope(
     canPop: true,
     child: SafeArea(
@@ -2096,6 +2238,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
                   child: const Text('Connect narration service'),
                 ),
               if (!submitting) _voiceControls(),
+              if (!submitting) _costBanner(),
               if (submitting)
                 const Center(child: CircularProgressIndicator())
               else
@@ -2251,12 +2394,15 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
                   checkConnection();
                 case 'refresh':
                   checkJobs();
+                case 'budget':
+                  showNarrationBudgetDialog(context);
               }
             },
             itemBuilder: (_) => const [
               PopupMenuItem(value: 'settings', child: Text('Cloud settings')),
               PopupMenuItem(value: 'connection', child: Text('Check connection')),
               PopupMenuItem(value: 'refresh', child: Text('Refresh narration status')),
+              PopupMenuItem(value: 'budget', child: Text('TTS usage & budget')),
             ],
           ),
         ],
@@ -2275,6 +2421,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
                 child: Text(notice!, textAlign: TextAlign.center),
               ),
             _voiceControls(),
+            _costBanner(),
             TextButton.icon(
               icon: const Icon(Icons.menu_book), label: const Text('Narration Dictionary'),
               onPressed: () async {
