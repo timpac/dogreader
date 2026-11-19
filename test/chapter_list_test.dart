@@ -222,7 +222,7 @@ void main() {
 
       final firstRow = find.byKey(const ValueKey('chapter-row-0'));
       final secondRow = find.byKey(const ValueKey('chapter-row-1'));
-      expect(tester.getSize(firstRow).height, 112);
+      expect(tester.getSize(firstRow).height, 96);
       expect(tester.getRect(firstRow).bottom, tester.getRect(secondRow).top);
       await capture('normal');
       mode.value = ThemeMode.dark;
