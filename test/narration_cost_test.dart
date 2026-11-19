@@ -142,52 +142,54 @@ void main() {
   test(
     'NarrationDelivery automatically records submitted chapter characters once per job ID',
     () async {
-      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      addTearDown(() => server.close(force: true));
-      server.listen((req) async {
-        req.response.headers.contentType = ContentType.json;
-        req.response.write(
-          jsonEncode({
-            'id': 'a1b2c3d4e5f60123456789abcdef0123',
-            'status': 'queued',
+      await HttpOverrides.runWithHttpOverrides(() async {
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(() => server.close(force: true));
+        server.listen((req) async {
+          req.response.headers.contentType = ContentType.json;
+          req.response.write(
+            jsonEncode({
+              'id': 'a1b2c3d4e5f60123456789abcdef0123',
+              'status': 'queued',
+              'engine': 'google',
+              'voice': 'en-US-Chirp3-HD-Achernar',
+            }),
+          );
+          await req.response.close();
+        });
+
+        final chapterText = List.filled(250, 'Hello dog reader. ').join();
+        final delivery = NarrationDelivery(
+          documentsDirectory: () async => root,
+          beforeReplace: (_, _) async {},
+          clock: () => now,
+          costTracker: tracker,
+        );
+        addTearDown(delivery.dispose);
+        await delivery.load();
+        delivery.host = 'http://127.0.0.1:${server.port}';
+        delivery.token = 'secret';
+        delivery.registerBookChapters('book-1', [
+          ReaderChapter('Chapter 1', chapterText, const []),
+        ]);
+        delivery.books['book-1'] = {
+          0: {
+            'status': 'waiting',
             'engine': 'google',
             'voice': 'en-US-Chirp3-HD-Achernar',
-          }),
+          },
+        };
+        await delivery.submitWaitingJobs(bookId: 'book-1');
+
+        expect(
+          tracker.estimate().usedGoogleCharacters,
+          chapterText.runes.length,
         );
-        await req.response.close();
-      });
-
-      final chapterText = List.filled(250, 'Hello dog reader. ').join();
-      final delivery = NarrationDelivery(
-        documentsDirectory: () async => root,
-        beforeReplace: (_, _) async {},
-        clock: () => now,
-        costTracker: tracker,
-      );
-      addTearDown(delivery.dispose);
-      await delivery.load();
-      delivery.host = 'http://127.0.0.1:${server.port}';
-      delivery.token = 'secret';
-      delivery.registerBookChapters('book-1', [
-        ReaderChapter('Chapter 1', chapterText, const []),
-      ]);
-      delivery.books['book-1'] = {
-        0: {
-          'status': 'waiting',
-          'engine': 'google',
-          'voice': 'en-US-Chirp3-HD-Achernar',
-        },
-      };
-      await delivery.submitWaitingJobs(bookId: 'book-1');
-
-      expect(
-        tracker.estimate().usedGoogleCharacters,
-        chapterText.runes.length,
-      );
-      expect(
-        delivery.books['book-1']![0]!['characters'],
-        chapterText.runes.length,
-      );
+        expect(
+          delivery.books['book-1']![0]!['characters'],
+          chapterText.runes.length,
+        );
+      }, _RealHttp());
     },
   );
 
@@ -245,3 +247,5 @@ void main() {
     },
   );
 }
+
+class _RealHttp extends HttpOverrides {}
