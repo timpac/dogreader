@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   apk:
-    if: (github.ref == 'refs/heads/dogreader-oct22-update' || github.ref == 'refs/heads/fix/156-progress-persistence' || github.ref == 'refs/heads/fix/160-epub-narration' || github.ref == 'refs/heads/build/161-chapter-narration' || github.ref == 'refs/heads/build/162-narration-queue-reliability') && github.actor == github.repository_owner
+    if: (github.ref == 'refs/heads/dogreader-oct22-update' || github.ref == 'refs/heads/fix/156-progress-persistence' || github.ref == 'refs/heads/fix/160-epub-narration' || github.ref == 'refs/heads/build/161-chapter-narration' || github.ref == 'refs/heads/build/162-narration-queue-reliability' || github.ref == 'refs/heads/build/163-chapter-panel-refinement') && github.actor == github.repository_owner
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -45,7 +45,8 @@ jobs:
               'refs/heads/fix/156-progress-persistence',
               'refs/heads/fix/160-epub-narration',
               'refs/heads/build/161-chapter-narration',
-              'refs/heads/build/162-narration-queue-reliability'
+              'refs/heads/build/162-narration-queue-reliability',
+              'refs/heads/build/163-chapter-panel-refinement'
             ]);
             if (metadata.default_branch !== 'dogreader-oct22-update' || !allowedRefs.has(context.ref)) throw new Error('Authorized branch mismatch');
             if (Number(process.env.GITHUB_RUN_ATTEMPT) !== 1) throw new Error('Inspect retained assets before a new explicitly authorized dispatch; do not rerun');
@@ -54,6 +55,7 @@ jobs:
             if (context.ref === 'refs/heads/fix/160-epub-narration' && number !== '160') throw new Error('This branch is authorized for build 160 only');
             if (context.ref === 'refs/heads/build/161-chapter-narration' && number !== '161') throw new Error('This branch is authorized for build 161 only');
             if (context.ref === 'refs/heads/build/162-narration-queue-reliability' && number !== '162') throw new Error('This branch is authorized for build 162 only');
+            if (context.ref === 'refs/heads/build/163-chapter-panel-refinement' && number !== '163') throw new Error('This branch is authorized for build 163 only');
             if (!/^[1-9][0-9]*$/.test(number) || Number(number) <= 135 || Number(number) > 2100000000) throw new Error('Invalid new Android versionCode');
             const releases = await github.paginate(github.rest.repos.listReleases, {owner, repo, per_page: 100});
             const tags = await github.paginate(github.rest.repos.listTags, {owner, repo, per_page: 100});
@@ -80,7 +82,10 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
           git merge-base --is-ancestor cdf4227dc6a966b20e24f61179ac953b22689024 HEAD
-          if [ "$GITHUB_REF" = refs/heads/build/162-narration-queue-reliability ]; then
+          if [ "$GITHUB_REF" = refs/heads/build/163-chapter-panel-refinement ]; then
+            git merge-base --is-ancestor 28d9287b01ac84b2d3be076ce24b56ccbe594fac HEAD
+            git merge-base --is-ancestor HEAD origin/build/163-chapter-panel-refinement
+          elif [ "$GITHUB_REF" = refs/heads/build/162-narration-queue-reliability ]; then
             git merge-base --is-ancestor fe31cb7a2bec8213a62a5bd62751936e645167d6 HEAD
             git merge-base --is-ancestor HEAD origin/build/162-narration-queue-reliability
           elif [ "$GITHUB_REF" = refs/heads/build/161-chapter-narration ]; then
@@ -159,6 +164,7 @@ jobs:
             if (context.ref === 'refs/heads/fix/160-epub-narration' && number !== '160') throw new Error('This branch is authorized for build 160 only');
             if (context.ref === 'refs/heads/build/161-chapter-narration' && number !== '161') throw new Error('This branch is authorized for build 161 only');
             if (context.ref === 'refs/heads/build/162-narration-queue-reliability' && number !== '162') throw new Error('This branch is authorized for build 162 only');
+            if (context.ref === 'refs/heads/build/163-chapter-panel-refinement' && number !== '163') throw new Error('This branch is authorized for build 163 only');
             const source = process.env.RELEASE_COMMIT;
             const tag = `v${number}`;
             const name = `Dogreader-${number}.apk`;
@@ -173,7 +179,9 @@ jobs:
             const apk = fs.readFileSync(`dist/${name}`);
             const sha256 = digest(apk);
             const run = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
-            const changelog = number === '162'
+            const changelog = number === '163'
+              ? 'Chapter panel refinement: tighter chapter rows (96dp), more pronounced separators with a soft engraved highlight, a restrained surface sheen and card shadow, and softer 24dp outer corners. No narration, queue, storage or playback changes.\n\n'
+              : number === '162'
               ? 'Reliable background narration queue submission & chapter-list UI refinements: fixes the _checkingBooks lock leak, moves waiting-job submission into the app-wide NarrationDelivery service so submissions continue across screen navigation and app restarts, increases the submission timeout for Cloud Run cold starts with idempotent retry on uncertain outcomes, clarifies Waiting to submit vs Queued status labels, and refines the chapter list with double-height rows (112dp), bolder chapter separators, active accent indicators, and photorealistic headphone artwork.\n\n'
               : number === '161'
               ? 'Compact chapter rows with separate reading and headphone controls. Long-press to select chapters, or generate narration for the whole book. The generation review skips existing recordings and active jobs.\n\n'

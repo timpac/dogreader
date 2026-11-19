@@ -935,6 +935,9 @@ Future<void> runChapterAudioAction(
   }
 }
 
+/// Outer corner radius of the connected chapter card.
+const double _chapterCardRadius = 24;
+
 class ChapterListScreen extends StatefulWidget {
   final ImportedBook book;
   final Map<String, int>? saved;
@@ -1167,10 +1170,34 @@ class _ChapterListScreenState extends State<ChapterListScreen> {
                   ),
                   SliverPadding(
                     padding: const EdgeInsets.fromLTRB(14, 4, 14, 14),
-                    sliver: SliverList.builder(
-                      itemCount: book.chapters.length,
-                      itemBuilder: (context, index) =>
-                          _chapterRow(context, index, narration(index), saved),
+                    sliver: DecoratedSliver(
+                      // One soft, low shadow beneath the whole chapter card;
+                      // the rows themselves remain a single connected panel.
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(_chapterCardRadius),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(
+                              alpha:
+                                  Theme.of(context).brightness ==
+                                      Brightness.dark
+                                  ? 0.32
+                                  : 0.07,
+                            ),
+                            blurRadius: 18,
+                            offset: const Offset(0, 6),
+                          ),
+                        ],
+                      ),
+                      sliver: SliverList.builder(
+                        itemCount: book.chapters.length,
+                        itemBuilder: (context, index) => _chapterRow(
+                          context,
+                          index,
+                          narration(index),
+                          saved,
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -1225,6 +1252,7 @@ class _ChapterListScreenState extends State<ChapterListScreen> {
         audio.hasRecording || audio.action == ChapterAudioAction.download;
     final narrationTitle = 'Narration for ${chapter.title} · ${audio.label}';
     const targetWidth = 72.0;
+    final dark = Theme.of(context).brightness == Brightness.dark;
 
     return Material(
       key: ValueKey('chapter-row-$index'),
@@ -1233,12 +1261,48 @@ class _ChapterListScreenState extends State<ChapterListScreen> {
         colors.surfaceContainerLow,
       ),
       borderRadius: BorderRadius.vertical(
-        top: index == 0 ? const Radius.circular(18) : Radius.zero,
-        bottom: last ? const Radius.circular(18) : Radius.zero,
+        top: index == 0
+            ? const Radius.circular(_chapterCardRadius)
+            : Radius.zero,
+        bottom: last ? const Radius.circular(_chapterCardRadius) : Radius.zero,
       ),
       clipBehavior: Clip.antiAlias,
       child: Stack(
         children: [
+          // Gentle directional shading: a faint lift at the top of each panel
+          // settling into slightly deeper tone at the bottom. Translucent so
+          // the selection tint and ink ripples still read through.
+          Positioned.fill(
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.white.withValues(alpha: dark ? 0.035 : 0.22),
+                      Colors.white.withValues(alpha: 0),
+                      Colors.black.withValues(alpha: dark ? 0.10 : 0.03),
+                    ],
+                    stops: const [0, 0.45, 1],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          // Soft top highlight; beneath the previous row's separator it reads
+          // as a subtly engraved divider rather than a flat rule.
+          Positioned(
+            left: 0,
+            right: 0,
+            top: 0,
+            height: 1,
+            child: IgnorePointer(
+              child: ColoredBox(
+                color: Colors.white.withValues(alpha: dark ? 0.06 : 0.7),
+              ),
+            ),
+          ),
           if (current || selected)
             Positioned(
               left: 0,
@@ -1264,11 +1328,11 @@ class _ChapterListScreenState extends State<ChapterListScreen> {
                     : () => openChapter(context, index),
                 onLongPress: _selecting ? null : () => _startSelection(index),
                 child: ConstrainedBox(
-                  constraints: const BoxConstraints(minHeight: 112),
+                  constraints: const BoxConstraints(minHeight: 96),
                   child: Padding(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 16,
-                      vertical: 16,
+                      vertical: 12,
                     ),
                     child: Row(
                       children: [
@@ -1361,7 +1425,7 @@ class _ChapterListScreenState extends State<ChapterListScreen> {
                   backgroundColor: last
                       ? Colors.transparent
                       : Color.alphaBlend(
-                          colors.outline.withValues(alpha: 0.38),
+                          colors.outline.withValues(alpha: dark ? 0.55 : 0.62),
                           colors.outlineVariant,
                         ),
                   color: colors.primary.withValues(alpha: 0.65),
