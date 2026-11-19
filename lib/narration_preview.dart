@@ -11,23 +11,25 @@ Future<Map<String, dynamic>> narrationRequest(
   String method,
   String path, [
   Map<String, dynamic>? payload,
+  Duration connectionTimeout = const Duration(seconds: 15),
+  Duration responseTimeout = const Duration(seconds: 30),
 ]) async {
-  final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
+  final client = HttpClient()..connectionTimeout = connectionTimeout;
   try {
     final req = await client
         .openUrl(
           method,
           Uri.parse('${host.replaceAll(RegExp(r'/$'), '')}$path'),
         )
-        .timeout(const Duration(seconds: 8));
+        .timeout(connectionTimeout);
     req.headers.set('X-Dogreader-Token', token);
     if (payload != null) {
       req.headers.contentType = ContentType.json;
       req.write(jsonEncode(payload));
     }
-    final response = await req.close().timeout(const Duration(seconds: 15));
+    final response = await req.close().timeout(responseTimeout);
     final result = jsonDecode(
-      await utf8.decoder.bind(response).join(),
+      await utf8.decoder.bind(response.timeout(responseTimeout)).join(),
     ) as Map<String, dynamic>;
     if (response.statusCode >= 400) {
       throw Exception(result['error'] ?? 'HTTP ${response.statusCode}');

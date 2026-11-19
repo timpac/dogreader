@@ -18,7 +18,9 @@ void main() {
     'reader and chapter actions follow generation and delivery independently',
     () {
       expect(chapter(null).action, ChapterAudioAction.generate);
-      expect(chapter({'status': 'waiting'}).label, 'Queued');
+      expect(chapter({'status': 'waiting'}).label, 'Waiting to submit');
+      expect(chapter({'status': 'waiting'}).action, isNull);
+      expect(chapter({'status': 'queued'}).label, 'Queued');
       expect(chapter({'status': 'queued'}).action, isNull);
       expect(
         chapter({'status': 'generating', 'progress': 2, 'chunks': 4}).label,

@@ -685,4 +685,220 @@ void main() {
     final target = await delivery.audioFile('book', 0);
     expect(await target.readAsBytes(), payload);
   });
+
+  test('cold-start timeout on job submission is treated as uncertain outcome and retried idempotently', () async {
+    delivery.dispose();
+    delivery = create(timeout: const Duration(milliseconds: 100));
+    await delivery.load();
+    final postedPayloads = <Map<String, dynamic>>[];
+    var postCount = 0;
+
+    delivery.books['book']![1] = {
+      'status': 'waiting',
+      'title': 'Chapter 2: The Cold Start',
+      'text': 'Mr. Toad waited for the Cloud Run container to warm up.',
+      'engine': 'kokoro',
+      'voice': 'bm_lewis',
+      'narration_dictionary': {
+        'version': 2,
+        'rules': [
+          {
+            'original': 'Mr.',
+            'replacement': 'Mister',
+            'silence': false,
+            'enabled': true,
+          },
+        ],
+        'ignoreSeparators': true,
+      },
+    };
+    await delivery.save();
+
+    respond = (req) async {
+      if (req.method == 'POST' && req.uri.path == '/dogreader/jobs') {
+        postCount++;
+        final body = jsonDecode(await utf8.decoder.bind(req).join()) as Map<String, dynamic>;
+        postedPayloads.add(body);
+        if (postCount == 1) {
+          // Simulate a Cloud Run cold start that exceeds the client timeout.
+          await Future<void>.delayed(const Duration(milliseconds: 300));
+          return;
+        }
+        req.response.headers.contentType = ContentType.json;
+        req.response.write(jsonEncode({
+          'id': 'cold-start-job-1',
+          'status': 'queued',
+          'engine': body['engine'],
+          'voice': body['voice'],
+        }));
+        await req.response.close();
+        return;
+      }
+      if (req.uri.path == '/dogreader/jobs/cold-start-job-1') {
+        req.response.headers.contentType = ContentType.json;
+        req.response.write(jsonEncode({'status': 'ready'}));
+        await req.response.close();
+        return;
+      }
+      await audio(req);
+    };
+
+    await delivery.reconcile();
+    final afterTimeout = delivery.books['book']![1]!;
+    expect(afterTimeout['status'], 'waiting');
+    expect(afterTimeout['id'], isNull);
+    expect(afterTimeout['submissionUncertain'], isTrue);
+    expect(narrationDeliveryLabel(afterTimeout), 'Waiting to submit');
+
+    // Advance past the 5s uncertain-submission retry delay and reconcile again.
+    now = now.add(const Duration(seconds: 6));
+    await delivery.reconcile();
+    expect(postedPayloads.length, 2);
+    expect(postedPayloads[0], equals(postedPayloads[1]));
+    expect(postedPayloads[1]['engine'], 'kokoro');
+    expect(postedPayloads[1]['voice'], 'bm_lewis');
+    expect(postedPayloads[1]['text'], contains('Mister Toad'));
+    expect(afterTimeout['id'], 'cold-start-job-1');
+    expect(afterTimeout['submissionUncertain'], isNull);
+    expect(afterTimeout['delivery'], 'downloaded');
+    expect(afterTimeout['narration_offsets'], isNotEmpty);
+  });
+
+  test('simultaneous reconciliation and submission paths deduplicate in-flight chapter submissions', () async {
+    final firstArrived = Completer<void>();
+    final releasePosts = Completer<void>();
+    final postedTitles = <String>[];
+
+    delivery.books['book'] = {
+      0: {
+        'status': 'waiting',
+        'title': 'Chapter One',
+        'text': 'First waiting chapter.',
+        'engine': 'kokoro',
+        'voice': 'bm_lewis',
+      },
+      1: {
+        'status': 'waiting',
+        'title': 'Chapter Two',
+        'text': 'Second waiting chapter.',
+        'engine': 'kokoro',
+        'voice': 'bm_lewis',
+      },
+      2: {
+        'status': 'waiting',
+        'title': 'Chapter Three',
+        'text': 'Third waiting chapter.',
+        'engine': 'kokoro',
+        'voice': 'bm_lewis',
+      },
+    };
+    await delivery.save();
+
+    respond = (req) async {
+      if (req.method == 'POST' && req.uri.path == '/dogreader/jobs') {
+        final body = jsonDecode(await utf8.decoder.bind(req).join()) as Map<String, dynamic>;
+        postedTitles.add(body['title'] as String);
+        if (!firstArrived.isCompleted) firstArrived.complete();
+        await releasePosts.future;
+        req.response.headers.contentType = ContentType.json;
+        req.response.write(jsonEncode({
+          'id': 'job-${postedTitles.length}',
+          'status': 'queued',
+        }));
+        await req.response.close();
+        return;
+      }
+      if (req.uri.path.startsWith('/dogreader/jobs/')) {
+        req.response.headers.contentType = ContentType.json;
+        req.response.write(jsonEncode({'status': 'queued'}));
+        await req.response.close();
+        return;
+      }
+      await audio(req);
+    };
+
+    final pathA = delivery.reconcile();
+    await firstArrived.future;
+    final pathB = delivery.submitWaitingJobs(bookId: 'book', automatic: false);
+    final pathC = delivery.reconcile();
+    expect(delivery.submissionInFlight('book', 0), isTrue);
+
+    releasePosts.complete();
+    await Future.wait([pathA, pathB, pathC]);
+
+    expect(postedTitles, ['Chapter One', 'Chapter Two', 'Chapter Three']);
+    for (var i = 0; i < 3; i++) {
+      expect(delivery.books['book']![i]!['status'], 'queued');
+      expect(delivery.books['book']![i]!['id'], 'job-${i + 1}');
+    }
+  });
+
+  test('waiting jobs saved before app exit resume submission automatically on app restart without visiting queue screen', () async {
+    final posted = <Map<String, dynamic>>[];
+    respond = (req) async {
+      if (req.method == 'POST' && req.uri.path == '/dogreader/jobs') {
+        final body = jsonDecode(await utf8.decoder.bind(req).join()) as Map<String, dynamic>;
+        posted.add(body);
+        req.response.headers.contentType = ContentType.json;
+        req.response.write(jsonEncode({
+          'id': 'restarted-${posted.length}',
+          'status': 'queued',
+        }));
+        await req.response.close();
+        return;
+      }
+      if (req.uri.path.startsWith('/dogreader/jobs/restarted-')) {
+        req.response.headers.contentType = ContentType.json;
+        req.response.write(jsonEncode({'status': 'ready'}));
+        await req.response.close();
+        return;
+      }
+      await audio(req);
+    };
+
+    // Persist two waiting jobs to dogreader_queue.json alongside an already-downloaded chapter 0.
+    final existingFile = await delivery.audioFile('book', 0);
+    await existingFile.parent.create(recursive: true);
+    await existingFile.writeAsBytes(bytes);
+    delivery.books['book'] = {
+      0: {
+        'id': 'existing',
+        'status': 'ready',
+        'delivery': 'downloaded',
+        'localAvailable': true,
+      },
+      1: {
+        'status': 'waiting',
+        'title': 'Restart Chapter 2',
+        'text': 'Saved locally before app restart.',
+        'engine': 'kokoro',
+        'voice': 'af_heart',
+      },
+      2: {
+        'status': 'waiting',
+        'title': 'Restart Chapter 3',
+        'text': 'Also saved locally before app restart.',
+        'engine': 'kokoro',
+        'voice': 'af_heart',
+      },
+    };
+    await delivery.save();
+
+    // Simulate app exit and cold reopen: create a fresh NarrationDelivery and call reconcile().
+    delivery.dispose();
+    delivery = create();
+    await delivery.reconcile();
+
+    expect(posted.map((p) => p['title']), [
+      'Restart Chapter 2',
+      'Restart Chapter 3',
+    ]);
+    expect(posted.every((p) => p['engine'] == 'kokoro' && p['voice'] == 'af_heart'), isTrue);
+    // Chapter 0 was never regenerated or re-downloaded.
+    expect(requests.where((r) => r.contains('existing')), isEmpty);
+    expect(delivery.books['book']![1]!['id'], 'restarted-1');
+    expect(delivery.books['book']![1]!['delivery'], 'downloaded');
+    expect(delivery.books['book']![2]!['id'], 'restarted-2');
+    expect(delivery.books['book']![2]!['delivery'], 'downloaded');
+  });
 }

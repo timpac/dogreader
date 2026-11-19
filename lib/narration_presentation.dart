@@ -47,7 +47,11 @@ class ChapterAudioPresentation {
               completed <= total
           ? ' · $completed/$total'
           : '';
-      final label = status == 'generating' ? 'Generating…$progress' : 'Queued';
+      final label = switch (status) {
+        'generating' => 'Generating…$progress',
+        'waiting' => 'Waiting to submit',
+        _ => 'Queued',
+      };
       return ChapterAudioPresentation(label, hasRecording, action);
     }
     if (status == 'error' || job?['failureStage'] == 'generation') {

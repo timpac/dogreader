@@ -252,12 +252,45 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     progress.addListener(_progressChanged);
+    narrationDelivery.chapterResolver = _resolveChapterForDelivery;
     narrationDelivery.start();
     articles = ArticleLibrary(getApplicationDocumentsDirectory());
     articles.addListener(_articlesChanged);
     articles.load().catchError((Object _) {});
     loadLibrary();
     ArticleShare.listen(_receiveArticleShare).catchError((Object _) {});
+  }
+
+  Future<ReaderChapter?> _resolveChapterForDelivery(
+    String bookId,
+    int index,
+  ) async {
+    final loaded = books.where((b) => b.id == bookId).firstOrNull;
+    if (loaded != null) {
+      narrationDelivery.registerBookChapters(bookId, loaded.chapters);
+      return index >= 0 && index < loaded.chapters.length
+          ? loaded.chapters[index]
+          : null;
+    }
+    final article = articles.articles.where((a) => a.id == bookId).firstOrNull;
+    if (article != null) {
+      final book = articleBook(article);
+      narrationDelivery.registerBookChapters(bookId, book.chapters);
+      return index == 0 ? book.chapters.first : null;
+    }
+    try {
+      final file = File('${(await bookDirectory()).path}/$bookId.epub');
+      if (await file.exists()) {
+        final epub = await EpubReader.readBook(await file.readAsBytes());
+        final chapters = <ReaderChapter>[];
+        loadBookChapters(epub, chapters);
+        if (chapters.isNotEmpty) {
+          narrationDelivery.registerBookChapters(bookId, chapters);
+          return index >= 0 && index < chapters.length ? chapters[index] : null;
+        }
+      }
+    } catch (_) {}
+    return null;
   }
 
   @override
@@ -269,9 +302,14 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
     if (!mounted) return;
     setState(() {
       books.removeWhere((b) => b.id.startsWith('article_'));
-      books.addAll(articles.articles.map(articleBook));
+      for (final article in articles.articles) {
+        final book = articleBook(article);
+        narrationDelivery.registerBookChapters(book.id, book.chapters);
+        books.add(book);
+      }
       sortBooks();
     });
+    unawaited(narrationDelivery.reconcile());
   }
 
   void _receiveArticleShare(String text) {
@@ -330,12 +368,14 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
           if (chapters.isEmpty) continue;
           final title = (epub.Title ?? '').trim();
           final author = (epub.Author ?? '').trim();
+          final bookId = entity.uri.pathSegments.last.replaceAll('.epub', '');
+          narrationDelivery.registerBookChapters(bookId, chapters);
           restored.add(
             ImportedBook(
               title.isEmpty ? 'Untitled book' : title,
               author.isEmpty ? 'Unknown author' : author,
               chapters,
-              entity.uri.pathSegments.last.replaceAll('.epub', ''),
+              bookId,
               extractCover(epub),
             ),
           );
@@ -344,6 +384,10 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
         }
       }
       await articles.load();
+      for (final article in articles.articles) {
+        final book = articleBook(article);
+        narrationDelivery.registerBookChapters(book.id, book.chapters);
+      }
       if (!mounted) return;
       setState(() {
         books.clear();
@@ -351,6 +395,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
         books.addAll(articles.articles.map(articleBook));
         sortBooks();
       });
+      unawaited(narrationDelivery.reconcile());
     } catch (_) {
       /* Library remains usable even if restoration fails. */
     }
@@ -915,6 +960,18 @@ class _ChapterListScreenState extends State<ChapterListScreen> {
   BookProgress? get progressStore => widget.progressStore;
 
   @override
+  void initState() {
+    super.initState();
+    narrationDelivery.registerBookChapters(book.id, book.chapters);
+  }
+
+  @override
+  void didUpdateWidget(covariant ChapterListScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    narrationDelivery.registerBookChapters(book.id, book.chapters);
+  }
+
+  @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: progressStore ?? bookProgress,
     builder: (context, _) => BookNarrationStatus(
@@ -949,8 +1006,8 @@ class _ChapterListScreenState extends State<ChapterListScreen> {
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
-      isDismissible: false,
-      enableDrag: false,
+      isDismissible: true,
+      enableDrag: true,
       builder: (_) => NarrationQueueScreen(
         book: book,
         onSave: onSave,
@@ -1048,7 +1105,13 @@ class _ChapterListScreenState extends State<ChapterListScreen> {
                             listening >= 0 &&
                             listening < book.chapters.length)
                           TextButton.icon(
-                            icon: const Icon(Icons.headphones),
+                            icon: Image.asset(
+                              'assets/images/chapter_headphones.webp',
+                              width: 22,
+                              height: 22,
+                              filterQuality: FilterQuality.high,
+                              excludeFromSemantics: true,
+                            ),
                             label: Text(
                               'Continue listening: ${book.chapters[listening].title}',
                             ),
@@ -1161,21 +1224,36 @@ class _ChapterListScreenState extends State<ChapterListScreen> {
     final ready =
         audio.hasRecording || audio.action == ChapterAudioAction.download;
     final narrationTitle = 'Narration for ${chapter.title} · ${audio.label}';
-    const targetWidth = 56.0;
+    const targetWidth = 72.0;
 
     return Material(
       key: ValueKey('chapter-row-$index'),
       color: Color.alphaBlend(
-        colors.primary.withValues(alpha: selected ? 0.19 : current ? 0.09 : 0),
+        colors.primary.withValues(alpha: selected ? 0.19 : current ? 0.10 : 0),
         colors.surfaceContainerLow,
       ),
       borderRadius: BorderRadius.vertical(
-        top: index == 0 ? const Radius.circular(16) : Radius.zero,
-        bottom: last ? const Radius.circular(16) : Radius.zero,
+        top: index == 0 ? const Radius.circular(18) : Radius.zero,
+        bottom: last ? const Radius.circular(18) : Radius.zero,
       ),
       clipBehavior: Clip.antiAlias,
       child: Stack(
         children: [
+          if (current || selected)
+            Positioned(
+              left: 0,
+              top: 14,
+              bottom: 14,
+              width: 3.5,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: colors.primary,
+                  borderRadius: const BorderRadius.horizontal(
+                    right: Radius.circular(4),
+                  ),
+                ),
+              ),
+            ),
           Padding(
             padding: EdgeInsets.only(right: _selecting ? 0 : targetWidth),
             child: Semantics(
@@ -1186,11 +1264,11 @@ class _ChapterListScreenState extends State<ChapterListScreen> {
                     : () => openChapter(context, index),
                 onLongPress: _selecting ? null : () => _startSelection(index),
                 child: ConstrainedBox(
-                  constraints: const BoxConstraints(minHeight: 56),
+                  constraints: const BoxConstraints(minHeight: 112),
                   child: Padding(
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
+                      horizontal: 16,
+                      vertical: 16,
                     ),
                     child: Row(
                       children: [
@@ -1205,16 +1283,32 @@ class _ChapterListScreenState extends State<ChapterListScreen> {
                                   : colors.onSurfaceVariant,
                             ),
                           ),
-                        if (_selecting) const SizedBox(width: 10),
-                        Expanded(child: Text(chapter.title)),
-                        if (!_selecting && fraction >= 1)
+                        if (_selecting) const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            chapter.title,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 16,
+                              height: 1.3,
+                              letterSpacing: -0.1,
+                              fontWeight: current || selected
+                                  ? FontWeight.w600
+                                  : FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                        if (!_selecting && fraction >= 1) ...[
+                          const SizedBox(width: 8),
                           Icon(
                             Icons.check_circle_outline,
-                            size: 16,
+                            size: 18,
                             color: colors.onSurfaceVariant,
                             semanticLabel: 'Section completed',
                           ),
-                        if (_selecting) const SizedBox(width: 8),
+                        ],
+                        if (_selecting) const SizedBox(width: 10),
                         if (_selecting)
                           _headphones(active, failed, ready, colors),
                       ],
@@ -1260,14 +1354,17 @@ class _ChapterListScreenState extends State<ChapterListScreen> {
               child: IgnorePointer(
                 child: LinearProgressIndicator(
                   value: _selecting ? 0 : fraction,
-                  minHeight: 1,
+                  minHeight: 2.5,
                   borderRadius: BorderRadius.zero,
                   stopIndicatorRadius: 0,
                   trackGap: 0,
                   backgroundColor: last
                       ? Colors.transparent
-                      : colors.outlineVariant,
-                  color: colors.primary.withValues(alpha: 0.45),
+                      : Color.alphaBlend(
+                          colors.outline.withValues(alpha: 0.38),
+                          colors.outlineVariant,
+                        ),
+                  color: colors.primary.withValues(alpha: 0.65),
                 ),
               ),
             ),
@@ -1282,36 +1379,59 @@ class _ChapterListScreenState extends State<ChapterListScreen> {
     bool ready,
     ColorScheme colors,
   ) => SizedBox(
-    width: 40,
-    height: 40,
+    width: 52,
+    height: 52,
     child: Stack(
       alignment: Alignment.center,
       children: [
-        Image.asset(
-          'assets/images/chapter_headphones.webp',
-          width: 40,
-          height: 40,
-          excludeFromSemantics: true,
+        DecoratedBox(
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: Color.alphaBlend(
+              colors.primary.withValues(alpha: ready || active ? 0.14 : 0.05),
+              colors.surfaceContainerHighest.withValues(alpha: 0.55),
+            ),
+            border: Border.all(
+              color: ready || active
+                  ? colors.primary.withValues(alpha: 0.35)
+                  : colors.outlineVariant.withValues(alpha: 0.7),
+              width: 1,
+            ),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(6),
+            child: Image.asset(
+              'assets/images/chapter_headphones.webp',
+              width: 38,
+              height: 38,
+              filterQuality: FilterQuality.high,
+              excludeFromSemantics: true,
+            ),
+          ),
         ),
         if (active || failed || ready)
           Positioned(
-            right: 0,
-            bottom: 0,
+            right: 1,
+            bottom: 1,
             child: DecoratedBox(
               decoration: BoxDecoration(
                 color: colors.surface,
                 shape: BoxShape.circle,
+                border: Border.all(
+                  color: colors.outlineVariant.withValues(alpha: 0.6),
+                  width: 0.75,
+                ),
               ),
               child: Padding(
-                padding: const EdgeInsets.all(2),
+                padding: const EdgeInsets.all(2.5),
                 child: active
                     ? const SizedBox.square(
-                        dimension: 9,
-                        child: CircularProgressIndicator(strokeWidth: 1.5),
+                        dimension: 10,
+                        child: CircularProgressIndicator(strokeWidth: 1.75),
                       )
                     : Icon(
                         failed ? Icons.error_outline : Icons.circle,
-                        size: failed ? 11 : 7,
+                        size: failed ? 12 : 8,
                         color: failed ? colors.error : colors.primary,
                       ),
               ),
@@ -1378,6 +1498,10 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   }
 
   Future<void> load() async {
+    narrationDelivery.registerBookChapters(
+      widget.book.id,
+      widget.book.chapters,
+    );
     await narrationDelivery.load();
     await narrationDictionary.load();
     try {
@@ -1676,15 +1800,28 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       setState(() => notice = 'Connect Dogreader Cloud first.');
       return;
     }
+    narrationDelivery.registerBookChapters(
+      widget.book.id,
+      widget.book.chapters,
+    );
+    final job = <String, dynamic>{
+      'previousRecording': jobs[index]?['previousRecording'] ?? jobs[index],
+      'status': 'waiting',
+      ...preference.toJson(),
+      'narration_dictionary': narrationDictionary
+          .effective(widget.book.id)
+          .toJson(),
+    };
+    try {
+      NarrationDelivery.prepareSubmissionPayload(
+        job,
+        chapter: widget.book.chapters[index],
+      );
+    } on StateError {
+      // Defer silence StateError to submission so notice/error state is reported uniformly.
+    }
     setState(() {
-      jobs[index] = {
-        'previousRecording': jobs[index]?['previousRecording'] ?? jobs[index],
-        'status': 'waiting',
-        ...preference.toJson(),
-        'narration_dictionary': narrationDictionary
-            .effective(widget.book.id)
-            .toJson(),
-      };
+      jobs[index] = job;
     });
     await save();
     await checkJobs();
@@ -1771,18 +1908,32 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       submitting = true;
       notice = null;
     });
+    narrationDelivery.registerBookChapters(
+      widget.book.id,
+      widget.book.chapters,
+    );
     for (final index in indices) {
-      jobs[index] = {
+      final job = <String, dynamic>{
         'status': 'waiting',
         ...preference.toJson(),
         'narration_dictionary': narrationDictionary
             .effective(widget.book.id)
             .toJson(),
       };
+      try {
+        NarrationDelivery.prepareSubmissionPayload(
+          job,
+          chapter: widget.book.chapters[index],
+        );
+      } on StateError {
+        // Defer silence StateError to submission so notice/error state is reported uniformly.
+      }
+      jobs[index] = job;
     }
     try {
       narrationDelivery.host = host;
       narrationDelivery.token = token;
+      narrationDelivery.attachBook(widget.book.id, jobs);
       await narrationDelivery.save();
     } catch (_) {
       for (final index in indices) {
@@ -1844,7 +1995,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   );
 
   Widget _generationSheet() => PopScope(
-    canPop: !submitting,
+    canPop: true,
     child: SafeArea(
       top: false,
       child: SingleChildScrollView(
@@ -1935,22 +2086,11 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   }
 
   Map<String, dynamic> chapterPayload(int index) {
-    final chapter = widget.book.chapters[index];
-    final snapshot = jobs[index]?['narration_dictionary'];
-    final transformed = snapshot is Map
-        ? NarrationDictionaryConfig.fromJson(Map<String, dynamic>.from(snapshot)).transform(chapter)
-        : const NarrationDictionaryConfig(ignoreSeparators: false).transform(chapter);
-    if (transformed.text.trim().isEmpty) {
-      throw StateError('This chapter is silent under the current dictionary. Disable its silence rules to generate audio.');
-    }
-    jobs[index]!['narration_offsets'] = transformed.offsets;
-    return {
-      'title': chapter.title, 'text': transformed.text,
-      'engine': jobs[index]?['engine'] ?? 'google',
-      'voice': jobs[index]?['voice'] ?? 'en-US-Chirp3-HD-Achernar',
-      for (final key in ['model_version', 'settings'])
-        if (jobs[index]?.containsKey(key) == true) key: jobs[index]![key],
-    };
+    final job = jobs.putIfAbsent(index, () => {});
+    return NarrationDelivery.prepareSubmissionPayload(
+      job,
+      chapter: widget.book.chapters[index],
+    );
   }
 
   bool dictionaryChanged(int index) {
@@ -1974,39 +2114,32 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     }
     busy = true;
     try {
-      for (final index in jobs.keys.toList()..sort()) {
-        // Submission is only for explicitly queued new narration. Existing IDs
-        // are reconciled by the app-owned delivery service, never resubmitted.
-        if (jobs[index]?['status'] != 'waiting') continue;
-        try {
-          final response = await requestJson(
-            'POST',
-            '/dogreader/jobs',
-            chapterPayload(index),
-          );
-          jobs[index] = {
-            ...?jobs[index],
-            ...recordingMetadata(response),
-            'status': response['status'],
-            'id': response['id'],
-          };
-          await save(); // Persist identity before any download/network follow-up.
-        } catch (e) {
-          if (e is StateError) {
-            jobs[index] = {
-              ...?jobs[index],
-              'status': 'error',
-              'error': e.message,
-            };
-          }
-          notice = 'Submission interrupted. Saved work will be retried.';
-          await save();
-        }
-      }
       narrationDelivery.host = host;
       narrationDelivery.token = token;
+      narrationDelivery.registerBookChapters(
+        widget.book.id,
+        widget.book.chapters,
+      );
+      narrationDelivery.attachBook(widget.book.id, jobs);
+      final waitingIndices = jobs.entries
+          .where((entry) => entry.value['status'] == 'waiting')
+          .map((entry) => entry.key)
+          .toList();
+      await narrationDelivery.submitWaitingJobs(
+        bookId: widget.book.id,
+        automatic: false,
+      );
+      if (waitingIndices.any(
+        (index) =>
+            jobs[index]?['id'] == null &&
+            (jobs[index]?['status'] == 'waiting' ||
+                jobs[index]?['status'] == 'error'),
+      )) {
+        notice = 'Submission interrupted. Saved work will be retried.';
+      }
       await narrationDelivery.reconcile();
     } finally {
+      _checkingBooks.remove(widget.book.id);
       busy = false;
       if (mounted) setState(() {});
     }
@@ -2017,6 +2150,10 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     super.initState();
     focusedChapter = widget.initialChapter;
     selected.addAll(widget.generationChapters ?? const <int>{});
+    narrationDelivery.registerBookChapters(
+      widget.book.id,
+      widget.book.chapters,
+    );
     narrationDelivery.addListener(deliveryChanged);
     load();
     if (widget.generationChapters == null) {
@@ -3128,7 +3265,13 @@ class _ChapterNarrationScreenState extends State<ChapterNarrationScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.headphones, size: 62, color: Theme.of(context).colorScheme.primary),
+                Image.asset(
+                  'assets/images/chapter_headphones.webp',
+                  width: 76,
+                  height: 76,
+                  filterQuality: FilterQuality.high,
+                  excludeFromSemantics: true,
+                ),
                 const SizedBox(height: 14),
                 Text(
                   widget.book.title,

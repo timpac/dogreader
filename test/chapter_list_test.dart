@@ -25,6 +25,8 @@ class _Paths extends PathProviderPlatform {
 
 class _LoopbackHttp extends HttpOverrides {}
 
+bool _handlerInitialized = false;
+
 void main() {
   testWidgets(
     'chapter taps, selection and bulk generation keep existing audio and jobs',
@@ -35,16 +37,22 @@ void main() {
       final originalPaths = PathProviderPlatform.instance;
       PathProviderPlatform.instance = _Paths(root);
       final posted = <Map<String, dynamic>>[];
+      var delaySubmissions = false;
+      final firstPostStarted = <void>[];
       final server = (await tester.runAsync(() async {
         final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
         server.listen((request) async {
           request.response.headers.contentType = ContentType.json;
           var id = request.uri.pathSegments.last;
           if (request.method == 'POST') {
-            posted.add(
-              jsonDecode(await utf8.decoder.bind(request).join())
-                  as Map<String, dynamic>,
-            );
+            final body =
+                jsonDecode(await utf8.decoder.bind(request).join())
+                    as Map<String, dynamic>;
+            if (delaySubmissions) {
+              firstPostStarted.add(null);
+              await Future<void>.delayed(const Duration(milliseconds: 120));
+            }
+            posted.add(body);
             id = 'submitted-${posted.length}';
           }
           request.response.write(jsonEncode({'id': id, 'status': 'queued'}));
@@ -52,13 +60,16 @@ void main() {
         });
         return server;
       }))!;
-      final handler = (await tester.runAsync(
-        () async => DogreaderAudioHandler(
-          player: FakePlayer(),
-          documentsDirectory: () async => root,
-        ),
-      ))!;
-      audioHandler = handler;
+      if (!_handlerInitialized) {
+        final handler = (await tester.runAsync(
+          () async => DogreaderAudioHandler(
+            player: FakePlayer(),
+            documentsDirectory: () async => root,
+          ),
+        ))!;
+        audioHandler = handler;
+        _handlerInitialized = true;
+      }
       addTearDown(() async {
         PathProviderPlatform.instance = originalPaths;
         await server.close(force: true);
@@ -211,7 +222,7 @@ void main() {
 
       final firstRow = find.byKey(const ValueKey('chapter-row-0'));
       final secondRow = find.byKey(const ValueKey('chapter-row-1'));
-      expect(tester.getSize(firstRow).height, 56);
+      expect(tester.getSize(firstRow).height, 112);
       expect(tester.getRect(firstRow).bottom, tester.getRect(secondRow).top);
       await capture('normal');
       mode.value = ThemeMode.dark;
@@ -235,7 +246,7 @@ void main() {
             (widget.message?.startsWith('Narration for The Wild Wood') ??
                 false),
       );
-      expect(tester.getSize(headphones).width, 56);
+      expect(tester.getSize(headphones).width, 72);
       await tester.runAsync(
         () => HttpOverrides.runWithHttpOverrides(() async {
           await tester.tap(headphones);
@@ -352,9 +363,107 @@ void main() {
       expect(narrationDelivery.books['fixture']![1]!['id'], 'existing');
       expect(narrationDelivery.books['fixture']![0]!['delivery'], 'downloaded');
       expect(find.text('Generate (4)'), findsNothing);
+
+      // Regression: opening NarrationQueueScreen (which calls checkJobs() in load())
+      // must release _checkingBooks in finally, and navigating away while generation
+      // submissions are in flight must allow NarrationDelivery to finish in the background.
+      await tester.runAsync(() async {
+        narrationDelivery.books['fixture'] = {
+          0: {
+            'status': 'ready',
+            'delivery': 'downloaded',
+            'localAvailable': true,
+          },
+          1: {
+            'status': 'queued',
+            'id': 'existing',
+            'deliveryNextAttempt': DateTime.now()
+                .add(const Duration(hours: 1))
+                .millisecondsSinceEpoch,
+          },
+        };
+        await narrationDelivery.save();
+        posted.clear();
+      });
+
+      final headphones2 = find.byWidgetPredicate(
+        (widget) =>
+            widget is Tooltip &&
+            (widget.message?.startsWith('Narration for The Wild Wood') ??
+                false),
+      );
+      await tester.runAsync(
+        () => HttpOverrides.runWithHttpOverrides(() async {
+          await tester.tap(headphones2);
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }, _LoopbackHttp()),
+      );
+      await frame();
+      expect(find.byType(NarrationQueueScreen), findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await frame();
+      expect(find.byType(NarrationQueueScreen), findsNothing);
+
+      // Now open the bulk generation sheet, confirm generation, and pop the sheet
+      // before checkJobs() finishes while NarrationDelivery completes in the background.
+      delaySubmissions = true;
+      await tester.tap(find.text('Narration'));
+      await frame();
+      await tester.tap(find.text('Generate entire book'));
+      await frame();
+      await waitFor(find.text('Review generation'));
+      await tester.runAsync(
+        () => HttpOverrides.runWithHttpOverrides(
+          () => tester.tap(find.text('Review generation')),
+          _LoopbackHttp(),
+        ),
+      );
+      await frame();
+      expect(find.text('Generate (4)'), findsOneWidget);
+
+      await tester.runAsync(
+        () => HttpOverrides.runWithHttpOverrides(() async {
+          await tester.tap(find.text('Generate (4)'));
+          for (var i = 0; i < 60 && firstPostStarted.isEmpty; i++) {
+            await Future<void>.delayed(const Duration(milliseconds: 10));
+          }
+        }, _LoopbackHttp()),
+      );
+      expect(firstPostStarted, isNotEmpty);
+      expect(posted.length, lessThan(4));
+
+      // Navigate away from the generation sheet while submissions are still running.
+      await tester.binding.handlePopRoute();
+      await frame();
+      expect(find.byType(NarrationQueueScreen), findsNothing);
+
+      await tester.runAsync(
+        () => HttpOverrides.runWithHttpOverrides(() async {
+          for (var i = 0; i < 100 && posted.length < 4; i++) {
+            await Future<void>.delayed(const Duration(milliseconds: 15));
+          }
+          for (
+            var i = 0;
+            i < 100 &&
+                !narrationDelivery.books['fixture']!.values.every(
+                  (job) => job['status'] != 'waiting',
+                );
+            i++
+          ) {
+            await Future<void>.delayed(const Duration(milliseconds: 15));
+          }
+        }, _LoopbackHttp()),
+      );
+      await frame();
+      expect(posted.map((job) => job['title']), [
+        'The Wild Wood',
+        'Mr. Badger',
+        'Dulce Domum',
+        'Mr. Toad',
+      ]);
+
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
-      await tester.runAsync(handler.dispose);
     },
   );
 }
