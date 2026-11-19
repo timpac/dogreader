@@ -1257,13 +1257,27 @@ class _ChapterListScreenState extends State<ChapterListScreen> {
                             color: Colors.black.withValues(
                               alpha:
                                   Theme.of(context).brightness ==
-                                      Brightness.dark
-                                  ? 0.32
-                                  : 0.07,
+                                          Brightness.dark
+                                      ? 0.32
+                                      : 0.08,
                             ),
-                            blurRadius: 18,
-                            offset: const Offset(0, 6),
+                            blurRadius:
+                                Theme.of(context).brightness == Brightness.dark
+                                    ? 18
+                                    : 22,
+                            offset:
+                                Theme.of(context).brightness == Brightness.dark
+                                    ? const Offset(0, 6)
+                                    : const Offset(0, 8),
                           ),
+                          if (Theme.of(context).brightness != Brightness.dark)
+                            BoxShadow(
+                              color: const Color(
+                                0xFF433159,
+                              ).withValues(alpha: 0.05),
+                              blurRadius: 10,
+                              offset: const Offset(0, 2),
+                            ),
                         ],
                       ),
                       sliver: SliverList.builder(
@@ -1330,13 +1344,41 @@ class _ChapterListScreenState extends State<ChapterListScreen> {
     final narrationTitle = 'Narration for ${chapter.title} · ${audio.label}';
     const targetWidth = 72.0;
     final dark = Theme.of(context).brightness == Brightness.dark;
+    final topColor = dark
+        ? Colors.white.withValues(alpha: 0.035)
+        : Color.alphaBlend(
+            colors.primary.withValues(
+              alpha: selected ? 0.19 : current ? 0.10 : 0,
+            ),
+            const Color(0xFFF5F3F8),
+          );
+    final midColor = dark
+        ? Colors.white.withValues(alpha: 0)
+        : Color.alphaBlend(
+            colors.primary.withValues(
+              alpha: selected ? 0.19 : current ? 0.10 : 0,
+            ),
+            const Color(0xFFEFEDF4),
+          );
+    final bottomColor = dark
+        ? Colors.black.withValues(alpha: 0.10)
+        : Color.alphaBlend(
+            colors.primary.withValues(
+              alpha: selected ? 0.19 : current ? 0.10 : 0,
+            ),
+            const Color(0xFFE8E5EF),
+          );
 
     return Material(
       key: ValueKey('chapter-row-$index'),
-      color: Color.alphaBlend(
-        colors.primary.withValues(alpha: selected ? 0.19 : current ? 0.10 : 0),
-        colors.surfaceContainerLow,
-      ),
+      color: dark
+          ? Color.alphaBlend(
+              colors.primary.withValues(
+                alpha: selected ? 0.19 : current ? 0.10 : 0,
+              ),
+              colors.surfaceContainerLow,
+            )
+          : midColor,
       borderRadius: BorderRadius.vertical(
         top: index == 0
             ? const Radius.circular(_chapterCardRadius)
@@ -1346,9 +1388,8 @@ class _ChapterListScreenState extends State<ChapterListScreen> {
       clipBehavior: Clip.antiAlias,
       child: Stack(
         children: [
-          // Gentle directional shading: a faint lift at the top of each panel
-          // settling into slightly deeper tone at the bottom. Translucent so
-          // the selection tint and ink ripples still read through.
+          // Directional shading: a satin porcelain gradient in light mode
+          // and subtle lift-to-depth shading in dark mode.
           Positioned.fill(
             child: IgnorePointer(
               child: DecoratedBox(
@@ -1357,9 +1398,9 @@ class _ChapterListScreenState extends State<ChapterListScreen> {
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: [
-                      Colors.white.withValues(alpha: dark ? 0.035 : 0.22),
-                      Colors.white.withValues(alpha: 0),
-                      Colors.black.withValues(alpha: dark ? 0.10 : 0.03),
+                      topColor,
+                      midColor,
+                      bottomColor,
                     ],
                     stops: const [0, 0.45, 1],
                   ),
@@ -1367,16 +1408,60 @@ class _ChapterListScreenState extends State<ChapterListScreen> {
               ),
             ),
           ),
+          // Faint, refined outer border in light mode around the connected card;
+          // seamlessly clipped at top and bottom corners by Material's borderRadius.
+          if (!dark) ...[
+            const Positioned(
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: 1,
+              child: IgnorePointer(
+                child: ColoredBox(color: Color(0xFFDDD8E5)),
+              ),
+            ),
+            const Positioned(
+              right: 0,
+              top: 0,
+              bottom: 0,
+              width: 1,
+              child: IgnorePointer(
+                child: ColoredBox(color: Color(0xFFDDD8E5)),
+              ),
+            ),
+            if (index == 0)
+              const Positioned(
+                left: 0,
+                right: 0,
+                top: 0,
+                height: 1,
+                child: IgnorePointer(
+                  child: ColoredBox(color: Color(0xFFDDD8E5)),
+                ),
+              ),
+            if (last)
+              const Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                height: 1,
+                child: IgnorePointer(
+                  child: ColoredBox(color: Color(0xFFDDD8E5)),
+                ),
+              ),
+          ],
           // Soft top highlight; beneath the previous row's separator it reads
           // as a subtly engraved divider rather than a flat rule.
           Positioned(
-            left: 0,
-            right: 0,
-            top: 0,
+            left: dark ? 0 : 1,
+            right: dark ? 0 : 1,
+            top: (!dark && index == 0) ? 1 : 0,
             height: 1,
             child: IgnorePointer(
               child: ColoredBox(
-                color: Colors.white.withValues(alpha: dark ? 0.06 : 0.7),
+                color: Colors.white.withValues(
+                  alpha: dark ? 0.06 : (index == 0 ? 0.85 : 0.7),
+                ),
               ),
             ),
           ),
@@ -1451,7 +1536,13 @@ class _ChapterListScreenState extends State<ChapterListScreen> {
                         ],
                         if (_selecting) const SizedBox(width: 10),
                         if (_selecting)
-                          _headphones(active, failed, ready, colors),
+                          _headphones(
+                            active,
+                            failed,
+                            ready,
+                            colors,
+                            dark: dark,
+                          ),
                       ],
                     ),
                   ),
@@ -1481,7 +1572,13 @@ class _ChapterListScreenState extends State<ChapterListScreen> {
                     ),
                     onLongPress: () => _startSelection(index),
                     child: Center(
-                      child: _headphones(active, failed, ready, colors),
+                      child: _headphones(
+                        active,
+                        failed,
+                        ready,
+                        colors,
+                        dark: dark,
+                      ),
                     ),
                   ),
                 ),
@@ -1518,69 +1615,114 @@ class _ChapterListScreenState extends State<ChapterListScreen> {
     bool active,
     bool failed,
     bool ready,
-    ColorScheme colors,
-  ) => SizedBox(
-    width: 52,
-    height: 52,
-    child: Stack(
-      alignment: Alignment.center,
-      children: [
-        DecoratedBox(
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: Color.alphaBlend(
-              colors.primary.withValues(alpha: ready || active ? 0.14 : 0.05),
-              colors.surfaceContainerHighest.withValues(alpha: 0.55),
+    ColorScheme colors, {
+    bool dark = true,
+  }) {
+    final lightBaseFill = Color.alphaBlend(
+      colors.primary.withValues(alpha: ready || active ? 0.16 : 0.04),
+      const Color(0xFFEBE6F2),
+    );
+    final lightTopFill = Color.alphaBlend(
+      colors.primary.withValues(alpha: ready || active ? 0.16 : 0.04),
+      const Color(0xFFF3F0F8),
+    );
+    final lightBottomFill = Color.alphaBlend(
+      colors.primary.withValues(alpha: ready || active ? 0.16 : 0.04),
+      const Color(0xFFE2DDE9),
+    );
+
+    return SizedBox(
+      width: 52,
+      height: 52,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          DecoratedBox(
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: dark
+                  ? Color.alphaBlend(
+                      colors.primary.withValues(
+                        alpha: ready || active ? 0.14 : 0.05,
+                      ),
+                      colors.surfaceContainerHighest.withValues(alpha: 0.55),
+                    )
+                  : lightBaseFill,
+              gradient: dark
+                  ? null
+                  : LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        lightTopFill,
+                        lightBaseFill,
+                        lightBottomFill,
+                      ],
+                      stops: const [0, 0.5, 1],
+                    ),
+              boxShadow: dark
+                  ? null
+                  : [
+                      BoxShadow(
+                        color: const Color(0xFF433159).withValues(alpha: 0.08),
+                        blurRadius: 4,
+                        offset: const Offset(0, 1.5),
+                      ),
+                    ],
+              border: Border.all(
+                color: dark
+                    ? (ready || active
+                        ? colors.primary.withValues(alpha: 0.35)
+                        : colors.outlineVariant.withValues(alpha: 0.7))
+                    : (ready || active
+                        ? colors.primary.withValues(alpha: 0.42)
+                        : const Color(0xFFD6D0DF)),
+                width: 1,
+              ),
             ),
-            border: Border.all(
-              color: ready || active
-                  ? colors.primary.withValues(alpha: 0.35)
-                  : colors.outlineVariant.withValues(alpha: 0.7),
-              width: 1,
+            child: Padding(
+              padding: const EdgeInsets.all(6),
+              child: Image.asset(
+                'assets/images/chapter_headphones.webp',
+                width: 38,
+                height: 38,
+                filterQuality: FilterQuality.high,
+                excludeFromSemantics: true,
+              ),
             ),
           ),
-          child: Padding(
-            padding: const EdgeInsets.all(6),
-            child: Image.asset(
-              'assets/images/chapter_headphones.webp',
-              width: 38,
-              height: 38,
-              filterQuality: FilterQuality.high,
-              excludeFromSemantics: true,
-            ),
-          ),
-        ),
-        if (active || failed || ready)
-          Positioned(
-            right: 1,
-            bottom: 1,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: colors.surface,
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: colors.outlineVariant.withValues(alpha: 0.6),
-                  width: 0.75,
+          if (active || failed || ready)
+            Positioned(
+              right: 1,
+              bottom: 1,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: colors.surface,
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: colors.outlineVariant.withValues(alpha: 0.6),
+                    width: 0.75,
+                  ),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(2.5),
+                  child: active
+                      ? const SizedBox.square(
+                          dimension: 10,
+                          child: CircularProgressIndicator(strokeWidth: 1.75),
+                        )
+                      : Icon(
+                          failed ? Icons.error_outline : Icons.circle,
+                          size: failed ? 12 : 8,
+                          color: failed ? colors.error : colors.primary,
+                        ),
                 ),
               ),
-              child: Padding(
-                padding: const EdgeInsets.all(2.5),
-                child: active
-                    ? const SizedBox.square(
-                        dimension: 10,
-                        child: CircularProgressIndicator(strokeWidth: 1.75),
-                      )
-                    : Icon(
-                        failed ? Icons.error_outline : Icons.circle,
-                        size: failed ? 12 : 8,
-                        color: failed ? colors.error : colors.primary,
-                      ),
-              ),
             ),
-          ),
-      ],
-    ),
-  );
+        ],
+      ),
+    );
+  }
 
   void openChapter(BuildContext context, int index, {bool resume = false}) {
     final saved = progressStore?.continuePosition(book.id) ?? widget.saved;
