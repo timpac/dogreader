@@ -1,5 +1,16 @@
 # Android APK releases
 
+## Original build-153 progress repair
+
+The owner's build-156 task explicitly uses compiled source
+`47bd9a985a1bccadef07f6f2d961433a4898949c` on the dedicated
+`fix/156-progress-persistence` branch. Its manual `release-apk.yml` adds a
+narrow branch exception and requires that source ancestry. It does not merge
+the repair into the default branch or modify other applications. Numbering
+still includes retained draft APKs across the repository; builds 154/155 are
+DogReader 3.0 reservations. See
+[the progress audit](PROGRESS_PERSISTENCE_AUDIT.md) for provenance and validation.
+
 ## Existing working release
 
 Build 135 is immutable reference evidence:

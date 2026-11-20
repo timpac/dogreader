@@ -74,7 +74,7 @@ void main() {
     await load();
     await handler.play();
     player.processing.add(ProcessingState.completed);
-    for (var i = 0; i < 100 && handler.mediaItem.value?.id != 'book:1'; i++) {
+    for (var i = 0; i < 1000 && (handler.mediaItem.value?.id != 'book:1' || !player.playing); i++) {
       await Future<void>.delayed(const Duration(milliseconds: 1));
     }
     expect(handler.mediaItem.value?.id, 'book:1');

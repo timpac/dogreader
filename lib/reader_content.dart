@@ -35,8 +35,23 @@ String? epubResourcePath(String owner, String href) {
 
 String? _resource(Map<String, String> files, String path) {
   if (files.containsKey(path)) return files[path];
-  final matches = files.entries.where((e) => e.key.endsWith('/$path'));
-  return matches.length == 1 ? matches.single.value : null;
+  final legacyMatches = files.entries.where((e) => e.key.endsWith('/$path'));
+  if (legacyMatches.isNotEmpty) {
+    return legacyMatches.length == 1 ? legacyMatches.single.value : null;
+  }
+
+  // epubx keeps the original manifest href as the CSS map key. The
+  // resolved XHTML link or CSS import uses a decoded archive path.
+  final encodedMatches = files.entries.where((entry) {
+    if (!entry.key.contains('%')) return false;
+    try {
+      final decoded = epubResourcePath('', entry.key);
+      return decoded == path || (decoded?.endsWith('/$path') ?? false);
+    } on FormatException {
+      return false;
+    }
+  });
+  return encodedMatches.length == 1 ? encodedMatches.single.value : null;
 }
 
 ReaderChapter parseReaderChapter(String title, String rawHtml,
