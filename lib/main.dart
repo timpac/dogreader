@@ -1781,18 +1781,13 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   }
 
   Future<void> load() async {
-    stderr.writeln('DEBUG LOAD: 1 registerBookChapters');
     narrationDelivery.registerBookChapters(
       widget.book.id,
       widget.book.chapters,
     );
-    stderr.writeln('DEBUG LOAD: 2 narrationDelivery.load');
     await narrationDelivery.load();
-    stderr.writeln('DEBUG LOAD: 3 narrationDictionary.load');
     await narrationDictionary.load();
-    stderr.writeln('DEBUG LOAD: 4 narrationCostTracker.load');
     await narrationCostTracker.load();
-    stderr.writeln('DEBUG LOAD: 5 queueFile');
     try {
       final file = await queueFile;
       if (await file.exists()) {
@@ -1817,9 +1812,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         }
       }
     } catch (_) {}
-    stderr.writeln('DEBUG LOAD: 6 getAppDocDir');
     final root = await getApplicationDocumentsDirectory();
-    stderr.writeln('DEBUG LOAD: 7 recoverNarrationFile loop');
     for (var index = 0; index < widget.book.chapters.length; index++) {
       final file = File('${root.path}/narration/${widget.book.id}_$index.mp3');
       if (!narrationDelivery.deliveryInFlight(widget.book.id, index)) {
@@ -1846,16 +1839,13 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         };
       }
     }
-    stderr.writeln('DEBUG LOAD: 8 setState');
     if (!mounted) return;
     setState(() {
       loaded = true;
       final chapter = focusedChapter;
       if (chapter != null && jobs[chapter] == null) selected.add(chapter);
     });
-    stderr.writeln('DEBUG LOAD: 9 checkJobs');
     if (widget.generationChapters == null) await checkJobs();
-    stderr.writeln('DEBUG LOAD: 10 done');
   }
 
   Future<void> save() async {

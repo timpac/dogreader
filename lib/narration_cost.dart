@@ -323,6 +323,9 @@ class NarrationCostTracker extends ChangeNotifier {
   final Map<String, NarrationMonthUsage> _months = {};
   String? _loadedPath;
   Future<void>? _loading;
+  bool _loaded = false;
+
+  bool get isLoaded => _loaded;
 
   static Future<File> _defaultFile() async {
     final root = await getApplicationDocumentsDirectory();
@@ -333,7 +336,11 @@ class NarrationCostTracker extends ChangeNotifier {
     Future<File> Function()? usageFile,
     DateTime Function()? clock,
   }) {
-    if (usageFile != null) _usageFile = usageFile;
+    if (usageFile != null) {
+      _usageFile = usageFile;
+      _loaded = false;
+      _loadedPath = null;
+    }
     if (clock != null) this.clock = clock;
   }
 
@@ -345,7 +352,11 @@ class NarrationCostTracker extends ChangeNotifier {
   }
 
   Future<void> load() {
-    return _loading ??= _load().whenComplete(() => _loading = null);
+    if (_loaded) return Future<void>.value();
+    return _loading ??= _load().whenComplete(() {
+      _loading = null;
+      _loaded = true;
+    });
   }
 
   Future<void> _load() async {

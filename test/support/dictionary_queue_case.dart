@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:audiobook_app/article_import.dart';
 import 'package:audiobook_app/dogreader_audio_handler.dart';
 import 'package:audiobook_app/main.dart';
+import 'package:audiobook_app/narration_cost.dart';
 import 'package:audiobook_app/narration_dictionary.dart';
 import 'package:audiobook_app/reader_content.dart' show parseReaderChapter;
 import 'package:flutter/material.dart';
@@ -74,15 +75,14 @@ void runDictionaryQueueCase({required bool articleInput}) {
       final oldState = jsonEncode({
         '$bookId:0': {'positionMs': 17000},
       });
-      stderr.writeln('DEBUG DQ 1: setup start');
       await tester.runAsync(() async {
         await audio.parent.create();
         await audio.writeAsBytes(List.filled(1200, 7));
         await stateFile.writeAsString(oldState);
         await narrationDictionary.load();
         await narrationDelivery.load();
+        await narrationCostTracker.load();
       });
-      stderr.writeln('DEBUG DQ 2: pumping NarrationQueueScreen');
       await tester.pumpWidget(
         MaterialApp(
           home: NarrationQueueScreen(
@@ -93,14 +93,11 @@ void runDictionaryQueueCase({required bool articleInput}) {
           ),
         ),
       );
-      stderr.writeln('DEBUG DQ 3: NarrationQueueScreen pumped');
       final dynamic queue = tester.state(find.byType(NarrationQueueScreen));
       await tester.runAsync(() async {
         await queue.load();
       });
-      stderr.writeln('DEBUG DQ 4: queue.load done, pumping and settling');
       await tester.pumpAndSettle();
-      stderr.writeln('DEBUG DQ 5: pumpAndSettle done');
       expect(queue.jobs[0]['status'], 'ready');
       await tester.runAsync(
         () => narrationDictionary.setRules(null, [
