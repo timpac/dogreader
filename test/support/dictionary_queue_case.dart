@@ -36,6 +36,13 @@ void runDictionaryQueueCase({required bool articleInput}) {
       final oldPaths = PathProviderPlatform.instance;
       PathProviderPlatform.instance = _TestPaths(root.path);
       addTearDown(() => PathProviderPlatform.instance = oldPaths);
+      final oldAudioHandler = audioHandler;
+      addTearDown(() {
+        narrationDelivery.host = '';
+        narrationDelivery.token = '';
+        narrationDelivery.books.clear();
+        audioHandler = oldAudioHandler;
+      });
       late FakePlayer player;
       late DogreaderAudioHandler handler;
       await tester.runAsync(() async {
@@ -176,6 +183,11 @@ void runDictionaryQueueCase({required bool articleInput}) {
           queue.jobs[0]['narration_dictionary'],
         );
         await server.close(force: true);
+        queue.host = '';
+        queue.token = '';
+        narrationDelivery.host = '';
+        narrationDelivery.token = '';
+        narrationDelivery.books.clear();
       });
       // Reading seeks with the recording's frozen map, despite newer dictionary
       // settings. No replacement of the audio handler or chapter routing.
