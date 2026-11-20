@@ -196,7 +196,9 @@ void main() {
   testWidgets(
     'NarrationCostBanner alerts when free tier + \$10 credit is exceeded and switches to Kokoro on tap',
     (tester) async {
-      await tracker.setMonthUsage(googleCharacters: 1300000);
+      await tester.runAsync(
+        () => tracker.setMonthUsage(googleCharacters: 1300000),
+      );
       var preference = const NarrationPreference(
         'google',
         'en-US-Chirp3-HD-Achernar',
@@ -234,13 +236,18 @@ void main() {
       expect(find.textContaining('\$0.00 API cost with Kokoro'), findsOneWidget);
 
       // Test adjusting usage via the budget dialog.
-      await tester.tap(find.text('Usage / budget'));
+      await tester.runAsync(() async {
+        await tester.tap(find.text('Usage / budget'));
+      });
       await tester.pumpAndSettle();
       await tester.enterText(
         find.byKey(const ValueKey('budget-google-used-field')),
         '500000',
       );
-      await tester.tap(find.text('Save'));
+      await tester.runAsync(() async {
+        await tester.tap(find.text('Save'));
+        await Future<void>.delayed(const Duration(milliseconds: 150));
+      });
       await tester.pumpAndSettle();
       expect(tracker.estimate().usedGoogleCharacters, 500000);
       expect(tracker.estimate().coveredCharactersRemaining, 833333);
