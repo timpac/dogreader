@@ -510,27 +510,74 @@ class NarrationCostTracker extends ChangeNotifier {
   }
 }
 
-Future<void> showNarrationBudgetDialog(
-  BuildContext context, {
-  NarrationCostTracker? tracker,
-}) async {
-  final costTracker = tracker ?? narrationCostTracker;
-  await costTracker.load();
-  if (!context.mounted) return;
-  final current = costTracker.monthUsage();
-  final googleController = TextEditingController(
-    text: current.googleCharacters.toString(),
-  );
-  final freeController = TextEditingController(
-    text: costTracker.freeCharacterLimit.toString(),
-  );
-  final creditController = TextEditingController(
-    text: costTracker.monthlyCreditLimitUsd.toStringAsFixed(2),
-  );
-  final saved = await showDialog<bool>(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: Text('TTS usage & budget (${current.monthKey})'),
+class NarrationBudgetDialog extends StatefulWidget {
+  final NarrationCostTracker costTracker;
+
+  const NarrationBudgetDialog({super.key, required this.costTracker});
+
+  @override
+  State<NarrationBudgetDialog> createState() => _NarrationBudgetDialogState();
+}
+
+class _NarrationBudgetDialogState extends State<NarrationBudgetDialog> {
+  late final TextEditingController _googleController;
+  late final TextEditingController _freeController;
+  late final TextEditingController _creditController;
+  late final String _monthKey;
+
+  @override
+  void initState() {
+    super.initState();
+    final current = widget.costTracker.monthUsage();
+    _monthKey = current.monthKey;
+    _googleController = TextEditingController(
+      text: current.googleCharacters.toString(),
+    );
+    _freeController = TextEditingController(
+      text: widget.costTracker.freeCharacterLimit.toString(),
+    );
+    _creditController = TextEditingController(
+      text: widget.costTracker.monthlyCreditLimitUsd.toStringAsFixed(2),
+    );
+  }
+
+  @override
+  void dispose() {
+    _googleController.dispose();
+    _freeController.dispose();
+    _creditController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _handleSave() async {
+    final used = int.tryParse(
+      _googleController.text.replaceAll(',', '').trim(),
+    );
+    final free = int.tryParse(
+      _freeController.text.replaceAll(',', '').trim(),
+    );
+    final credit = double.tryParse(
+      _creditController.text.replaceAll('\$', '').trim(),
+    );
+    await widget.costTracker.updateBudget(
+      freeCharacterLimit: free,
+      monthlyCreditLimitUsd: credit,
+    );
+    if (used != null) {
+      await widget.costTracker.setMonthUsage(
+        googleCharacters: used,
+        clearRecordedJobs: used == 0,
+      );
+    }
+    if (mounted) {
+      Navigator.pop(context, true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('TTS usage & budget ($_monthKey)'),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -544,7 +591,7 @@ Future<void> showNarrationBudgetDialog(
             const SizedBox(height: 12),
             TextField(
               key: const ValueKey('budget-google-used-field'),
-              controller: googleController,
+              controller: _googleController,
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(
                 labelText: 'Google characters used this month',
@@ -555,7 +602,7 @@ Future<void> showNarrationBudgetDialog(
             const SizedBox(height: 12),
             TextField(
               key: const ValueKey('budget-free-limit-field'),
-              controller: freeController,
+              controller: _freeController,
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(
                 labelText: 'Monthly free Google characters',
@@ -565,7 +612,7 @@ Future<void> showNarrationBudgetDialog(
             const SizedBox(height: 12),
             TextField(
               key: const ValueKey('budget-credit-usd-field'),
-              controller: creditController,
+              controller: _creditController,
               keyboardType: const TextInputType.numberWithOptions(
                 decimal: true,
               ),
@@ -581,7 +628,7 @@ Future<void> showNarrationBudgetDialog(
       actions: [
         TextButton(
           onPressed: () {
-            googleController.text = '0';
+            _googleController.text = '0';
           },
           child: const Text('Zero usage'),
         ),
@@ -590,36 +637,25 @@ Future<void> showNarrationBudgetDialog(
           child: const Text('Cancel'),
         ),
         FilledButton(
-          onPressed: () => Navigator.pop(context, true),
+          onPressed: _handleSave,
           child: const Text('Save'),
         ),
       ],
-    ),
-  );
-  if (saved == true) {
-    final used = int.tryParse(
-      googleController.text.replaceAll(',', '').trim(),
     );
-    final free = int.tryParse(
-      freeController.text.replaceAll(',', '').trim(),
-    );
-    final credit = double.tryParse(
-      creditController.text.replaceAll('\$', '').trim(),
-    );
-    await costTracker.updateBudget(
-      freeCharacterLimit: free,
-      monthlyCreditLimitUsd: credit,
-    );
-    if (used != null) {
-      await costTracker.setMonthUsage(
-        googleCharacters: used,
-        clearRecordedJobs: used == 0,
-      );
-    }
   }
-  googleController.dispose();
-  freeController.dispose();
-  creditController.dispose();
+}
+
+Future<void> showNarrationBudgetDialog(
+  BuildContext context, {
+  NarrationCostTracker? tracker,
+}) async {
+  final costTracker = tracker ?? narrationCostTracker;
+  await costTracker.load();
+  if (!context.mounted) return;
+  await showDialog<bool>(
+    context: context,
+    builder: (context) => NarrationBudgetDialog(costTracker: costTracker),
+  );
 }
 
 class NarrationCostBanner extends StatelessWidget {
