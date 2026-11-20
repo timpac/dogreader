@@ -107,6 +107,11 @@ void runDictionaryQueueCase({required bool articleInput}) {
       queue.setState(() {});
       await tester.pump();
       expect(queue.dictionaryChanged(0), isTrue);
+      await tester.scrollUntilVisible(
+        find.textContaining('Dictionary changed'),
+        100,
+        scrollable: find.byType(Scrollable).first,
+      );
       expect(find.textContaining('Dictionary changed'), findsOneWidget);
       await tester.runAsync(() async {
         expect(await audio.readAsBytes(), List.filled(1200, 7));
@@ -142,7 +147,6 @@ void runDictionaryQueueCase({required bool articleInput}) {
         await queue.load();
         expect(queue.chapterPayload(0), payload);
       });
-      stderr.writeln('DEBUG DQ 6: starting server block');
       late HttpServer server;
       await tester.runAsync(() async {
         server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -161,7 +165,6 @@ void runDictionaryQueueCase({required bool articleInput}) {
         await stateFile.delete();
         final blockedState = Directory(stateFile.path);
         await blockedState.create();
-        stderr.writeln('DEBUG DQ 7: testing blocked download');
         await expectLater(
           HttpOverrides.runWithHttpOverrides(() async {
             await queue.downloadAudio(0, 'new');
@@ -171,7 +174,6 @@ void runDictionaryQueueCase({required bool articleInput}) {
         expect(await audio.readAsBytes(), List.filled(1200, 7));
         await blockedState.delete();
         await stateFile.writeAsString(savedState);
-        stderr.writeln('DEBUG DQ 8: testing successful download');
         await HttpOverrides.runWithHttpOverrides(() async {
           await queue.downloadAudio(0, 'new');
         }, _RealHttp());
@@ -185,7 +187,6 @@ void runDictionaryQueueCase({required bool articleInput}) {
           saved['$bookId:0']['narration_dictionary'],
           queue.jobs[0]['narration_dictionary'],
         );
-        stderr.writeln('DEBUG DQ 9: closing server');
         await server.close(force: true);
         queue.host = '';
         queue.token = '';
@@ -193,7 +194,6 @@ void runDictionaryQueueCase({required bool articleInput}) {
         narrationDelivery.token = '';
         narrationDelivery.books.clear();
       });
-      stderr.writeln('DEBUG DQ 10: pumping ChapterNarrationScreen');
       // Reading seeks with the recording's frozen map, despite newer dictionary
       // settings. No replacement of the audio handler or chapter routing.
       final originalFraction =
@@ -213,7 +213,6 @@ void runDictionaryQueueCase({required bool articleInput}) {
           ),
         ),
       );
-      stderr.writeln('DEBUG DQ 11: ChapterNarrationScreen pumped, calling restore');
       final dynamic narration = tester.state(
         find.byType(ChapterNarrationScreen),
       );
@@ -227,12 +226,9 @@ void runDictionaryQueueCase({required bool articleInput}) {
         );
         await tester.pump(const Duration(milliseconds: 5));
       }
-      stderr.writeln('DEBUG DQ 12: restore loop done, restored=$restored');
       expect(restored, isTrue);
       await restore;
-      stderr.writeln('DEBUG DQ 13: awaiting pumpAndSettle');
       await tester.pumpAndSettle();
-      stderr.writeln('DEBUG DQ 14: pumpAndSettle done');
       expect(
         player.position.inMilliseconds,
         (100000 * expectedFraction).round(),
@@ -241,7 +237,6 @@ void runDictionaryQueueCase({required bool articleInput}) {
       expect(readingSaves, 0);
       expect(player.playing, isFalse);
       expect(tester.takeException(), isNull);
-      stderr.writeln('DEBUG DQ 15: disposing handler');
       await tester.pumpWidget(const SizedBox());
       var disposed = false;
       final disposing = handler.dispose().then((_) => disposed = true);
@@ -253,9 +248,7 @@ void runDictionaryQueueCase({required bool articleInput}) {
       }
       expect(disposed, isTrue);
       await disposing;
-      stderr.writeln('DEBUG DQ 16: handler disposed, deleting root');
       await tester.runAsync(() => root.delete(recursive: true));
-      stderr.writeln('DEBUG DQ 17: test completed');
     },
   );
 }
