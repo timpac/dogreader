@@ -1647,7 +1647,7 @@ class _ChapterListScreenState extends State<ChapterListScreen> {
                       ),
                       colors.surfaceContainerHighest.withValues(alpha: 0.55),
                     )
-                  : lightBaseFill,
+                  : null,
               gradient: dark
                   ? null
                   : LinearGradient(
