@@ -36,12 +36,10 @@ void runDictionaryQueueCase({required bool articleInput}) {
       final oldPaths = PathProviderPlatform.instance;
       PathProviderPlatform.instance = _TestPaths(root.path);
       addTearDown(() => PathProviderPlatform.instance = oldPaths);
-      final oldAudioHandler = audioHandler;
       addTearDown(() {
         narrationDelivery.host = '';
         narrationDelivery.token = '';
         narrationDelivery.books.clear();
-        audioHandler = oldAudioHandler;
       });
       late FakePlayer player;
       late DogreaderAudioHandler handler;
