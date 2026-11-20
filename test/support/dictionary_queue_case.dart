@@ -176,10 +176,6 @@ void runDictionaryQueueCase({required bool articleInput}) {
           queue.jobs[0]['narration_dictionary'],
         );
         await server.close(force: true);
-        queue.host = '';
-        queue.token = '';
-        narrationDelivery.host = '';
-        narrationDelivery.token = '';
       });
       // Reading seeks with the recording's frozen map, despite newer dictionary
       // settings. No replacement of the audio handler or chapter routing.
@@ -215,22 +211,7 @@ void runDictionaryQueueCase({required bool articleInput}) {
       }
       expect(restored, isTrue);
       await restore;
-      for (
-        var i = 0;
-        i < 400 &&
-            find.byType(CircularProgressIndicator).evaluate().isNotEmpty;
-        i++
-      ) {
-        await tester.pump();
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 10)),
-        );
-      }
-      await tester.pumpAndSettle(
-        const Duration(milliseconds: 100),
-        EnginePhase.sendSemanticsUpdate,
-        const Duration(seconds: 10),
-      );
+      await tester.pumpAndSettle();
       expect(
         player.position.inMilliseconds,
         (100000 * expectedFraction).round(),

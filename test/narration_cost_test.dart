@@ -246,7 +246,9 @@ void main() {
       );
       await tester.runAsync(() async {
         await tester.tap(find.text('Save'));
+        await tester.pump();
         await Future<void>.delayed(const Duration(milliseconds: 150));
+        await tester.pump();
       });
       await tester.pumpAndSettle();
       expect(tracker.estimate().usedGoogleCharacters, 500000);

@@ -550,6 +550,7 @@ class _NarrationBudgetDialogState extends State<NarrationBudgetDialog> {
   }
 
   Future<void> _handleSave() async {
+    FocusScope.of(context).unfocus();
     final used = int.tryParse(
       _googleController.text.replaceAll(',', '').trim(),
     );
@@ -559,16 +560,16 @@ class _NarrationBudgetDialogState extends State<NarrationBudgetDialog> {
     final credit = double.tryParse(
       _creditController.text.replaceAll('\$', '').trim(),
     );
-    await widget.costTracker.updateBudget(
-      freeCharacterLimit: free,
-      monthlyCreditLimitUsd: credit,
-    );
     if (used != null) {
       await widget.costTracker.setMonthUsage(
         googleCharacters: used,
         clearRecordedJobs: used == 0,
       );
     }
+    await widget.costTracker.updateBudget(
+      freeCharacterLimit: free,
+      monthlyCreditLimitUsd: credit,
+    );
     if (mounted) {
       Navigator.pop(context, true);
     }
