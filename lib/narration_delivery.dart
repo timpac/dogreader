@@ -2,11 +2,15 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 
+import 'narration_cost.dart';
+import 'narration_dictionary.dart';
 import 'narration_files.dart';
 import 'narration_options.dart';
 import 'narration_storage.dart';
+import 'reader_content.dart';
 
 class DeliveryHttpError implements Exception {
   DeliveryHttpError(this.status);
@@ -53,31 +57,42 @@ bool canRetryNarrationDownload(Map<String, dynamic>? job) =>
     (job!['id'] as String).isNotEmpty &&
     job['status'] == 'ready';
 
-/// App-owned delivery of existing job IDs. Never submits text or resets TTS.
+/// App-owned submission and delivery of narration jobs.
 /// The legacy queue/status fields remain readable; delivery fields are additive.
 class NarrationDelivery extends ChangeNotifier {
   NarrationDelivery({
     required this.documentsDirectory,
     required this.beforeReplace,
     DateTime Function()? clock,
-    this.responseTimeout = const Duration(seconds: 20),
-    this.idleTimeout = const Duration(seconds: 30),
+    this.responseTimeout = const Duration(seconds: 30),
+    this.idleTimeout = const Duration(seconds: 45),
     this.diagnosticSink,
-  }) : clock = clock ?? DateTime.now;
+    this.chapterResolver,
+    NarrationCostTracker? costTracker,
+  }) : clock = clock ?? DateTime.now,
+       costTracker = costTracker ?? narrationCostTracker;
 
   final Future<Directory> Function() documentsDirectory;
   final Future<void> Function(String, int) beforeReplace;
   final DateTime Function() clock;
   final Duration responseTimeout, idleTimeout;
   final void Function(Map<String, Object?>)? diagnosticSink;
+  FutureOr<ReaderChapter?> Function(String book, int index)? chapterResolver;
+  final NarrationCostTracker costTracker;
   final Map<String, Map<int, Map<String, dynamic>>> books = {};
+  final Map<String, List<ReaderChapter>> _chapters = {};
   final Map<String, Future<void>> _downloads = {};
+  final Map<String, Future<void>> _submissions = {};
   final List<String> diagnostics = [];
   String host = '', token = '';
   Future<void>? _loading, _checking;
   Timer? _timer;
-  bool _loaded = false, _disposed = false;
+  bool _loaded = false, _disposed = false, _reconcileRequested = false;
   static const maxAttempts = 6;
+
+  void registerBookChapters(String book, List<ReaderChapter> chapters) {
+    _chapters[book] = chapters;
+  }
 
   Future<File> get queueFile async =>
       File('${(await documentsDirectory()).path}/dogreader_queue.json');
@@ -89,6 +104,12 @@ class NarrationDelivery extends ChangeNotifier {
 
   Future<void> _load() async {
     if (_loaded) return;
+    costTracker.configureStorage(
+      usageFile: () async =>
+          File('${(await documentsDirectory()).path}/narration_cost.json'),
+      clock: clock,
+    );
+    await costTracker.load();
     final file = await queueFile;
     if (await file.exists()) {
       final data = jsonDecode(await file.readAsString()) as Map;
@@ -114,9 +135,10 @@ class NarrationDelivery extends ChangeNotifier {
   void attachBook(String book, Map<int, Map<String, dynamic>> jobs) {
     for (final index in jobs.keys.toList()) {
       final active = books[book]?[index];
-      if (deliveryInFlight(book, index) && active != null) {
-        // Opening the queue must not replace the live transfer with a stale
-        // disk snapshot or normalize its genuine Downloading state.
+      if ((deliveryInFlight(book, index) || submissionInFlight(book, index)) &&
+          active != null) {
+        // Opening the queue must not replace a live transfer or submission
+        // with a stale disk snapshot.
         jobs[index] = active;
       } else {
         _normalizeInterruptedState(jobs[index]!);
@@ -153,6 +175,18 @@ class NarrationDelivery extends ChangeNotifier {
   }
 
   void _normalizeInterruptedState(Map<String, dynamic> job) {
+    if (job['status'] == 'waiting' &&
+        job['id'] is String &&
+        (job['id'] as String).isNotEmpty) {
+      job['status'] = 'queued';
+    }
+    if (job['status'] == 'waiting' && job['failureStage'] == 'submission') {
+      job.remove('deliveryError');
+      job.remove('failureStage');
+      job.remove('deliveryNextAttempt');
+      job['deliveryAttempts'] = 0;
+      if (job['delivery'] == 'failed') job.remove('delivery');
+    }
     final pending = job['status'] == 'queued' || job['status'] == 'generating';
     // Build 143 recorded a normal not-ready probe as a failed download.
     if (pending && job['deliveryError'] == 'Download HTTP 404') {
@@ -287,13 +321,19 @@ class NarrationDelivery extends ChangeNotifier {
         )
         .millisecondsSinceEpoch;
     job['failureStage'] = stage;
-    final action = stage == 'status' ? 'Status check' : 'Download';
+    final action = switch (stage) {
+      'status' => 'Status check',
+      'submission' => 'Submission',
+      _ => 'Download',
+    };
     job['deliveryError'] = error is DeliveryHttpError
         ? '$action HTTP ${error.status}'
         : error is TimeoutException
         ? '$action timed out.'
         : '$action interrupted.';
-    _transition(job, book, index, delivery: 'failed', automatic: automatic);
+    if (stage != 'submission') {
+      _transition(job, book, index, delivery: 'failed', automatic: automatic);
+    }
     _log(
       '${stage}_failed',
       book,
@@ -328,24 +368,309 @@ class NarrationDelivery extends ChangeNotifier {
     await save();
   }
 
-  Future<void> reconcile() => _checking ??= _reconcile()
-      .catchError((Object e) {
+  static Map<String, dynamic> prepareSubmissionPayload(
+    Map<String, dynamic> job, {
+    ReaderChapter? chapter,
+  }) {
+    var title = job['title'];
+    var text = job['text'];
+    final sourceChapter =
+        chapter ??
+        (title is String && text is String && job['narration_offsets'] == null
+            ? ReaderChapter(title, text, const [])
+            : null);
+    if ((title is! String ||
+            text is! String ||
+            job['narration_offsets'] == null) &&
+        sourceChapter != null) {
+      final snapshot = job['narration_dictionary'];
+      final transformed = snapshot is Map
+          ? NarrationDictionaryConfig.fromJson(
+              Map<String, dynamic>.from(snapshot),
+            ).transform(sourceChapter)
+          : const NarrationDictionaryConfig(
+              ignoreSeparators: false,
+            ).transform(sourceChapter);
+      if (transformed.text.trim().isEmpty) {
+        throw StateError(
+          'This chapter is silent under the current dictionary. Disable its silence rules to generate audio.',
+        );
+      }
+      title = sourceChapter.title;
+      text = transformed.text;
+      job['title'] = title;
+      job['text'] = text;
+      job['narration_offsets'] = transformed.offsets;
+    }
+    if (title is! String || text is! String) {
+      throw const FormatException('Chapter text unavailable for submission');
+    }
+    if (text.trim().isEmpty) {
+      throw StateError(
+        'This chapter is silent under the current dictionary. Disable its silence rules to generate audio.',
+      );
+    }
+    job['characters'] = text.runes.length;
+    return {
+      'title': title,
+      'text': text,
+      'engine': job['engine'] ?? 'google',
+      'voice': job['voice'] ?? 'en-US-Chirp3-HD-Achernar',
+      for (final key in ['model_version', 'settings'])
+        if (job.containsKey(key)) key: job[key],
+    };
+  }
+
+  Future<ReaderChapter?> _resolveChapter(String book, int index) async {
+    final cached = _chapters[book];
+    if (cached != null && index >= 0 && index < cached.length) {
+      return cached[index];
+    }
+    final resolver = chapterResolver;
+    if (resolver != null) {
+      return await resolver(book, index);
+    }
+    return null;
+  }
+
+  Future<void> submitWaitingJobs({
+    String? bookId,
+    bool automatic = false,
+  }) async {
+    await load();
+    if (host.isEmpty || token.isEmpty || _disposed) return;
+    final targetBooks = bookId != null
+        ? [
+            if (books.containsKey(bookId))
+              MapEntry(bookId, books[bookId]!),
+          ]
+        : books.entries.toList();
+    for (final book in targetBooks) {
+      final indices = book.value.keys.toList()..sort();
+      for (final index in indices) {
+        if (_disposed) return;
+        final job = book.value[index];
+        if (job == null || job['engine'] == 'kokoro_offline') continue;
+        final id = job['id'];
+        if (id is String && id.isNotEmpty) {
+          if (job['status'] == 'waiting') {
+            _transition(job, book.key, index, status: 'queued', automatic: automatic);
+            await save();
+          }
+          continue;
+        }
+        if (job['status'] != 'waiting') continue;
+        if (automatic) {
+          final next = (job['deliveryNextAttempt'] as num?)?.toInt() ?? 0;
+          if (clock().millisecondsSinceEpoch < next) continue;
+        }
+        await _submitSingle(book.key, index, automatic: automatic);
+      }
+    }
+  }
+
+  Future<void> _submitSingle(
+    String book,
+    int index, {
+    required bool automatic,
+  }) {
+    final key = '$book:$index';
+    final existing = _submissions[key];
+    if (existing != null) {
+      _log(
+        'submission_joined',
+        book,
+        index,
+        books[book]?[index]?['id'] as String? ?? '',
+        automatic: automatic,
+      );
+      return existing;
+    }
+    return _submissions[key] = _doSubmit(book, index, automatic: automatic)
+        .whenComplete(() {
+          _submissions.remove(key);
+        });
+  }
+
+  Future<void> _doSubmit(
+    String book,
+    int index, {
+    required bool automatic,
+  }) async {
+    final job = books[book]?[index];
+    if (job == null ||
+        job['status'] != 'waiting' ||
+        job['engine'] == 'kokoro_offline') {
+      return;
+    }
+    final existingId = job['id'];
+    if (existingId is String && existingId.isNotEmpty) {
+      _transition(job, book, index, status: 'queued', automatic: automatic);
+      await save();
+      return;
+    }
+    Map<String, dynamic> payload;
+    try {
+      final hadText = job['title'] is String && job['text'] is String;
+      final chapter = hadText ? null : await _resolveChapter(book, index);
+      payload = prepareSubmissionPayload(job, chapter: chapter);
+      if (!hadText) await save();
+    } on StateError catch (e) {
+      if (!identical(books[book]?[index], job)) return;
+      _clearFailure(job);
+      job['error'] = e.message;
+      job['failureStage'] = 'generation';
+      _transition(job, book, index, status: 'error', automatic: automatic);
+      await save();
+      return;
+    } catch (_) {
+      // Chapter text not yet loaded; leave in waiting to retry on next cycle.
+      return;
+    }
+
+    if (!identical(books[book]?[index], job) ||
+        job['status'] != 'waiting' ||
+        (job['id'] is String && (job['id'] as String).isNotEmpty)) {
+      return;
+    }
+
+    try {
+      if (!automatic) job['deliveryAttempts'] = 0;
+      _log(
+        'submission_requested',
+        book,
+        index,
+        '',
+        automatic: automatic,
+        attempt: (job['deliveryAttempts'] as int? ?? 0) + 1,
+      );
+      final response = await _postJob(payload);
+      if (!identical(books[book]?[index], job)) return;
+      final id = response['id'];
+      if (id is! String || id.isEmpty) {
+        throw const FormatException('Missing job ID in submission response');
+      }
+      final status = _statuses.contains(response['status'])
+          ? response['status'] as String
+          : 'queued';
+      final characters = (payload['text'] as String).runes.length;
+      job.addAll(recordingMetadata(response));
+      job['id'] = id;
+      job['characters'] = characters;
+      job.remove('text');
+      job.remove('title');
+      job.remove('submissionUncertain');
+      _clearFailure(job);
+      _transition(
+        job,
+        book,
+        index,
+        status: status,
+        delivery: status == 'ready' ? 'server_ready' : 'pending',
+        automatic: automatic,
+      );
+      _log('submission_accepted', book, index, id, automatic: automatic, http: 200);
+      await costTracker.recordSubmission(
+        jobId: id,
+        engine: (job['engine'] as String?) ??
+            (payload['engine'] as String?) ??
+            'google',
+        voice: (job['voice'] as String?) ?? (payload['voice'] as String?),
+        characters: characters,
+      );
+      await save();
+    } catch (error) {
+      if (!identical(books[book]?[index], job)) return;
+      if (error is TimeoutException || error is SocketException) {
+        // Uncertain outcome: the server may have accepted the request during a
+        // cold start. Keep waiting status and retry idempotently after a short delay.
+        job['submissionUncertain'] = true;
+        final previous = (job['deliveryAttempts'] as num?)?.toInt() ?? 0;
+        final attempt = previous >= maxAttempts ? maxAttempts : previous + 1;
+        job['deliveryAttempts'] = attempt;
+        job['deliveryNextAttempt'] = clock()
+            .add(const Duration(seconds: 5))
+            .millisecondsSinceEpoch;
+        _log(
+          'submission_uncertain',
+          book,
+          index,
+          '',
+          error: error,
+          automatic: automatic,
+          attempt: attempt,
+        );
+        await save();
+        return;
+      }
+      await _failure(
+        job,
+        book,
+        index,
+        error,
+        automatic: automatic,
+        stage: 'submission',
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> _postJob(Map<String, dynamic> payload) async {
+    final client = HttpClient()..connectionTimeout = responseTimeout;
+    try {
+      final req = await client
+          .postUrl(_endpoint('/dogreader/jobs'))
+          .timeout(responseTimeout);
+      req.followRedirects = false;
+      req.headers.set('X-Dogreader-Token', token);
+      req.headers.contentType = ContentType.json;
+      req.write(jsonEncode(payload));
+      final response = await req.close().timeout(responseTimeout);
+      final body = await utf8.decoder.bind(response.timeout(idleTimeout)).join();
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw DeliveryHttpError(response.statusCode);
+      }
+      return jsonDecode(body) as Map<String, dynamic>;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<void> reconcile() {
+    if (_checking != null) {
+      _reconcileRequested = true;
+      return _checking!;
+    }
+    return _checking = _runReconcileLoop().whenComplete(() => _checking = null);
+  }
+
+  Future<void> _runReconcileLoop() async {
+    do {
+      _reconcileRequested = false;
+      try {
+        await _reconcile();
+      } catch (e) {
         _log('reconcile_failed', '', -1, '', error: e);
-      })
-      .whenComplete(() => _checking = null);
+      }
+    } while (_reconcileRequested && !_disposed);
+  }
 
   Future<void> _reconcile() async {
     await load();
     if (host.isEmpty || token.isEmpty || _disposed) return;
+    await submitWaitingJobs(automatic: true);
     for (final book in books.entries.toList()) {
-      for (final entry in book.value.entries.toList()) {
+      final indices = book.value.keys.toList()..sort();
+      for (final index in indices) {
         if (_disposed) return;
-        final job = entry.value;
+        final job = book.value[index];
+        if (job == null || job['engine'] == 'kokoro_offline') continue;
         final id = job['id'];
         if (id is! String || id.isEmpty || job['status'] == 'waiting') continue;
-        final key = '${book.key}:${entry.key}';
-        if (_downloads.containsKey(key)) continue;
-        final target = await audioFile(book.key, entry.key);
+        final key = '${book.key}:$index';
+        if (_downloads.containsKey(key) || _submissions.containsKey(key)) {
+          continue;
+        }
+        final target = await audioFile(book.key, index);
         await recoverNarrationFile(target);
         job['localAvailable'] =
             await target.exists() && await target.length() >= 1000;
@@ -354,7 +679,7 @@ class NarrationDelivery extends ChangeNotifier {
             job['status'] == 'ready' &&
             (job['delivery'] == null || job['delivery'] == 'downloaded')) {
           if (job['delivery'] != 'downloaded') {
-            _transition(job, book.key, entry.key, delivery: 'downloaded');
+            _transition(job, book.key, index, delivery: 'downloaded');
             await save();
           }
           continue;
@@ -366,13 +691,13 @@ class NarrationDelivery extends ChangeNotifier {
             _log(
               'status_requested',
               book.key,
-              entry.key,
+              index,
               id,
               attempt: (job['deliveryAttempts'] as int? ?? 0) + 1,
             );
             final result = await _status(id);
             // A manual fetch may have completed while the status request waited.
-            if (!identical(books[book.key]?[entry.key], job) ||
+            if (!identical(books[book.key]?[index], job) ||
                 _downloads.containsKey(key) ||
                 job['status'] == 'ready') {
               continue;
@@ -391,21 +716,21 @@ class NarrationDelivery extends ChangeNotifier {
               job['progress'] = completed;
             }
             job['error'] = result['error'];
-            _transition(job, book.key, entry.key, status: status as String);
-            _log('status_received', book.key, entry.key, id, http: 200);
+            _transition(job, book.key, index, status: status as String);
+            _log('status_received', book.key, index, id, http: 200);
             if (status != 'ready') {
-              await _notReady(job, book.key, entry.key, automatic: true);
+              await _notReady(job, book.key, index, automatic: true);
               continue;
             }
             _clearFailure(job);
-            _transition(job, book.key, entry.key, delivery: 'server_ready');
+            _transition(job, book.key, index, delivery: 'server_ready');
             await save();
           } catch (error) {
             if (error is! DeliveryHttpError || error.status != 404) {
               await _failure(
                 job,
                 book.key,
-                entry.key,
+                index,
                 error,
                 automatic: true,
                 stage: 'status',
@@ -413,12 +738,12 @@ class NarrationDelivery extends ChangeNotifier {
               continue;
             }
             // Retain a quiet GET-only fallback for legacy/missing status records.
-            _log('status_missing', book.key, entry.key, id, error: error);
+            _log('status_missing', book.key, index, id, error: error);
           }
         }
         try {
           // Known completed recordings never call the dispatching status endpoint.
-          await retryDownload(book.key, entry.key, automatic: true);
+          await retryDownload(book.key, index, automatic: true);
         } catch (_) {
           /* Download already persisted its bounded retry state. */
         }
@@ -454,6 +779,9 @@ class NarrationDelivery extends ChangeNotifier {
   bool deliveryInFlight(String book, int index) =>
       _downloads.containsKey('$book:$index');
 
+  bool submissionInFlight(String book, int index) =>
+      _submissions.containsKey('$book:$index');
+
   bool downloading(String book, int index) =>
       deliveryInFlight(book, index) &&
       books[book]?[index]?['delivery'] == 'downloading';
@@ -487,6 +815,132 @@ class NarrationDelivery extends ChangeNotifier {
         .whenComplete(() {
           _downloads.remove(key);
         });
+  }
+
+  static final _contentRangePattern = RegExp(r'^bytes (\d+)-(\d+)/(\d+)$');
+
+  static bool _isAllowedRedirect(Uri uri) =>
+      uri.scheme == 'https' ||
+      (uri.scheme == 'http' &&
+          (uri.host == '127.0.0.1' ||
+              uri.host == 'localhost' ||
+              uri.host == '::1'));
+
+  static ({int start, int end, int total})? _parseContentRange(
+    HttpHeaders headers,
+  ) {
+    final value = headers.value(HttpHeaders.contentRangeHeader);
+    if (value == null) return null;
+    final match = _contentRangePattern.firstMatch(value.trim());
+    if (match == null) return null;
+    final start = int.tryParse(match.group(1)!);
+    final end = int.tryParse(match.group(2)!);
+    final total = int.tryParse(match.group(3)!);
+    if (start == null ||
+        end == null ||
+        total == null ||
+        start < 0 ||
+        end < start ||
+        end >= total) {
+      return null;
+    }
+    return (start: start, end: end, total: total);
+  }
+
+  Stream<List<int>> _streamAudioBytes({
+    required HttpClient client,
+    required HttpClientResponse initialResponse,
+    required Uri downloadUri,
+    required bool sendAuth,
+    required int totalBytes,
+    required bool rangeCapable,
+    String? expectedSha256,
+  }) async* {
+    _SingleDigestSink? digestSink;
+    ByteConversionSink? hashSink;
+    final normalizedSha = expectedSha256?.trim().toLowerCase() ?? '';
+    if (RegExp(r'^[0-9a-f]{64}$').hasMatch(normalizedSha)) {
+      digestSink = _SingleDigestSink();
+      hashSink = sha256.startChunkedConversion(digestSink);
+    }
+
+    var received = 0;
+    var currentResponse = initialResponse;
+    var resumeRetries = 0;
+    try {
+      while (true) {
+        var sliceBytes = 0;
+        try {
+          await for (final chunk in currentResponse.timeout(idleTimeout)) {
+            if (chunk.isEmpty) continue;
+            sliceBytes += chunk.length;
+            received += chunk.length;
+            hashSink?.add(chunk);
+            yield chunk;
+          }
+          if (sliceBytes > 0) {
+            resumeRetries = 0;
+          }
+        } catch (error) {
+          if (!rangeCapable ||
+              received <= 0 ||
+              received >= totalBytes ||
+              sliceBytes <= 0 ||
+              resumeRetries >= 3) {
+            rethrow;
+          }
+          resumeRetries++;
+        }
+
+        if (received >= totalBytes) {
+          break;
+        }
+        if (!rangeCapable) {
+          throw const FormatException('Incomplete audio response');
+        }
+
+        final req = await client
+            .getUrl(downloadUri)
+            .timeout(responseTimeout);
+        req.followRedirects = false;
+        if (sendAuth) {
+          req.headers.set('X-Dogreader-Token', token);
+        }
+        req.headers.set(HttpHeaders.rangeHeader, 'bytes=$received-');
+        final nextResponse = await req.close().timeout(responseTimeout);
+        if (nextResponse.statusCode != 206) {
+          await nextResponse.drain<void>().catchError((Object _) {});
+          throw DeliveryHttpError(nextResponse.statusCode);
+        }
+        final range = _parseContentRange(nextResponse.headers);
+        if (range == null ||
+            range.start != received ||
+            range.total != totalBytes ||
+            (nextResponse.contentLength >= 0 &&
+                nextResponse.contentLength != range.end - range.start + 1)) {
+          await nextResponse.drain<void>().catchError((Object _) {});
+          throw const FormatException('Invalid audio range response');
+        }
+        currentResponse = nextResponse;
+      }
+
+      if (received != totalBytes) {
+        throw const FormatException('Incomplete audio transfer');
+      }
+      if (hashSink != null && digestSink != null) {
+        hashSink.close();
+        final actualDigest = digestSink.value;
+        if (actualDigest == null || actualDigest.toString() != normalizedSha) {
+          throw const FormatException('Audio SHA-256 verification failed');
+        }
+      }
+    } finally {
+      if (hashSink != null) {
+        try {
+          hashSink.close();
+        } catch (_) {}
+      }
+    }
   }
 
   Future<void> _download(
@@ -528,12 +982,11 @@ class NarrationDelivery extends ChangeNotifier {
         automatic: automatic,
         attempt: (job['deliveryAttempts'] as int? ?? 0) + 1,
       );
-      final req = await client
-          .getUrl(_endpoint('/dogreader/audio/$id'))
-          .timeout(responseTimeout);
+      final initialUri = _endpoint('/dogreader/audio/$id');
+      final req = await client.getUrl(initialUri).timeout(responseTimeout);
       req.followRedirects = false;
       req.headers.set('X-Dogreader-Token', token);
-      final response = await req.close().timeout(responseTimeout);
+      var response = await req.close().timeout(responseTimeout);
       if (response.statusCode == 404 && job['status'] != 'ready') {
         _log(
           'download_not_ready',
@@ -546,14 +999,72 @@ class NarrationDelivery extends ChangeNotifier {
         await _notReady(job, book, index, automatic: automatic);
         return;
       }
-      if (response.statusCode != 200) {
+
+      var downloadUri = initialUri;
+      var sendAuth = true;
+      var expectedSha256 = response.headers.value('x-dogreader-audio-sha256');
+      var hintedTotal = int.tryParse(
+        response.headers.value('x-dogreader-audio-bytes') ?? '',
+      );
+
+      if (const {301, 302, 303, 307, 308}.contains(response.statusCode)) {
+        final location = response.headers.value(HttpHeaders.locationHeader);
+        await response.drain<void>().catchError((Object _) {});
+        if (location == null || location.isEmpty) {
+          throw const FormatException('Missing audio redirect location');
+        }
+        downloadUri = initialUri.resolve(location);
+        if (!_isAllowedRedirect(downloadUri)) {
+          throw const FormatException('Disallowed audio redirect scheme');
+        }
+        sendAuth = false;
+        final signedReq = await client
+            .getUrl(downloadUri)
+            .timeout(responseTimeout);
+        signedReq.followRedirects = false;
+        response = await signedReq.close().timeout(responseTimeout);
+        expectedSha256 ??= response.headers.value('x-dogreader-audio-sha256');
+        hintedTotal ??= int.tryParse(
+          response.headers.value('x-dogreader-audio-bytes') ?? '',
+        );
+      }
+
+      if (response.statusCode != 200 && response.statusCode != 206) {
         throw DeliveryHttpError(response.statusCode);
       }
-      if (response.contentLength < 1000 ||
-          (response.headers.contentType != null &&
-              response.headers.contentType!.mimeType != 'audio/mpeg')) {
+
+      final mimeType = response.headers.contentType?.mimeType;
+      if (mimeType != null &&
+          mimeType != 'audio/mpeg' &&
+          mimeType != 'application/octet-stream') {
         throw const FormatException('Incomplete audio response');
       }
+
+      final int totalBytes;
+      if (response.statusCode == 206) {
+        final range = _parseContentRange(response.headers);
+        if (range == null ||
+            range.start != 0 ||
+            (response.contentLength >= 0 &&
+                response.contentLength != range.end - range.start + 1)) {
+          throw const FormatException('Incomplete audio response');
+        }
+        totalBytes = range.total;
+      } else {
+        totalBytes = response.contentLength >= 0
+            ? response.contentLength
+            : (hintedTotal ?? -1);
+      }
+
+      if (totalBytes < 1000) {
+        throw const FormatException('Incomplete audio response');
+      }
+
+      final rangeCapable =
+          response.statusCode == 206 ||
+          response.headers.value(HttpHeaders.acceptRangesHeader) == 'bytes' ||
+          !sendAuth;
+
       if (!identical(books[book]?[index], job)) {
         throw StateError('Recording changed');
       }
@@ -582,12 +1093,20 @@ class NarrationDelivery extends ChangeNotifier {
         index,
         id,
         automatic: automatic,
-        http: 200,
+        http: response.statusCode,
       );
       await replaceNarrationFile(
         target,
-        response.timeout(idleTimeout),
-        contentLength: response.contentLength,
+        _streamAudioBytes(
+          client: client,
+          initialResponse: response,
+          downloadUri: downloadUri,
+          sendAuth: sendAuth,
+          totalBytes: totalBytes,
+          rangeCapable: rangeCapable,
+          expectedSha256: expectedSha256,
+        ),
+        contentLength: totalBytes,
         metadataFile: File(
           '${(await documentsDirectory()).path}/narration_state.json',
         ),
@@ -646,4 +1165,12 @@ class NarrationDelivery extends ChangeNotifier {
     _timer?.cancel();
     super.dispose();
   }
+}
+
+class _SingleDigestSink implements Sink<Digest> {
+  Digest? value;
+  @override
+  void add(Digest data) => value = data;
+  @override
+  void close() {}
 }

@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 
-const narrationEngines = {'google': 'Google Chirp', 'kokoro': 'Kokoro'};
+const narrationEngines = {
+  'google': 'Google Chirp',
+  'kokoro': 'Kokoro',
+  'kokoro_offline': 'Kokoro (Offline)',
+};
 const narrationVoices = <String, Map<String, String>>{
   'google': {
     'en-US-Chirp3-HD-Achernar': 'Achernar',
@@ -15,12 +19,34 @@ const narrationVoices = <String, Map<String, String>>{
     'bm_daniel': 'Daniel',
     'bm_lewis': 'Lewis',
   },
+  'kokoro_offline': {
+    'af_heart': 'Heart (US Female)',
+    'am_michael': 'Michael (US Male)',
+    'bf_emma': 'Emma (UK Female)',
+  },
 };
+
+const offlineVoiceSids = <String, int>{
+  'af_heart': 3,
+  'am_michael': 16,
+  'bf_emma': 21,
+};
+
+int offlineSidForVoice(String? voice) => offlineVoiceSids[voice] ?? 3;
+
+String offlineVoiceIdForSid(int? sid) {
+  for (final entry in offlineVoiceSids.entries) {
+    if (entry.value == sid) return entry.key;
+  }
+  return 'af_heart';
+}
 
 class NarrationPreference {
   final String engine;
   final String voice;
   const NarrationPreference(this.engine, this.voice);
+
+  bool get isOffline => engine == 'kokoro_offline';
 
   factory NarrationPreference.fromJson(Map<String, dynamic> data) {
     final engine = narrationEngines.containsKey(data['engine'])
@@ -43,7 +69,10 @@ Map<String, dynamic> recordingMetadata(Map<String, dynamic> response) => {
 };
 
 String recordingLabel(Map<String, dynamic>? job) {
-  if (job?['id'] == null && job?['engine'] == null && job?['voice'] == null) {
+  if (job?['id'] == null &&
+      job?['offlineJobId'] == null &&
+      job?['engine'] == null &&
+      job?['voice'] == null) {
     return 'Recording • engine and voice not recorded';
   }
   final engine = job?['engine'] as String? ?? 'google';
@@ -90,11 +119,35 @@ class NarrationControls extends StatelessWidget {
             if (voice != null) { onChanged(NarrationPreference(preference.engine, voice)); }
           },
         ),
-        TextButton.icon(
-          onPressed: onPreview,
-          icon: Icon(previewing ? Icons.stop : Icons.volume_up),
-          label: Text(previewing ? 'Stop preview' : 'Preview voice'),
-        ),
+        if (preference.isOffline)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.offline_bolt_outlined,
+                  size: 18,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Runs on this device (Kokoro FP32 • Misaki English). No cloud account or billing required.',
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          )
+        else
+          TextButton.icon(
+            onPressed: onPreview,
+            icon: Icon(previewing ? Icons.stop : Icons.volume_up),
+            label: Text(previewing ? 'Stop preview' : 'Preview voice'),
+          ),
       ],
     ),
   );

@@ -34,11 +34,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(state.currentOffset, state.starts[state.currentPage]);
     expect(saves.last, state.currentOffset);
-    // An app-bar callback from the preceding build cannot seek during reflow.
-    final listen = tester.widget<IconButton>(find.byWidgetPredicate(
-      (widget) => widget is IconButton && widget.tooltip == 'Listen from this page'));
+    // A listen action cannot seek while the current page is reflowing.
     state.calculatePages(200.0, 200.0);
-    listen.onPressed!();
+    state.listenFromCurrentPage();
     await tester.pumpAndSettle();
     expect(find.byType(ChapterNarrationScreen), findsNothing);
     // A pending pagination request is invalidated by the next chapter.

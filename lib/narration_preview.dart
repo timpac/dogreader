@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 
+import 'narration_cost.dart';
 import 'narration_options.dart';
 
 Future<Map<String, dynamic>> narrationRequest(
@@ -11,23 +12,25 @@ Future<Map<String, dynamic>> narrationRequest(
   String method,
   String path, [
   Map<String, dynamic>? payload,
+  Duration connectionTimeout = const Duration(seconds: 15),
+  Duration responseTimeout = const Duration(seconds: 30),
 ]) async {
-  final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
+  final client = HttpClient()..connectionTimeout = connectionTimeout;
   try {
     final req = await client
         .openUrl(
           method,
           Uri.parse('${host.replaceAll(RegExp(r'/$'), '')}$path'),
         )
-        .timeout(const Duration(seconds: 8));
+        .timeout(connectionTimeout);
     req.headers.set('X-Dogreader-Token', token);
     if (payload != null) {
       req.headers.contentType = ContentType.json;
       req.write(jsonEncode(payload));
     }
-    final response = await req.close().timeout(const Duration(seconds: 15));
+    final response = await req.close().timeout(responseTimeout);
     final result = jsonDecode(
-      await utf8.decoder.bind(response).join(),
+      await utf8.decoder.bind(response.timeout(responseTimeout)).join(),
     ) as Map<String, dynamic>;
     if (response.statusCode >= 400) {
       throw Exception(result['error'] ?? 'HTTP ${response.statusCode}');
@@ -94,14 +97,35 @@ Future<File?> generateNarrationPreview({
       'Server returned a different engine or voice. Update the backend.',
     );
   }
-  final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
   try {
-    final req = await client.getUrl(
-      Uri.parse('${host.replaceAll(RegExp(r'/$'), '')}/dogreader/audio/$id'),
+    await narrationCostTracker.recordSubmission(
+      jobId: id,
+      engine: preference.engine,
+      voice: preference.voice,
+      characters: text.runes.length,
     );
+  } catch (_) {}
+  final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
+  try {
+    final initialUri = Uri.parse(
+      '${host.replaceAll(RegExp(r'/$'), '')}/dogreader/audio/$id',
+    );
+    final req = await client.getUrl(initialUri);
+    req.followRedirects = false;
     req.headers.set('X-Dogreader-Token', token);
-    final audio = await req.close().timeout(const Duration(seconds: 20));
-    if (audio.statusCode != 200) {
+    var audio = await req.close().timeout(const Duration(seconds: 25));
+    if (const {301, 302, 303, 307, 308}.contains(audio.statusCode)) {
+      final location = audio.headers.value(HttpHeaders.locationHeader);
+      await audio.drain<void>().catchError((Object _) {});
+      if (location == null || location.isEmpty) {
+        throw Exception('Preview redirect missing location');
+      }
+      final redirectUri = initialUri.resolve(location);
+      final signedReq = await client.getUrl(redirectUri);
+      signedReq.followRedirects = false;
+      audio = await signedReq.close().timeout(const Duration(seconds: 25));
+    }
+    if (audio.statusCode != 200 && audio.statusCode != 206) {
       throw Exception('Preview download failed (${audio.statusCode})');
     }
     final root = await getTemporaryDirectory();

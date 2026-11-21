@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_commit:
-        description: Reviewed full source SHA reachable from the default branch
+        description: Reviewed full source SHA reachable from the selected authorized branch
         required: true
         type: string
       build_number:
@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   apk:
-    if: github.ref == 'refs/heads/dogreader-oct22-update' && github.actor == github.repository_owner
+    if: (github.ref == 'refs/heads/dogreader-oct22-update' || github.ref == 'refs/heads/fix/156-progress-persistence' || github.ref == 'refs/heads/fix/160-epub-narration' || github.ref == 'refs/heads/build/161-chapter-narration' || github.ref == 'refs/heads/build/162-narration-queue-reliability' || github.ref == 'refs/heads/build/163-chapter-panel-refinement' || github.ref == 'refs/heads/build/163-tts-cost-tracker' || github.ref == 'refs/heads/build/164-light-mode-cost-tracker' || github.ref == 'refs/heads/build/165-rss-offline-kokoro') && github.actor == github.repository_owner
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -40,10 +40,28 @@ jobs:
           script: |
             const {owner, repo} = context.repo;
             const metadata = (await github.rest.repos.get({owner, repo})).data;
-            if (metadata.default_branch !== 'dogreader-oct22-update' || context.ref !== 'refs/heads/dogreader-oct22-update') throw new Error('Canonical branch mismatch');
+            const allowedRefs = new Set([
+              'refs/heads/dogreader-oct22-update',
+              'refs/heads/fix/156-progress-persistence',
+              'refs/heads/fix/160-epub-narration',
+              'refs/heads/build/161-chapter-narration',
+              'refs/heads/build/162-narration-queue-reliability',
+              'refs/heads/build/163-chapter-panel-refinement',
+              'refs/heads/build/163-tts-cost-tracker',
+              'refs/heads/build/164-light-mode-cost-tracker',
+              'refs/heads/build/165-rss-offline-kokoro'
+            ]);
+            if (metadata.default_branch !== 'dogreader-oct22-update' || !allowedRefs.has(context.ref)) throw new Error('Authorized branch mismatch');
             if (Number(process.env.GITHUB_RUN_ATTEMPT) !== 1) throw new Error('Inspect retained assets before a new explicitly authorized dispatch; do not rerun');
             if (!/^[0-9a-f]{40}$/.test(process.env.RELEASE_COMMIT)) throw new Error('Full lowercase source SHA required');
             const number = process.env.BUILD_NUMBER;
+            if (context.ref === 'refs/heads/fix/160-epub-narration' && number !== '160') throw new Error('This branch is authorized for build 160 only');
+            if (context.ref === 'refs/heads/build/161-chapter-narration' && number !== '161') throw new Error('This branch is authorized for build 161 only');
+            if (context.ref === 'refs/heads/build/162-narration-queue-reliability' && number !== '162') throw new Error('This branch is authorized for build 162 only');
+            if (context.ref === 'refs/heads/build/163-chapter-panel-refinement' && number !== '163') throw new Error('This branch is authorized for build 163 only');
+            if (context.ref === 'refs/heads/build/163-tts-cost-tracker' && number !== '163') throw new Error('This branch is authorized for build 163 only');
+            if (context.ref === 'refs/heads/build/164-light-mode-cost-tracker' && number !== '164') throw new Error('This branch is authorized for build 164 only');
+            if (context.ref === 'refs/heads/build/165-rss-offline-kokoro' && number !== '165') throw new Error('This branch is authorized for build 165 only');
             if (!/^[1-9][0-9]*$/.test(number) || Number(number) <= 135 || Number(number) > 2100000000) throw new Error('Invalid new Android versionCode');
             const releases = await github.paginate(github.rest.repos.listReleases, {owner, repo, per_page: 100});
             const tags = await github.paginate(github.rest.repos.listTags, {owner, repo, per_page: 100});
@@ -70,7 +88,33 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
           git merge-base --is-ancestor cdf4227dc6a966b20e24f61179ac953b22689024 HEAD
-          git merge-base --is-ancestor HEAD origin/dogreader-oct22-update
+          if [ "$GITHUB_REF" = refs/heads/build/165-rss-offline-kokoro ]; then
+            git merge-base --is-ancestor 3b854fdbb5bab143de05db012d7e4f6cdd5c0253 HEAD
+            git merge-base --is-ancestor HEAD origin/build/165-rss-offline-kokoro
+          elif [ "$GITHUB_REF" = refs/heads/build/164-light-mode-cost-tracker ]; then
+            git merge-base --is-ancestor d364a959d6d82a5698393bb0d4e23431945c4491 HEAD
+            git merge-base --is-ancestor HEAD origin/build/164-light-mode-cost-tracker
+          elif [ "$GITHUB_REF" = refs/heads/build/163-chapter-panel-refinement ]; then
+            git merge-base --is-ancestor 28d9287b01ac84b2d3be076ce24b56ccbe594fac HEAD
+            git merge-base --is-ancestor HEAD origin/build/163-chapter-panel-refinement
+          elif [ "$GITHUB_REF" = refs/heads/build/163-tts-cost-tracker ]; then
+            git merge-base --is-ancestor 28d9287b01ac84b2d3be076ce24b56ccbe594fac HEAD
+            git merge-base --is-ancestor HEAD origin/build/163-tts-cost-tracker
+          elif [ "$GITHUB_REF" = refs/heads/build/162-narration-queue-reliability ]; then
+            git merge-base --is-ancestor fe31cb7a2bec8213a62a5bd62751936e645167d6 HEAD
+            git merge-base --is-ancestor HEAD origin/build/162-narration-queue-reliability
+          elif [ "$GITHUB_REF" = refs/heads/build/161-chapter-narration ]; then
+            git merge-base --is-ancestor d6d48b3e5d079593e505003e5d312503592eb0cd HEAD
+            git merge-base --is-ancestor HEAD origin/build/161-chapter-narration
+          elif [ "$GITHUB_REF" = refs/heads/fix/160-epub-narration ]; then
+            git merge-base --is-ancestor 145d29bb4852d390308d9e2c20c0dac49b6aaecd HEAD
+            git merge-base --is-ancestor HEAD origin/fix/160-epub-narration
+          elif [ "$GITHUB_REF" = refs/heads/fix/156-progress-persistence ]; then
+            git merge-base --is-ancestor 47bd9a985a1bccadef07f6f2d961433a4898949c HEAD
+            git merge-base --is-ancestor HEAD origin/fix/156-progress-persistence
+          else
+            git merge-base --is-ancestor HEAD origin/dogreader-oct22-update
+          fi
       - name: Free unused runner disk space
         run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/powershell
       - uses: actions/setup-java@v4
@@ -97,7 +141,10 @@ jobs:
       - name: Analyze
         run: flutter analyze --no-pub > /tmp/analysis.log 2>&1 || { tail -80 /tmp/analysis.log; exit 1; }
       - name: Run full Flutter regression suite
-        run: flutter test --no-pub --reporter expanded > /tmp/tests.log 2>&1 || { tail -100 /tmp/tests.log; exit 1; }
+        timeout-minutes: 10
+        run: |
+          set -o pipefail
+          flutter test --no-pub --reporter expanded --timeout 90s 2>&1 | tee /tmp/tests.log
       - name: Build the requested original-app update once
         env:
           ORG_GRADLE_PROJECT_dogreaderOriginalUpdate: 'true'
@@ -129,6 +176,13 @@ jobs:
             const crypto = require('crypto');
             const {owner, repo} = context.repo;
             const number = process.env.BUILD_NUMBER;
+            if (context.ref === 'refs/heads/fix/160-epub-narration' && number !== '160') throw new Error('This branch is authorized for build 160 only');
+            if (context.ref === 'refs/heads/build/161-chapter-narration' && number !== '161') throw new Error('This branch is authorized for build 161 only');
+            if (context.ref === 'refs/heads/build/162-narration-queue-reliability' && number !== '162') throw new Error('This branch is authorized for build 162 only');
+            if (context.ref === 'refs/heads/build/163-chapter-panel-refinement' && number !== '163') throw new Error('This branch is authorized for build 163 only');
+            if (context.ref === 'refs/heads/build/163-tts-cost-tracker' && number !== '163') throw new Error('This branch is authorized for build 163 only');
+            if (context.ref === 'refs/heads/build/164-light-mode-cost-tracker' && number !== '164') throw new Error('This branch is authorized for build 164 only');
+            if (context.ref === 'refs/heads/build/165-rss-offline-kokoro' && number !== '165') throw new Error('This branch is authorized for build 165 only');
             const source = process.env.RELEASE_COMMIT;
             const tag = `v${number}`;
             const name = `Dogreader-${number}.apk`;
@@ -143,7 +197,18 @@ jobs:
             const apk = fs.readFileSync(`dist/${name}`);
             const sha256 = digest(apk);
             const run = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
-            const body = `Source: ${source}\nBuild: ${number}\nActions: ${run}\nAPK SHA-256: ${sha256}\nPackage: com.example.audiobook_app\nSigning certificate SHA-256: c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177\n\nInstall in place without uninstalling or clearing storage. Device validation is separate from CI checks.`;
+            const changelog = number === '165'
+              ? 'RSS Feeds & Writers + Offline Kokoro integration: integrates the RSS Feeds & Writers collapsible shelf at the top of the main library (with traditional orange RSS icon, unread count badge, feed and followed writer counts, OPML import/export, author following, natural-language priority rules, full-article extraction/RSS fallback, and narration entry points) and integrates the on-device Kokoro FP32 + Misaki English narration engine directly into the standard Narration Engine dropdown as Kokoro (Offline) with local voices (Heart, Michael, Emma), complete chapter WAV generation in an isolated foreground service, model readiness/download controls, zero cloud configuration or billing requirements, and full preservation of Build 164 library and narration data.\n\n'
+              : number === '164'
+              ? 'Light mode refinement & Google Cloud TTS monthly cost tracker: improves the chapter list in light mode with a rich porcelain-lavender gradient, faint outer card border, refined top highlight, elevated ambient shadow, and shaded circular headphone buttons with soft dimensionality while strictly preserving dark mode; adds monthly TTS character usage & credit tracking (1M free-tier allowance + $10/month credit) without double-counting retries, live pre-generation cost estimates, one-tap Kokoro switching, and TTS Usage & Budget card in settings.\n\n'
+              : number === '163'
+              ? 'Chapter panel refinement: tighter chapter rows (96dp), more pronounced separators with a soft engraved highlight, a restrained surface sheen and card shadow, and softer 24dp outer corners. No narration, queue, storage or playback changes.\n\n'
+              : number === '162'
+              ? 'Reliable background narration queue submission & chapter-list UI refinements: fixes the _checkingBooks lock leak, moves waiting-job submission into the app-wide NarrationDelivery service so submissions continue across screen navigation and app restarts, increases the submission timeout for Cloud Run cold starts with idempotent retry on uncertain outcomes, clarifies Waiting to submit vs Queued status labels, and refines the chapter list with double-height rows (112dp), bolder chapter separators, active accent indicators, and photorealistic headphone artwork.\n\n'
+              : number === '161'
+              ? 'Compact chapter rows with separate reading and headphone controls. Long-press to select chapters, or generate narration for the whole book. The generation review skips existing recordings and active jobs.\n\n'
+              : '';
+            const body = `${changelog}Source: ${source}\nBuild: ${number}\nActions: ${run}\nAPK SHA-256: ${sha256}\nPackage: com.example.audiobook_app\nSigning certificate SHA-256: c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177\n\nInstall in place without uninstalling or clearing storage. Device validation is separate from CI checks.`;
             const release = (await github.rest.repos.createRelease({
               owner, repo, tag_name: tag, target_commitish: source,
               name: `Dogreader ${number}`, body, draft: true, make_latest: 'false'
@@ -161,7 +226,7 @@ jobs:
             let verified = (await github.rest.repos.getRelease({owner, repo, release_id: release.id})).data;
             if (verified.tag_name !== tag || verified.target_commitish !== source || !verified.draft) throw new Error('Release identity changed');
             if (process.env.PUBLISH === 'true') {
-              verified = (await github.rest.repos.updateRelease({owner, repo, release_id: release.id, draft: false, make_latest: 'true'})).data;
+              verified = (await github.rest.repos.updateRelease({owner, repo, release_id: release.id, tag_name: tag, target_commitish: source, draft: false, make_latest: 'true'})).data;
               verified = (await github.rest.repos.getRelease({owner, repo, release_id: release.id})).data;
               if (verified.draft) throw new Error('Release not published');
               const ref = (await github.rest.git.getRef({owner, repo, ref: `tags/${tag}`})).data;

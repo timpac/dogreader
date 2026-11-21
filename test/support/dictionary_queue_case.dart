@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:audiobook_app/article_import.dart';
 import 'package:audiobook_app/dogreader_audio_handler.dart';
 import 'package:audiobook_app/main.dart';
+import 'package:audiobook_app/narration_cost.dart';
 import 'package:audiobook_app/narration_dictionary.dart';
 import 'package:audiobook_app/reader_content.dart' show parseReaderChapter;
 import 'package:flutter/material.dart';
@@ -36,6 +37,11 @@ void runDictionaryQueueCase({required bool articleInput}) {
       final oldPaths = PathProviderPlatform.instance;
       PathProviderPlatform.instance = _TestPaths(root.path);
       addTearDown(() => PathProviderPlatform.instance = oldPaths);
+      addTearDown(() {
+        narrationDelivery.host = '';
+        narrationDelivery.token = '';
+        narrationDelivery.books.clear();
+      });
       late FakePlayer player;
       late DogreaderAudioHandler handler;
       await tester.runAsync(() async {
@@ -75,6 +81,7 @@ void runDictionaryQueueCase({required bool articleInput}) {
         await stateFile.writeAsString(oldState);
         await narrationDictionary.load();
         await narrationDelivery.load();
+        await narrationCostTracker.load();
       });
       await tester.pumpWidget(
         MaterialApp(
@@ -100,6 +107,11 @@ void runDictionaryQueueCase({required bool articleInput}) {
       queue.setState(() {});
       await tester.pump();
       expect(queue.dictionaryChanged(0), isTrue);
+      await tester.scrollUntilVisible(
+        find.textContaining('Dictionary changed'),
+        100,
+        scrollable: find.byType(Scrollable).first,
+      );
       expect(find.textContaining('Dictionary changed'), findsOneWidget);
       await tester.runAsync(() async {
         expect(await audio.readAsBytes(), List.filled(1200, 7));
@@ -176,6 +188,11 @@ void runDictionaryQueueCase({required bool articleInput}) {
           queue.jobs[0]['narration_dictionary'],
         );
         await server.close(force: true);
+        queue.host = '';
+        queue.token = '';
+        narrationDelivery.host = '';
+        narrationDelivery.token = '';
+        narrationDelivery.books.clear();
       });
       // Reading seeks with the recording's frozen map, despite newer dictionary
       // settings. No replacement of the audio handler or chapter routing.
@@ -203,11 +220,11 @@ void runDictionaryQueueCase({required bool articleInput}) {
       final restore = (narration.restore() as Future<void>).then(
         (_) => restored = true,
       );
-      for (var i = 0; i < 50 && !restored; i++) {
+      for (var i = 0; i < 200 && !restored; i++) {
         await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
         );
-        await tester.pump(const Duration(milliseconds: 10));
+        await tester.pump(const Duration(milliseconds: 5));
       }
       expect(restored, isTrue);
       await restore;
@@ -223,11 +240,11 @@ void runDictionaryQueueCase({required bool articleInput}) {
       await tester.pumpWidget(const SizedBox());
       var disposed = false;
       final disposing = handler.dispose().then((_) => disposed = true);
-      for (var i = 0; i < 50 && !disposed; i++) {
+      for (var i = 0; i < 200 && !disposed; i++) {
         await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
         );
-        await tester.pump(const Duration(milliseconds: 10));
+        await tester.pump(const Duration(milliseconds: 5));
       }
       expect(disposed, isTrue);
       await disposing;

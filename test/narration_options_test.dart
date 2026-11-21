@@ -47,5 +47,48 @@ void main() {
     expect(preference.voice, 'bm_lewis');
     await tester.tap(find.text('Preview voice'));
     expect(previews, 1);
+
+    // Switch from cloud Kokoro to Kokoro (Offline) via the standard engine dropdown.
+    await tester.tap(find.text('Kokoro'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Kokoro (Offline)').last);
+    await tester.pumpAndSettle();
+    expect(preference.engine, 'kokoro_offline');
+    expect(preference.isOffline, isTrue);
+    expect(preference.voice, 'af_heart');
+    expect(
+      find.textContaining('Runs on this device (Kokoro FP32 • Misaki English)'),
+      findsOneWidget,
+    );
+    expect(find.text('Preview voice'), findsNothing);
+
+    // Open the Narrator dropdown and verify all local voices are listed.
+    await tester.tap(find.text('Heart (US Female)'));
+    await tester.pumpAndSettle();
+    for (final voice in [
+      'Heart (US Female)',
+      'Michael (US Male)',
+      'Emma (UK Female)',
+    ]) {
+      expect(find.text(voice), findsWidgets);
+    }
+    await tester.tap(find.text('Emma (UK Female)').last);
+    await tester.pumpAndSettle();
+    expect(preference.voice, 'bf_emma');
+    expect(offlineSidForVoice(preference.voice), 21);
+    expect(
+      recordingLabel(preference.toJson()),
+      'Kokoro (Offline) • Emma (UK Female)',
+    );
+
+    // Switch back to Google Chirp cloud narration.
+    await tester.tap(find.text('Kokoro (Offline)'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Google Chirp').last);
+    await tester.pumpAndSettle();
+    expect(preference.engine, 'google');
+    expect(preference.isOffline, isFalse);
+    expect(preference.voice, 'en-US-Chirp3-HD-Achernar');
+    expect(find.text('Preview voice'), findsOneWidget);
   });
 }

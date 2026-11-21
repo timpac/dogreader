@@ -15,6 +15,30 @@ void main() {
     expect(chapter.text.substring(italic.start, italic.end), 'After');
   });
 
+  test('escaped EPUB manifest keys resolve stylesheet links and relative imports', () {
+    const html = '''
+      <link rel="stylesheet" href="../Styles/book%20style.css"/>
+      <p>Before</p><div class="gap"></div><p>After</p>
+      ''';
+    final chapter = parseReaderChapter('', html,
+        documentPath: 'OPS/Text/ch1.xhtml', styleSheets: {
+      'OPS/Styles/book%20style.css': '@import "Layout/scene%20breaks.css";',
+      'OPS/Styles/Layout/scene%20breaks.css': '.gap {margin-block: 1em;}',
+    });
+    expect(chapter.text, 'Before\n\n\nAfter');
+  });
+
+  test('ambiguous escaped stylesheet suffixes are ignored', () {
+    final chapter = parseReaderChapter('', '''
+      <link rel="stylesheet" href="Styles/book%20style.css"/>
+      <p>Before</p><div class="gap"></div><p>After</p>
+      ''', styleSheets: {
+      'A/Styles/book%20style.css': '.gap {height: 1em;}',
+      'B/Styles/book%20style.css': '.gap {height: 2em;}',
+    });
+    expect(chapter.text, 'Before\n　After');
+  });
+
   test('inline, semantic and hr scenes are coalesced without invented ornaments', () {
     final chapter = parseReaderChapter('', '''
       <div class="spacer"></div><p>One</p><hr/><div style="height:.8em"></div>
