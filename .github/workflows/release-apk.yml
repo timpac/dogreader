@@ -136,8 +136,6 @@ jobs:
           chmod 600 "$HOME/.android/debug.keystore"
           keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey > /tmp/certificate.txt
           grep -Fqi 'C5:CC:08:D9:75:7C:0E:92:89:3A:71:62:04:A2:6F:EB:61:57:F5:35:0A:00:DB:B0:B7:96:20:49:D6:D9:D1:77' /tmp/certificate.txt
-      - name: Prepare hash-pinned offline Kokoro English frontend and ORT headers
-        run: python3 tool/prepare_frontend.py
       - name: Resolve locked dependencies
         run: flutter pub get --enforce-lockfile > /tmp/dependencies.log 2>&1 || { tail -60 /tmp/dependencies.log; exit 1; }
       - name: Analyze
