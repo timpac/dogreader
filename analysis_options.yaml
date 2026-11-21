@@ -12,6 +12,7 @@ include: package:flutter_lints/flutter.yaml
 analyzer:
   exclude:
     - third_party/**
+    - lib/kokoro/third_party/**
     - build/**
     - android/**
     - ios/**

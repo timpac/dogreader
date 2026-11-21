@@ -1,0 +1,36 @@
+{
+  "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-int8-multi-lang-v1_0.tar.bz2",
+  "archiveBytes": 132353410,
+  "archiveSha256": "72c347230107ef8a31098ec4d468a605244beef5f1ed00db97efa13518800653",
+  "directory": "kokoro-int8-multi-lang-v1_0",
+  "files": {
+    "model.int8.onnx": {
+      "bytes": 114202993,
+      "sha256": "75635ea3b85a32d00094dcdd61a258aba87c160f7c264c304a7b3ae9d734195e"
+    },
+    "voices.bin": {
+      "bytes": 28200960,
+      "sha256": "1c5a5b983d3d50d8586d437a51f3faa2da7919ce76a013c081e65671a3447c29"
+    },
+    "tokens.txt": {
+      "bytes": 687,
+      "sha256": "6ebb6bb288f20f3ae8d004d3c2ca27697da27c037d75e81a60e2a6a663f95425"
+    },
+    "lexicon-us-en.txt": {
+      "bytes": 5956885,
+      "sha256": "7daaab53a181be9885b853a8582bf1838186317e5dadacbcef9c426d6fa0da14"
+    },
+    "lexicon-gb-en.txt": {
+      "bytes": 6366635,
+      "sha256": "c4cbb37316f62210dff52718a7afcaae24f50c032cc75ab47ae67b831d1049e7"
+    },
+    "LICENSE": {
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    "README.md": {
+      "bytes": 730,
+      "sha256": "87359cd32dfdff6dfeb16633b5a116aee3b9ac69dec3302378270a2cab9885b1"
+    }
+  }
+}

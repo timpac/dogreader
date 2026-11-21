@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:audio_service/audio_service.dart';
@@ -214,6 +215,29 @@ class _BookNarrationStatusState extends State<BookNarrationStatus> {
           );
           if (index != null && (await entry.stat()).size >= 1000) {
             found.add(index);
+          }
+        }
+      }
+      final stateFile = File('${root.path}/narration_state.json');
+      if (await stateFile.exists()) {
+        final state = jsonDecode(await stateFile.readAsString());
+        if (state is Map) {
+          final keyPrefix = '${widget.bookId}:';
+          for (final entry in state.entries) {
+            if (scan != _scan || !mounted) return;
+            final key = entry.key.toString();
+            if (!key.startsWith(keyPrefix) || entry.value is! Map) continue;
+            final index = int.tryParse(key.substring(keyPrefix.length));
+            final path = (entry.value as Map)['path'];
+            if (index != null &&
+                path is String &&
+                !path.endsWith('.part') &&
+                !path.endsWith('.bak')) {
+              final file = File(path);
+              if (await file.exists() && (await file.stat()).size >= 1000) {
+                found.add(index);
+              }
+            }
           }
         }
       }

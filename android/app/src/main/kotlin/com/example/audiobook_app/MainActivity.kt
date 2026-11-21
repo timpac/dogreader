@@ -8,6 +8,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : AudioServiceActivity() {
+    private val offline by lazy { OfflineBridge(this) }
     private var diagnostics: NativeMediaDiagnostics? = null
     private var diagnosticChannel: MethodChannel? = null
     private var shareChannel: MethodChannel? = null
@@ -16,6 +17,7 @@ class MainActivity : AudioServiceActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        offline.attach(flutterEngine)
         val observer = NativeMediaDiagnostics.get(applicationContext)
         diagnostics = observer
         diagnosticChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dogreader/media_diagnostics")
@@ -69,8 +71,24 @@ class MainActivity : AudioServiceActivity() {
 
     override fun onResume() {
         super.onResume()
+        offline.onResume()
         diagnostics?.event("activity_resumed")
         diagnostics?.observe(MediaControllerCompat.getMediaController(this))
+    }
+
+    override fun onPause() {
+        offline.onPause()
+        super.onPause()
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        offline.onRequestPermissionsResult(requestCode, permissions, grantResults)
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        offline.onActivityResult(requestCode, resultCode, data)
     }
 
     override fun onStop() {

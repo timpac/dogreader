@@ -62,11 +62,24 @@ class ArticleLibrary extends ChangeNotifier {
         job.status = 'Importing';
         notifyListeners();
         var article = articles
-            .where((a) => a.depth == null && a.sourceUrl == url)
+            .where(
+              (a) =>
+                  a.depth == null &&
+                  sameArticleUrl(Uri.parse(a.sourceUrl), Uri.parse(url)),
+            )
             .firstOrNull;
         if (article == null) {
           final fetched = await fetcher.fetch(url);
-          article = articles.where((a) => a.id == fetched.id).firstOrNull;
+          article = articles
+              .where(
+                (a) =>
+                    a.depth == null &&
+                    sameArticleUrl(
+                      Uri.parse(a.sourceUrl),
+                      Uri.parse(fetched.sourceUrl),
+                    ),
+              )
+              .firstOrNull;
           if (article == null) {
             await (await store).save(fetched);
             articles.add(fetched);

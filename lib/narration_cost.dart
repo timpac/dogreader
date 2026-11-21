@@ -259,6 +259,11 @@ class NarrationCostEstimate {
           '(${formatCharacterCount(coveredCharactersRemaining)} Google chars / '
           '${formatUsdAmount(creditUsdRemaining)} credit preserved)';
     }
+    if (selectedEngine == 'kokoro_offline') {
+      return 'Selected ($charsLabel): \$0.00 on-device with Kokoro (Offline) '
+          '(${formatCharacterCount(coveredCharactersRemaining)} Google chars / '
+          '${formatUsdAmount(creditUsdRemaining)} credit preserved)';
+    }
     if (selectionOutOfPocketUsd > 0 || allowanceExhausted) {
       return 'Selected ($charsLabel): exceeds 1M free tier + '
           '${formatUsdAmount(monthlyCreditLimitUsd)} credit by '
@@ -284,6 +289,10 @@ class NarrationCostEstimate {
     final chars = formatCharacterCount(selectionCharacters);
     if (selectedEngine == 'kokoro') {
       return 'Estimated TTS cost: \$0.00 ($chars chars with Kokoro • '
+          '${formatCharacterCount(coveredCharactersRemaining)} covered Google chars left this month)';
+    }
+    if (selectedEngine == 'kokoro_offline') {
+      return 'Estimated TTS cost: \$0.00 ($chars chars with Kokoro (Offline) on this device • '
           '${formatCharacterCount(coveredCharactersRemaining)} covered Google chars left this month)';
     }
     if (selectionOutOfPocketUsd > 0 || allowanceExhausted) {
@@ -711,6 +720,8 @@ class NarrationCostBanner extends StatelessWidget {
         final heading = warnSwitch
             ? (preference.engine == 'kokoro'
                   ? 'Google allowance used up — using Kokoro (\$0.00)'
+                  : preference.engine == 'kokoro_offline'
+                  ? 'Google allowance used up — using Kokoro (Offline) (\$0.00)'
                   : 'Google free tier + \$10 credit used up — switch to Kokoro')
             : warnLow
             ? 'Approaching Google monthly limit'

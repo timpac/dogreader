@@ -1,0 +1,11 @@
+cmake_minimum_required(VERSION 3.22)
+project(kokoro_g2p LANGUAGES CXX)
+# prepare_frontend.py supplies the official API-28 headers, not an ORT binary.
+add_library(kokoro_g2p SHARED g2p_bridge.cc)
+target_include_directories(kokoro_g2p PRIVATE ort_headers)
+target_compile_features(kokoro_g2p PRIVATE cxx_std_17)
+target_compile_options(kokoro_g2p PRIVATE -Wall -Wextra -Werror -fvisibility=hidden)
+target_link_libraries(kokoro_g2p PRIVATE dl)
+if(ANDROID)
+  target_link_options(kokoro_g2p PRIVATE "-Wl,-z,max-page-size=16384")
+endif()

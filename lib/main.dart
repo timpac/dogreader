@@ -9,8 +9,9 @@ import 'package:path_provider/path_provider.dart';
 
 import 'package:epubx/epubx.dart' hide Image;
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show LicenseEntryWithLineBreaks, LicenseRegistry;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show HapticFeedback;
+import 'package:flutter/services.dart' show HapticFeedback, rootBundle;
 import 'package:google_fonts/google_fonts.dart';
 import 'package:audio_service/audio_service.dart';
 
@@ -38,6 +39,14 @@ import 'article_import.dart';
 import 'article_library.dart';
 import 'article_screen.dart';
 import 'article_share.dart';
+import 'offline_narration.dart';
+import 'kokoro/service_runner.dart';
+import 'rss/rss_controller.dart';
+import 'rss/rss_screens.dart';
+import 'rss/rss_shelf.dart';
+
+@pragma('vm:entry-point')
+void generationMain() => unawaited(runGenerationService());
 
 late final DogreaderAudioHandler audioHandler;
 final narrationDelivery = NarrationDelivery(
@@ -46,8 +55,37 @@ final narrationDelivery = NarrationDelivery(
   diagnosticSink: (fields) => audioHandler.diagnostics?.record(MediaDiagnosticEvent.narrationDelivery, fields),
 );
 
+OfflineNarration offlineNarration = OfflineNarration(
+  beforeSelect: (book, index) async {
+    try {
+      await audioHandler.unloadChapter(book, index);
+    } catch (_) {}
+  },
+  isChapterPlaying: (book, index) {
+    try {
+      return audioHandler.isChapterPlaying(book, index);
+    } catch (_) {
+      return false;
+    }
+  },
+  onChapterStateChanged: (bookId, chapterIndex, jobState) async {
+    await narrationDelivery.load();
+    final bookJobs = narrationDelivery.books.putIfAbsent(bookId, () => {});
+    bookJobs[chapterIndex] = {...?bookJobs[chapterIndex], ...jobState};
+    await narrationDelivery.save();
+  },
+);
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  LicenseRegistry.addLicense(() async* {
+    try {
+      yield LicenseEntryWithLineBreaks(
+        ['Kokoro Offline / Misaki'],
+        '${await rootBundle.loadString('LICENSES.txt')}\n\n${await rootBundle.loadString('frontend-notices.txt')}',
+      );
+    } catch (_) {}
+  });
 
   final diagnostics = MediaDiagnostics(directory: () async {
     final root = await getApplicationSupportDirectory();
@@ -67,6 +105,7 @@ Future<void> main() async {
 
   audioHandler.observeLifecycle();
   await audioHandler.initializeAudioSession();
+  unawaited(offlineNarration.initialize().catchError((Object _) {}));
   unawaited(NativeMediaDiagnostics.start(diagnostics));
 
   final appearance = ThemePreferences();
@@ -165,6 +204,7 @@ class LibraryScreen extends StatefulWidget {
 
 class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserver {
   late final ArticleLibrary articles;
+  late final RssLibraryController rss;
   final List<String> _sharedUrls = [];
   bool _showingShare = false;
   int selectedTab = 0;
@@ -198,6 +238,28 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
     }
   }
 
+  void openRssHome({
+    RssArticleFilterMode? initialMode,
+    String? subscriptionId,
+    String? folderId,
+    String? authorId,
+  }) {
+    Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => RssHomeScreen(
+          controller: rss,
+          articleLibrary: articles,
+          onOpenArticle: openArticle,
+          initialMode: initialMode ?? RssArticleFilterMode.all,
+          initialSubscriptionId: subscriptionId,
+          initialFolderId: folderId,
+          initialAuthorId: authorId,
+        ),
+      ),
+    );
+  }
+
   void articleDetails(ImportedArticle article) {
     Navigator.push(context, MaterialPageRoute<void>(builder: (_) => ArticleDetailScreen(
       article: article, library: articles, openArticle: openArticle)));
@@ -206,6 +268,22 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
   void openBook(ImportedBook book, {bool articleText = false}) {
     final article = articles.articles.where((a) => a.id == book.id).firstOrNull;
     if (!articleText && article != null) { articleDetails(article); return; }
+    final rssArticle = rss.articleById(book.id);
+    if (!articleText && rssArticle != null) {
+      Navigator.push(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => RssArticleReadingScreen(
+            controller: rss,
+            articleLibrary: articles,
+            initialArticleId: rssArticle.id,
+            orderedArticleIds: [rssArticle.id],
+            onOpenArticle: openArticle,
+          ),
+        ),
+      );
+      return;
+    }
     setState(() {
       sortBooks();
     });
@@ -235,6 +313,11 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
   void openChapters(ImportedBook book) {
     final article = articles.articles.where((a) => a.id == book.id).firstOrNull;
     if (article != null) { articleDetails(article); return; }
+    final rssArticle = rss.articleById(book.id);
+    if (rssArticle != null) {
+      openArticle(rssArticle.toImportedArticle(), true);
+      return;
+    }
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -259,6 +342,9 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
     articles = ArticleLibrary(getApplicationDocumentsDirectory());
     articles.addListener(_articlesChanged);
     articles.load().catchError((Object _) {});
+    rss = RssLibraryController(getApplicationDocumentsDirectory());
+    rss.addListener(_articlesChanged);
+    rss.load().catchError((Object _) {});
     loadLibrary();
     ArticleShare.listen(_receiveArticleShare).catchError((Object _) {});
   }
@@ -277,6 +363,12 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
     final article = articles.articles.where((a) => a.id == bookId).firstOrNull;
     if (article != null) {
       final book = articleBook(article);
+      narrationDelivery.registerBookChapters(bookId, book.chapters);
+      return index == 0 ? book.chapters.first : null;
+    }
+    final rssArticle = rss.articleById(bookId);
+    if (rssArticle != null) {
+      final book = articleBook(rssArticle.toImportedArticle());
       narrationDelivery.registerBookChapters(bookId, book.chapters);
       return index == 0 ? book.chapters.first : null;
     }
@@ -303,9 +395,16 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
   void _articlesChanged() {
     if (!mounted) return;
     setState(() {
-      books.removeWhere((b) => b.id.startsWith('article_'));
+      books.removeWhere(
+        (b) => b.id.startsWith('article_') || b.id.startsWith('rss_article_'),
+      );
       for (final article in articles.articles) {
         final book = articleBook(article);
+        narrationDelivery.registerBookChapters(book.id, book.chapters);
+        books.add(book);
+      }
+      for (final rssArticle in rss.librarySavedArticles) {
+        final book = articleBook(rssArticle.toImportedArticle());
         narrationDelivery.registerBookChapters(book.id, book.chapters);
         books.add(book);
       }
@@ -343,9 +442,11 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
     progress.removeListener(_progressChanged);
     ArticleShare.stop();
     articles.removeListener(_articlesChanged);
+    rss.removeListener(_articlesChanged);
     WidgetsBinding.instance.removeObserver(this);
     narrationDelivery.setActive(false);
     articles.dispose();
+    rss.dispose();
     super.dispose();
   }
 
@@ -386,8 +487,13 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
         }
       }
       await articles.load();
+      await rss.load();
       for (final article in articles.articles) {
         final book = articleBook(article);
+        narrationDelivery.registerBookChapters(book.id, book.chapters);
+      }
+      for (final rssArticle in rss.librarySavedArticles) {
+        final book = articleBook(rssArticle.toImportedArticle());
         narrationDelivery.registerBookChapters(book.id, book.chapters);
       }
       if (!mounted) return;
@@ -395,6 +501,9 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
         books.clear();
         books.addAll(restored);
         books.addAll(articles.articles.map(articleBook));
+        books.addAll(
+          rss.librarySavedArticles.map((a) => articleBook(a.toImportedArticle())),
+        );
         sortBooks();
       });
       unawaited(narrationDelivery.reconcile());
@@ -783,7 +892,43 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
             color: Theme.of(context).colorScheme.onSurfaceVariant,
           ),
         ),
-        const SizedBox(height: 26),
+        const SizedBox(height: 20),
+        RssLibraryShelf(
+          controller: rss,
+          onOpenRssHome: openRssHome,
+          onOpenAddFeed: () => Navigator.push(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) => RssSubscriptionsAndOpmlScreen(controller: rss),
+            ),
+          ),
+          onOpenAuthors: () async {
+            final authorId = await Navigator.push<String>(
+              context,
+              MaterialPageRoute<String>(
+                builder: (_) => RssAuthorsScreen(controller: rss),
+              ),
+            );
+            if (authorId != null && mounted) {
+              openRssHome(
+                initialMode: RssArticleFilterMode.all,
+                authorId: authorId,
+              );
+            }
+          },
+          onOpenRules: () => Navigator.push(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) => RssRulesScreen(controller: rss),
+            ),
+          ),
+          onOpenOpml: () => Navigator.push(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) => RssSubscriptionsAndOpmlScreen(controller: rss),
+            ),
+          ),
+        ),
         if (books.isEmpty) _emptyLibrary(),
         for (final book in books)
           Card(
@@ -1812,13 +1957,61 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         }
       }
     } catch (_) {}
+    unawaited(offlineNarration.initialize().catchError((Object _) {}));
     final root = await getApplicationDocumentsDirectory();
+    Map<String, dynamic> stateData = const {};
+    try {
+      final stateFile = File('${root.path}/narration_state.json');
+      if (await stateFile.exists()) {
+        final decoded = jsonDecode(await stateFile.readAsString());
+        if (decoded is Map<String, dynamic>) stateData = decoded;
+      }
+    } catch (_) {}
     for (var index = 0; index < widget.book.chapters.length; index++) {
       final file = File('${root.path}/narration/${widget.book.id}_$index.mp3');
       if (!narrationDelivery.deliveryInFlight(widget.book.id, index)) {
         await recoverNarrationFile(file);
       }
-      final localAvailable = await file.exists() && await file.length() >= 1000;
+      final stateEntry = stateData['${widget.book.id}:$index'];
+      var activeFile = file;
+      if (stateEntry is Map && stateEntry['path'] is String) {
+        final candidate = File(stateEntry['path'] as String);
+        if (!candidate.path.endsWith('.part') &&
+            !candidate.path.endsWith('.bak') &&
+            await candidate.exists() &&
+            await candidate.length() >= 1000) {
+          activeFile = candidate;
+        }
+      }
+      final localAvailable =
+          identical(activeFile, file)
+          ? (await file.exists() && await file.length() >= 1000)
+          : true;
+      if (localAvailable &&
+          stateEntry is Map &&
+          stateEntry['engine'] == 'kokoro_offline' &&
+          ![
+            'waiting',
+            'queued',
+            'generating',
+          ].contains(jobs[index]?['status'])) {
+        jobs[index] = {
+          ...?jobs[index],
+          for (final key in [
+            'engine',
+            'voice',
+            'model_version',
+            'settings',
+            'narration_dictionary',
+            'narration_offsets',
+            'offlineJobId',
+          ])
+            if (stateEntry.containsKey(key)) key: stateEntry[key],
+          'status': 'ready',
+          'delivery': 'downloaded',
+          'localAvailable': true,
+        };
+      }
       if (jobs[index] != null) jobs[index]!['localAvailable'] = localAvailable;
       if (localAvailable &&
           jobs[index]?['previousRecording'] == null &&
@@ -2098,7 +2291,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         ].contains(jobs[index]?['status'])) {
       return;
     }
-    if (host.isEmpty || token.isEmpty) {
+    if (!preference.isOffline && (host.isEmpty || token.isEmpty)) {
       setState(() => notice = 'Connect Dogreader Cloud first.');
       return;
     }
@@ -2106,6 +2299,10 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       widget.book.id,
       widget.book.chapters,
     );
+    if (preference.isOffline) {
+      await _startOfflineGeneration([index], preference, isRegenerate: true);
+      return;
+    }
     final job = <String, dynamic>{
       'previousRecording': jobs[index]?['previousRecording'] ?? jobs[index],
       'status': 'waiting',
@@ -2127,6 +2324,89 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     });
     await save();
     await checkJobs();
+  }
+
+  Future<void> _startOfflineGeneration(
+    List<int> indices,
+    NarrationPreference preference, {
+    bool isRegenerate = false,
+    Set<int>? requestedToClear,
+  }) async {
+    await offlineNarration.initialize().catchError((Object _) {});
+    if (!offlineNarration.ready) {
+      if (mounted) {
+        setState(
+          () => notice =
+              'Download the offline Kokoro model and English frontend (372 MB) first.',
+        );
+      }
+      return;
+    }
+    if (offlineNarration.busy) {
+      if (mounted) {
+        setState(
+          () => notice = 'One offline generation job can run at a time.',
+        );
+      }
+      return;
+    }
+    setState(() {
+      busy = true;
+      submitting = true;
+      notice = null;
+    });
+    for (var i = 0; i < indices.length; i++) {
+      final index = indices[i];
+      jobs[index] = {
+        if (isRegenerate)
+          'previousRecording': jobs[index]?['previousRecording'] ?? jobs[index],
+        'status': i == 0 ? 'generating' : 'waiting',
+        ...preference.toJson(),
+        'narration_dictionary': narrationDictionary
+            .effective(widget.book.id)
+            .toJson(),
+      };
+    }
+    await save();
+    try {
+      await offlineNarration.enqueueChapters(
+        bookId: widget.book.id,
+        bookTitle: widget.book.title,
+        chapters: [
+          for (final index in indices)
+            MapEntry(index, widget.book.chapters[index]),
+        ],
+        sid: offlineSidForVoice(preference.voice),
+        threads: offlineNarration.threads,
+      );
+      final result =
+          'Started offline generation on device (${indices.length} ${indices.length == 1 ? 'chapter' : 'chapters'}).';
+      busy = false;
+      submitting = false;
+      if (!mounted) return;
+      if (widget.generationChapters != null) {
+        Navigator.pop(context, result);
+      } else {
+        setState(() {
+          if (requestedToClear != null) selected.removeAll(requestedToClear);
+          notice = result;
+        });
+      }
+    } catch (e) {
+      for (final index in indices) {
+        jobs[index] = {
+          ...?jobs[index],
+          'status': 'error',
+          'error': '$e',
+        };
+      }
+      await save();
+      busy = false;
+      submitting = false;
+      if (mounted) {
+        setState(() => notice = 'Offline generation error: $e');
+      }
+    }
   }
 
   bool _needsGeneration(int index) {
@@ -2219,7 +2499,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     NarrationPreference preference,
   ) async {
     if (busy) return;
-    if (host.isEmpty || token.isEmpty) {
+    if (!preference.isOffline && (host.isEmpty || token.isEmpty)) {
       setState(() => notice = 'Set your Cloud Run URL and access token first.');
       return;
     }
@@ -2228,6 +2508,14 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     if (indices.isEmpty) {
       setState(
         () => notice = 'No new jobs needed. Existing narration was kept.',
+      );
+      return;
+    }
+    if (preference.isOffline) {
+      await _startOfflineGeneration(
+        indices,
+        preference,
+        requestedToClear: requested,
       );
       return;
     }
@@ -2317,10 +2605,159 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         narrationEngine = value.engine;
         narrator = value.voice;
       });
+      if (value.isOffline) {
+        unawaited(offlineNarration.initialize().catchError((Object _) {}));
+      }
       unawaited(savePreference());
     },
     previewing: previewing,
     onPreview: previewing ? stopPreview : previewVoice,
+  );
+
+  Widget _offlineStatusCard() => ListenableBuilder(
+    listenable: offlineNarration,
+    builder: (context, _) {
+      if (narrationEngine != 'kokoro_offline' && !offlineNarration.active) {
+        return const SizedBox.shrink();
+      }
+      final colors = Theme.of(context).colorScheme;
+      final current = offlineNarration.job;
+      final completed = current?['completedChunks'] as int? ?? 0;
+      final total = current?['totalChunks'] as int? ?? 0;
+      final chapter = current?['chapter'];
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        child: DecoratedBox(
+          key: const Key('offline_kokoro_status_card'),
+          decoration: BoxDecoration(
+            color: colors.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: colors.outlineVariant),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      offlineNarration.ready
+                          ? Icons.check_circle_outline
+                          : Icons.download_for_offline_outlined,
+                      size: 18,
+                      color: offlineNarration.ready
+                          ? colors.primary
+                          : colors.secondary,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        offlineNarration.ready
+                            ? 'On-device Kokoro model ready'
+                            : 'On-device model download required (372 MB)',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                    if (offlineNarration.ready)
+                      DropdownButton<int>(
+                        key: ValueKey(
+                          'offline-threads-${offlineNarration.threads}',
+                        ),
+                        value: offlineNarration.threads,
+                        isDense: true,
+                        underline: const SizedBox.shrink(),
+                        items: [
+                          for (final n in [1, 2, 4])
+                            DropdownMenuItem(
+                              value: n,
+                              child: Text(
+                                '$n CPU ${n == 1 ? 'thread' : 'threads'}',
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            ),
+                        ],
+                        onChanged: offlineNarration.busy
+                            ? null
+                            : (value) {
+                                if (value != null) {
+                                  unawaited(offlineNarration.setThreads(value));
+                                }
+                              },
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  offlineNarration.ready
+                      ? 'Generates complete chapter WAV audio locally on your phone (FP32 • Misaki English). Cloud settings are not required.'
+                      : 'Optional one-time download: Kokoro FP32 model (349.9 MB) + Misaki English frontend (22.2 MB). Allow 1.5 GB free during setup.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: colors.onSurfaceVariant,
+                  ),
+                ),
+                if (offlineNarration.status.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    offlineNarration.status,
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ],
+                if (!offlineNarration.ready) ...[
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    key: const Key('download_offline_kokoro_button'),
+                    onPressed: offlineNarration.busy
+                        ? null
+                        : () => unawaited(offlineNarration.install()),
+                    icon: const Icon(Icons.download, size: 18),
+                    label: Text(
+                      offlineNarration.installing
+                          ? 'Downloading offline files…'
+                          : 'Download offline files (372 MB)',
+                    ),
+                  ),
+                ],
+                if (offlineNarration.active) ...[
+                  const SizedBox(height: 8),
+                  LinearProgressIndicator(
+                    value: total > 0 ? completed / total : null,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '$completed/$total chunks saved'
+                    '${chapter is Map ? ' • ${chapter['chapterTitle'] ?? ''}' : ''}'
+                    '${offlineNarration.pendingQueueCount > 0 ? ' (+${offlineNarration.pendingQueueCount} queued)' : ''}',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  const SizedBox(height: 6),
+                  OutlinedButton(
+                    key: const Key('cancel_offline_kokoro_button'),
+                    onPressed: () => unawaited(offlineNarration.cancel()),
+                    child: const Text('Cancel offline generation'),
+                  ),
+                ],
+                if (!offlineNarration.busy &&
+                    current != null &&
+                    current['outcome'] != null &&
+                    current['outcome'] != 'completed') ...[
+                  const SizedBox(height: 6),
+                  OutlinedButton(
+                    key: const Key('retry_offline_kokoro_button'),
+                    onPressed: () => unawaited(offlineNarration.resume()),
+                    child: const Text('Retry saved chapter job'),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      );
+    },
   );
 
   Widget _costBanner() => NarrationCostBanner(
@@ -2374,19 +2811,24 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
               const Center(child: CircularProgressIndicator())
             else ...[
               if (notice != null) Text(notice!),
-              if (host.isEmpty || token.isEmpty)
+              if (narrationEngine != 'kokoro_offline' &&
+                  (host.isEmpty || token.isEmpty))
                 TextButton(
                   onPressed: configure,
                   child: const Text('Connect narration service'),
                 ),
               if (!submitting) _voiceControls(),
+              if (!submitting) _offlineStatusCard(),
               if (!submitting) _costBanner(),
               if (submitting)
                 const Center(child: CircularProgressIndicator())
               else
                 FilledButton(
                   onPressed:
-                      busy || selected.isEmpty || host.isEmpty || token.isEmpty
+                      busy ||
+                          selected.isEmpty ||
+                          (narrationEngine != 'kokoro_offline' &&
+                              (host.isEmpty || token.isEmpty))
                       ? null
                       : confirmGeneration,
                   child: const Text('Review generation'),
@@ -2471,7 +2913,11 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       );
       narrationDelivery.attachBook(widget.book.id, jobs);
       final waitingIndices = jobs.entries
-          .where((entry) => entry.value['status'] == 'waiting')
+          .where(
+            (entry) =>
+                entry.value['status'] == 'waiting' &&
+                entry.value['engine'] != 'kokoro_offline',
+          )
           .map((entry) => entry.key)
           .toList();
       await narrationDelivery.submitWaitingJobs(
@@ -2504,6 +2950,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       widget.book.chapters,
     );
     narrationDelivery.addListener(deliveryChanged);
+    offlineNarration.addListener(deliveryChanged);
     load();
     if (widget.generationChapters == null) {
       timer = Timer.periodic(const Duration(seconds: 12), (_) => checkJobs());
@@ -2513,9 +2960,12 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   @override
   void dispose() {
     narrationDelivery.removeListener(deliveryChanged);
+    offlineNarration.removeListener(deliveryChanged);
     timer?.cancel();
     previewSequence++;
-    unawaited(audioHandler.stopPreview());
+    try {
+      unawaited(audioHandler.stopPreview());
+    } catch (_) {}
     super.dispose();
   }
 
@@ -2552,7 +3002,9 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       body: CustomScrollView(
         slivers: [
           SliverList.list(children: [
-            if (loaded && (host.isEmpty || token.isEmpty))
+            if (loaded &&
+                narrationEngine != 'kokoro_offline' &&
+                (host.isEmpty || token.isEmpty))
               TextButton(
                 onPressed: configure,
                 child: const Text('Connect narration service'),
@@ -2563,6 +3015,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
                 child: Text(notice!, textAlign: TextAlign.center),
               ),
             _voiceControls(),
+            _offlineStatusCard(),
             _costBanner(),
             TextButton.icon(
               icon: const Icon(Icons.menu_book), label: const Text('Narration Dictionary'),

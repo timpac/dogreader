@@ -450,7 +450,7 @@ class NarrationDelivery extends ChangeNotifier {
       for (final index in indices) {
         if (_disposed) return;
         final job = book.value[index];
-        if (job == null) continue;
+        if (job == null || job['engine'] == 'kokoro_offline') continue;
         final id = job['id'];
         if (id is String && id.isNotEmpty) {
           if (job['status'] == 'waiting') {
@@ -498,7 +498,11 @@ class NarrationDelivery extends ChangeNotifier {
     required bool automatic,
   }) async {
     final job = books[book]?[index];
-    if (job == null || job['status'] != 'waiting') return;
+    if (job == null ||
+        job['status'] != 'waiting' ||
+        job['engine'] == 'kokoro_offline') {
+      return;
+    }
     final existingId = job['id'];
     if (existingId is String && existingId.isNotEmpty) {
       _transition(job, book, index, status: 'queued', automatic: automatic);
@@ -659,7 +663,7 @@ class NarrationDelivery extends ChangeNotifier {
       for (final index in indices) {
         if (_disposed) return;
         final job = book.value[index];
-        if (job == null) continue;
+        if (job == null || job['engine'] == 'kokoro_offline') continue;
         final id = job['id'];
         if (id is! String || id.isEmpty || job['status'] == 'waiting') continue;
         final key = '${book.key}:$index';

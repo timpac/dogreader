@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   apk:
-    if: (github.ref == 'refs/heads/dogreader-oct22-update' || github.ref == 'refs/heads/fix/156-progress-persistence' || github.ref == 'refs/heads/fix/160-epub-narration' || github.ref == 'refs/heads/build/161-chapter-narration' || github.ref == 'refs/heads/build/162-narration-queue-reliability' || github.ref == 'refs/heads/build/163-chapter-panel-refinement' || github.ref == 'refs/heads/build/163-tts-cost-tracker' || github.ref == 'refs/heads/build/164-light-mode-cost-tracker') && github.actor == github.repository_owner
+    if: (github.ref == 'refs/heads/dogreader-oct22-update' || github.ref == 'refs/heads/fix/156-progress-persistence' || github.ref == 'refs/heads/fix/160-epub-narration' || github.ref == 'refs/heads/build/161-chapter-narration' || github.ref == 'refs/heads/build/162-narration-queue-reliability' || github.ref == 'refs/heads/build/163-chapter-panel-refinement' || github.ref == 'refs/heads/build/163-tts-cost-tracker' || github.ref == 'refs/heads/build/164-light-mode-cost-tracker' || github.ref == 'refs/heads/build/165-rss-offline-kokoro') && github.actor == github.repository_owner
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -48,7 +48,8 @@ jobs:
               'refs/heads/build/162-narration-queue-reliability',
               'refs/heads/build/163-chapter-panel-refinement',
               'refs/heads/build/163-tts-cost-tracker',
-              'refs/heads/build/164-light-mode-cost-tracker'
+              'refs/heads/build/164-light-mode-cost-tracker',
+              'refs/heads/build/165-rss-offline-kokoro'
             ]);
             if (metadata.default_branch !== 'dogreader-oct22-update' || !allowedRefs.has(context.ref)) throw new Error('Authorized branch mismatch');
             if (Number(process.env.GITHUB_RUN_ATTEMPT) !== 1) throw new Error('Inspect retained assets before a new explicitly authorized dispatch; do not rerun');
@@ -60,6 +61,7 @@ jobs:
             if (context.ref === 'refs/heads/build/163-chapter-panel-refinement' && number !== '163') throw new Error('This branch is authorized for build 163 only');
             if (context.ref === 'refs/heads/build/163-tts-cost-tracker' && number !== '163') throw new Error('This branch is authorized for build 163 only');
             if (context.ref === 'refs/heads/build/164-light-mode-cost-tracker' && number !== '164') throw new Error('This branch is authorized for build 164 only');
+            if (context.ref === 'refs/heads/build/165-rss-offline-kokoro' && number !== '165') throw new Error('This branch is authorized for build 165 only');
             if (!/^[1-9][0-9]*$/.test(number) || Number(number) <= 135 || Number(number) > 2100000000) throw new Error('Invalid new Android versionCode');
             const releases = await github.paginate(github.rest.repos.listReleases, {owner, repo, per_page: 100});
             const tags = await github.paginate(github.rest.repos.listTags, {owner, repo, per_page: 100});
@@ -86,7 +88,10 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
           git merge-base --is-ancestor cdf4227dc6a966b20e24f61179ac953b22689024 HEAD
-          if [ "$GITHUB_REF" = refs/heads/build/164-light-mode-cost-tracker ]; then
+          if [ "$GITHUB_REF" = refs/heads/build/165-rss-offline-kokoro ]; then
+            git merge-base --is-ancestor 3b854fdbb5bab143de05db012d7e4f6cdd5c0253 HEAD
+            git merge-base --is-ancestor HEAD origin/build/165-rss-offline-kokoro
+          elif [ "$GITHUB_REF" = refs/heads/build/164-light-mode-cost-tracker ]; then
             git merge-base --is-ancestor d364a959d6d82a5698393bb0d4e23431945c4491 HEAD
             git merge-base --is-ancestor HEAD origin/build/164-light-mode-cost-tracker
           elif [ "$GITHUB_REF" = refs/heads/build/163-chapter-panel-refinement ]; then
@@ -131,6 +136,8 @@ jobs:
           chmod 600 "$HOME/.android/debug.keystore"
           keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey > /tmp/certificate.txt
           grep -Fqi 'C5:CC:08:D9:75:7C:0E:92:89:3A:71:62:04:A2:6F:EB:61:57:F5:35:0A:00:DB:B0:B7:96:20:49:D6:D9:D1:77' /tmp/certificate.txt
+      - name: Prepare hash-pinned offline Kokoro English frontend and ORT headers
+        run: python3 tool/prepare_frontend.py
       - name: Resolve locked dependencies
         run: flutter pub get --enforce-lockfile > /tmp/dependencies.log 2>&1 || { tail -60 /tmp/dependencies.log; exit 1; }
       - name: Analyze
@@ -177,6 +184,7 @@ jobs:
             if (context.ref === 'refs/heads/build/163-chapter-panel-refinement' && number !== '163') throw new Error('This branch is authorized for build 163 only');
             if (context.ref === 'refs/heads/build/163-tts-cost-tracker' && number !== '163') throw new Error('This branch is authorized for build 163 only');
             if (context.ref === 'refs/heads/build/164-light-mode-cost-tracker' && number !== '164') throw new Error('This branch is authorized for build 164 only');
+            if (context.ref === 'refs/heads/build/165-rss-offline-kokoro' && number !== '165') throw new Error('This branch is authorized for build 165 only');
             const source = process.env.RELEASE_COMMIT;
             const tag = `v${number}`;
             const name = `Dogreader-${number}.apk`;
@@ -191,7 +199,9 @@ jobs:
             const apk = fs.readFileSync(`dist/${name}`);
             const sha256 = digest(apk);
             const run = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
-            const changelog = number === '164'
+            const changelog = number === '165'
+              ? 'RSS Feeds & Writers + Offline Kokoro integration: integrates the RSS Feeds & Writers collapsible shelf at the top of the main library (with traditional orange RSS icon, unread count badge, feed and followed writer counts, OPML import/export, author following, natural-language priority rules, full-article extraction/RSS fallback, and narration entry points) and integrates the on-device Kokoro FP32 + Misaki English narration engine directly into the standard Narration Engine dropdown as Kokoro (Offline) with local voices (Heart, Michael, Emma), complete chapter WAV generation in an isolated foreground service, model readiness/download controls, zero cloud configuration or billing requirements, and full preservation of Build 164 library and narration data.\n\n'
+              : number === '164'
               ? 'Light mode refinement & Google Cloud TTS monthly cost tracker: improves the chapter list in light mode with a rich porcelain-lavender gradient, faint outer card border, refined top highlight, elevated ambient shadow, and shaded circular headphone buttons with soft dimensionality while strictly preserving dark mode; adds monthly TTS character usage & credit tracking (1M free-tier allowance + $10/month credit) without double-counting retries, live pre-generation cost estimates, one-tap Kokoro switching, and TTS Usage & Budget card in settings.\n\n'
               : number === '163'
               ? 'Chapter panel refinement: tighter chapter rows (96dp), more pronounced separators with a soft engraved highlight, a restrained surface sheen and card shadow, and softer 24dp outer corners. No narration, queue, storage or playback changes.\n\n'

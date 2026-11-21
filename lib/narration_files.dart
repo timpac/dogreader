@@ -161,10 +161,19 @@ Future<void> deleteNarrationFile({
   final file = File('${root.path}/narration/${bookId}_$index.mp3');
   if (await file.exists()) await file.delete();
   final stateFile = File('${root.path}/narration_state.json');
+  String? customPath;
   if (await stateFile.exists()) {
     await updateNarrationJson(stateFile, (data) {
+      final entry = data['$bookId:$index'];
+      if (entry is Map && entry['path'] is String) {
+        customPath = entry['path'] as String;
+      }
       data.remove('$bookId:$index');
     });
+  }
+  if (customPath != null && customPath != file.path) {
+    final customFile = File(customPath!);
+    if (await customFile.exists()) await customFile.delete();
   }
   jobs.remove(index);
   selected.remove(index);

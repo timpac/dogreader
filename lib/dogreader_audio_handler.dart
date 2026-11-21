@@ -10,6 +10,7 @@ import 'package:audio_session/audio_session.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'chapter_recording_path.dart';
 import 'media_diagnostics.dart';
 
 class _Recording {
@@ -617,6 +618,11 @@ class DogreaderAudioHandler extends BaseAudioHandler
     });
   }
 
+  bool isChapterPlaying(String bookId, int index) {
+    if (_recording?.key != '$bookId:$index') return false;
+    return player.playing || playbackState.value.playing;
+  }
+
   Future<void> unloadChapter(String bookId, int index) async {
     if (_recording?.key != '$bookId:$index') return;
     recordDiagnostic(MediaDiagnosticEvent.chapterUnloaded);
@@ -902,9 +908,7 @@ class DogreaderAudioHandler extends BaseAudioHandler
         }
         final nextIndex = old.index + 1;
         final root = await _documentsDirectory();
-        final next = File(
-          '${root.path}/narration/${old.bookId}_$nextIndex.mp3',
-        );
+        final next = await chapterRecordingFile(root, old.bookId, nextIndex);
         if (!continuePlaying()) return;
         final available =
             nextIndex < old.count &&
