@@ -94,7 +94,10 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
           git merge-base --is-ancestor cdf4227dc6a966b20e24f61179ac953b22689024 HEAD
-          if [ "$GITHUB_REF" = refs/heads/build/167-kokoro-decoder-fix ]; then
+          if [ "$GITHUB_REF" = refs/heads/build/168-article-import ]; then
+            git merge-base --is-ancestor c787b68880dd39b952900e87d19c58b4b8acad99 HEAD
+            git merge-base --is-ancestor HEAD origin/build/168-article-import
+          elif [ "$GITHUB_REF" = refs/heads/build/167-kokoro-decoder-fix ]; then
             git merge-base --is-ancestor b20a1a3fa19630ef02f5c6bb430557f5a5667eda HEAD
             git merge-base --is-ancestor HEAD origin/build/167-kokoro-decoder-fix
           elif [ "$GITHUB_REF" = refs/heads/build/166-ai-article-summaries ]; then
@@ -197,6 +200,7 @@ jobs:
             if (context.ref === 'refs/heads/build/165-rss-offline-kokoro' && number !== '165') throw new Error('This branch is authorized for build 165 only');
             if (context.ref === 'refs/heads/build/166-ai-article-summaries' && number !== '166') throw new Error('This branch is authorized for build 166 only');
             if (context.ref === 'refs/heads/build/167-kokoro-decoder-fix' && number !== '167') throw new Error('This branch is authorized for build 167 only');
+            if (context.ref === 'refs/heads/build/168-article-import' && number !== '168') throw new Error('This branch is authorized for build 168 only');
             const source = process.env.RELEASE_COMMIT;
             const tag = `v${number}`;
             const name = `Dogreader-${number}.apk`;
@@ -211,7 +215,9 @@ jobs:
             const apk = fs.readFileSync(`dist/${name}`);
             const sha256 = digest(apk);
             const run = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
-            const changelog = number === '167'
+            const changelog = number === '168'
+              ? 'Automatic article importing & AI summary integration: adds frictionless article importing via URL pasting and Android system sharing directly into the local article library with deduplication and offline caching; relocates AI summary controls to the top of article reading views with a labeled depth dropdown (Brief, Standard, Detailed) and explicit generation review; preserves independent reading, summary, and audio progress with full EPUB, RSS, and Kokoro narration compatibility; builds upon Build 167 Kokoro native decoder fix.\n\n'
+              : number === '167'
               ? 'Kokoro native BART G2P decoder alignment: aligns the Kokoro (Offline) native G2P decoder with vendored Misaki reference behavior by generating autoregressive decoder tokens until complete and filtering special tokens via vocabulary phonemes, preventing premature decoding stops on tokens 0, 3, or unexpected BOS; builds upon Build 166 AI Article Summaries and Summary Narration.\n\n'
               : number === '166'
               ? 'AI Article Summaries & Summary Narration: adds fully functional on-demand AI article summaries in Brief (~3-5 sentences), Standard (~200-350 words), and Detailed (~500-800 words) depths using Gemini Flash via the Dogreader Cloud backend; includes in-card generation progress, clear error/retry handling, paywall and preview extraction safeguards, local summary caching, and full summary narration through Google Chirp 3 HD, Kokoro (Cloud), and Kokoro (Offline) with separate audio versioning and playback progress that never collides with original article reading or listening.\n\n'
