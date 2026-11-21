@@ -192,9 +192,15 @@ class ImportedBook {
 }
 
 class LibraryScreen extends StatefulWidget {
-  const LibraryScreen({super.key, this.appearance, this.progressStore});
+  const LibraryScreen({
+    super.key,
+    this.appearance,
+    this.progressStore,
+    this.articleLibrary,
+  });
 
   final BookProgress? progressStore;
+  final ArticleLibrary? articleLibrary;
 
   final ThemePreferences? appearance;
 
@@ -205,8 +211,7 @@ class LibraryScreen extends StatefulWidget {
 class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserver {
   late final ArticleLibrary articles;
   late final RssLibraryController rss;
-  final List<String> _sharedUrls = [];
-  bool _showingShare = false;
+  bool _showingArticleImports = false;
   int selectedTab = 0;
   bool importing = false;
   final List<ImportedBook> books = [];
@@ -339,7 +344,9 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
     progress.addListener(_progressChanged);
     narrationDelivery.chapterResolver = _resolveChapterForDelivery;
     narrationDelivery.start();
-    articles = ArticleLibrary(getApplicationDocumentsDirectory());
+    articles =
+        widget.articleLibrary ??
+        ArticleLibrary(getApplicationDocumentsDirectory());
     articles.addListener(_articlesChanged);
     articles.load().catchError((Object _) {});
     rss = RssLibraryController(getApplicationDocumentsDirectory());
@@ -390,6 +397,12 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     narrationDelivery.setActive(state == AppLifecycleState.resumed);
+    if (state == AppLifecycleState.resumed) {
+      // An activity can reattach to the still-running audio service engine.
+      unawaited(ArticleShare.takePending(_receiveArticleShare).catchError(
+        (Object _) {},
+      ));
+    }
   }
 
   void _articlesChanged() {
@@ -414,27 +427,41 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
   }
 
   void _receiveArticleShare(String text) {
-    final url = sharedArticleUrl(text);
-    if (url == null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('The shared text does not contain an article URL.')));
-      });
-      WidgetsBinding.instance.scheduleFrame();
-      return;
-    }
-    _sharedUrls.add(url);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _showNextShare());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final url = sharedArticleUrl(text);
+      if (url == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Share a public article URL, or paste it in Import a web article.',
+            ),
+          ),
+        );
+        return;
+      }
+      articles.enqueue(url);
+      unawaited(_openArticleImports());
+    });
     WidgetsBinding.instance.scheduleFrame();
   }
 
-  Future<void> _showNextShare() async {
-    if (!mounted || _showingShare || _sharedUrls.isEmpty) return;
-    _showingShare = true;
-    final url = _sharedUrls.removeAt(0);
-    await Navigator.push(context, MaterialPageRoute<void>(builder: (_) => ArticleImportScreen(
-      library: articles, openArticle: openArticle, initialUrl: url)));
-    _showingShare = false;
-    if (mounted) _showNextShare();
+  Future<void> _openArticleImports() async {
+    if (_showingArticleImports) return;
+    _showingArticleImports = true;
+    try {
+      await Navigator.push(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => ArticleImportScreen(
+            library: articles,
+            openArticle: openArticle,
+          ),
+        ),
+      );
+    } finally {
+      _showingArticleImports = false;
+    }
   }
 
   @override
@@ -445,7 +472,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
     rss.removeListener(_articlesChanged);
     WidgetsBinding.instance.removeObserver(this);
     narrationDelivery.setActive(false);
-    articles.dispose();
+    if (widget.articleLibrary == null) articles.dispose();
     rss.dispose();
     super.dispose();
   }
@@ -893,6 +920,12 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
           ),
         ),
         const SizedBox(height: 20),
+        OutlinedButton.icon(
+          onPressed: _openArticleImports,
+          icon: const Icon(Icons.add_link),
+          label: const Text('Import a web article'),
+        ),
+        const SizedBox(height: 10),
         RssLibraryShelf(
           controller: rss,
           onOpenRssHome: openRssHome,
@@ -974,13 +1007,6 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
             ),
           ),
         if (books.isNotEmpty) const SizedBox(height: 10),
-        OutlinedButton.icon(
-          onPressed: () => Navigator.push(context, MaterialPageRoute<void>(
-            builder: (_) => ArticleImportScreen(library: articles, openArticle: openArticle))),
-          icon: const Icon(Icons.add_link),
-          label: const Text('Import a web article'),
-        ),
-        const SizedBox(height: 10),
         FilledButton.icon(
           onPressed: importing ? null : importBook,
           icon: importing

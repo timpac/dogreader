@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'article_import.dart';
 import 'article_library.dart';
+import 'article_share.dart';
 import 'article_summary.dart' show articleSummariesDisabledMessage;
 
 typedef OpenArticle = void Function(ImportedArticle article, bool narration);
@@ -11,19 +13,15 @@ class ArticleImportScreen extends StatefulWidget {
     super.key,
     required this.library,
     required this.openArticle,
-    this.initialUrl,
   });
   final ArticleLibrary library;
   final OpenArticle openArticle;
-  final String? initialUrl;
   @override
   State<ArticleImportScreen> createState() => _ArticleImportScreenState();
 }
 
 class _ArticleImportScreenState extends State<ArticleImportScreen> {
-  late final TextEditingController url = TextEditingController(
-    text: widget.initialUrl,
-  );
+  final url = TextEditingController();
   bool summary = false;
   String? error;
   @override
@@ -34,7 +32,13 @@ class _ArticleImportScreenState extends State<ArticleImportScreen> {
 
   void enqueue() {
     try {
-      final job = widget.library.enqueue(url.text);
+      final link = sharedArticleUrl(url.text);
+      if (link == null) {
+        throw const ArticleImportException(
+          'Enter a public HTTP or HTTPS article URL.',
+        );
+      }
+      final job = widget.library.enqueue(link);
       setState(() {
         error = null;
         url.clear();
@@ -49,6 +53,16 @@ class _ArticleImportScreenState extends State<ArticleImportScreen> {
     }
   }
 
+  Future<void> _pasteUrl() async {
+    final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
+    if (!mounted) return;
+    final link = text == null ? null : sharedArticleUrl(text);
+    setState(() {
+      error = link == null ? 'Copy a public article URL first.' : null;
+      if (link != null) url.text = link;
+    });
+  }
+
   void _details(ImportedArticle article) => Navigator.push(
     context,
     MaterialPageRoute<void>(
@@ -59,6 +73,38 @@ class _ArticleImportScreenState extends State<ArticleImportScreen> {
       ),
     ),
   );
+
+  Widget _jobCard(ArticleImportJob job) {
+    final article = job.article;
+    return Card(
+      child: ListTile(
+        title: Text(
+          article?.title ?? job.url,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+        subtitle: Text(job.error ?? job.status),
+        trailing: switch (job.status) {
+          'Importing' => const SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          'Could not import' => TextButton(
+            onPressed: () => widget.library.enqueue(job.url),
+            child: const Text('Retry'),
+          ),
+          _ when article != null => TextButton(
+            onPressed: () => widget.openArticle(article, false),
+            child: const Text('Read'),
+          ),
+          _ => null,
+        },
+        onTap: article == null ? null : () => _details(article),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: const Text('Import a web article')),
@@ -70,12 +116,18 @@ class _ArticleImportScreenState extends State<ArticleImportScreen> {
           TextField(
             controller: url,
             keyboardType: TextInputType.url,
+            textInputAction: TextInputAction.go,
             autocorrect: false,
             onSubmitted: (_) => enqueue(),
             decoration: InputDecoration(
               labelText: 'Article URL',
               hintText: 'https://…',
               errorText: error,
+              suffixIcon: IconButton(
+                tooltip: 'Paste article URL',
+                icon: const Icon(Icons.content_paste),
+                onPressed: _pasteUrl,
+              ),
             ),
           ),
           const SizedBox(height: 16),
@@ -110,27 +162,7 @@ class _ArticleImportScreenState extends State<ArticleImportScreen> {
           const Text(
             'Articles import one at a time. You can add another URL while an import is running.',
           ),
-          for (final job in widget.library.jobs.reversed)
-            Card(
-              child: ListTile(
-                title: Text(
-                  job.article?.title ?? job.url,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                subtitle: Text(job.error ?? job.status),
-                trailing: job.status == 'Importing'
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : null,
-                onTap: job.article == null
-                    ? null
-                    : () => _details(job.article!),
-              ),
-            ),
+          for (final job in widget.library.jobs.reversed) _jobCard(job),
         ],
       ),
     ),
