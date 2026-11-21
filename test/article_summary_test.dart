@@ -27,8 +27,9 @@ class ScreenLibrary extends ArticleLibrary {
   @override
   Future<ImportedArticle> summarize(
     ImportedArticle article,
-    SummaryDepth depth,
-  ) async {
+    SummaryDepth depth, {
+    bool forceRegenerate = false,
+  }) async {
     generated.add(depth);
     return ImportedArticle(
       title: article.title,
@@ -54,19 +55,19 @@ void main() {
   });
   tearDown(() async => root.delete(recursive: true));
   test(
-    'summaries are disabled by default before settings or network access',
+    'summaries disabled guard before settings or network access',
     () async {
       var createdClients = 0;
-      expect(articleSummariesEnabled, isFalse);
-      final library = ArticleLibrary(Future.value(root));
+      expect(articleSummariesEnabled, isTrue);
+      final library = ArticleLibrary(Future.value(root), summariesEnabled: false);
       await HttpOverrides.runZoned(
         () async {
           for (final request in [
             () =>
-                ArticleSummaryClient(root)
+                ArticleSummaryClient(root, enabled: false)
                     .estimate(fixture(), SummaryDepth.brief),
             () =>
-                ArticleSummaryClient(root)
+                ArticleSummaryClient(root, enabled: false)
                     .summarize(fixture(), SummaryDepth.brief),
             () => library.estimate(fixture(), SummaryDepth.brief),
             () => library.summarize(fixture(), SummaryDepth.brief),
@@ -120,7 +121,8 @@ void main() {
   testWidgets('disabled summary controls cannot submit a request', (
     tester,
   ) async {
-    final library = ArticleLibrary(Future.value(root));
+    final library =
+        ArticleLibrary(Future.value(root), summariesEnabled: false);
     await tester.pumpWidget(
       MaterialApp(
         home: ArticleDetailScreen(
