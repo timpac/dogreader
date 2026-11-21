@@ -96,11 +96,15 @@ class RssLibraryShelf extends StatelessWidget {
                           children: [
                             Row(
                               children: [
-                                const Text(
-                                  'RSS Feeds & Writers',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 16,
+                                const Flexible(
+                                  child: Text(
+                                    'RSS Feeds & Writers',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 16,
+                                    ),
                                   ),
                                 ),
                                 if (unreadCount > 0) ...[
@@ -278,14 +282,15 @@ class RssLibraryShelf extends StatelessWidget {
                       ],
                       if (controller.subscriptions.isEmpty) ...[
                         const SizedBox(height: 10),
-                        Row(
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
                           children: [
                             FilledButton.tonalIcon(
                               onPressed: onOpenAddFeed,
                               icon: const Icon(Icons.rss_feed_rounded, size: 18),
                               label: const Text('Add RSS Feed'),
                             ),
-                            const SizedBox(width: 8),
                             OutlinedButton.icon(
                               onPressed: onOpenOpml,
                               icon: const Icon(Icons.upload_file_outlined, size: 18),
