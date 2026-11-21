@@ -334,8 +334,13 @@ void main() {
         expect(failed.error, 'Website unavailable');
         expect(second.status, 'Saved');
         expect(library.articles.length, 2);
+        library.dismissFailed(failed);
+        expect(library.jobs, [first, second]);
+        await library.removeArticle(second.article!);
+        expect(library.jobs, [first]);
         final restarted = ArticleLibrary(Future.value(root), fetcher: fetcher);
         await restarted.load();
+        expect(restarted.articles.map((article) => article.id), [first.article!.id]);
         final cached = restarted.enqueue('https://example.org/trial');
         await restarted.settled;
         expect(cached.status, 'Saved');

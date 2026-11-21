@@ -102,6 +102,102 @@ class ArticleLibrary extends ChangeNotifier {
     return job;
   }
 
+  void dismissFailed(ArticleImportJob job) {
+    if (job.error != null && jobs.remove(job)) notifyListeners();
+  }
+
+  Future<void> removeArticle(ImportedArticle article) async {
+    final directory = (await store).directory;
+    if (!RegExp(r'^[a-zA-Z0-9_-]+
+    final file = File('${directory.path}/${article.id}.json');
+    if (await file.exists()) await file.delete();
+    articles.removeWhere((item) => item.id == article.id);
+    jobs.removeWhere((job) => job.article?.id == article.id);
+    notifyListeners();
+  }
+
+  Future<void> get settled => _pending;
+  ImportedArticle? savedSummary(ImportedArticle article, SummaryDepth depth) {
+    final matches = articles
+        .where(
+          (a) =>
+              a.originalId == article.id &&
+              a.depth == depth &&
+              (a.originalContentHash == null ||
+                  a.originalContentHash == article.contentHash),
+        )
+        .toList();
+    if (matches.isEmpty) return null;
+    return matches.last;
+  }
+
+  Future<Map<String, dynamic>> estimate(
+    ImportedArticle article,
+    SummaryDepth depth,
+  ) async {
+    if (!summariesEnabled) {
+      throw const ArticleImportException(articleSummariesDisabledMessage);
+    }
+    return ArticleSummaryClient(
+      await documents,
+      enabled: summariesEnabled,
+    ).estimate(article, depth);
+  }
+
+  Future<ImportedArticle> summarize(
+    ImportedArticle article,
+    SummaryDepth depth, {
+    bool forceRegenerate = false,
+  }) {
+    if (!forceRegenerate) {
+      final saved = savedSummary(article, depth);
+      if (saved != null) return Future.value(saved);
+    }
+    if (!summariesEnabled) {
+      return Future.error(
+        const ArticleImportException(articleSummariesDisabledMessage),
+      );
+    }
+    final key =
+        '${article.id}:${article.contentHash}:${depth.name}:${forceRegenerate ? DateTime.now().microsecondsSinceEpoch : ""}';
+    return _summaries.putIfAbsent(key, () async {
+      try {
+        final result = await ArticleSummaryClient(
+          await documents,
+          enabled: summariesEnabled,
+        ).summarize(article, depth);
+        await (await store).save(result);
+        articles.removeWhere(
+          (a) =>
+              a.originalId == article.id &&
+              a.depth == depth &&
+              (a.originalContentHash == null ||
+                  a.originalContentHash == article.contentHash),
+        );
+        articles.add(result);
+        notifyListeners();
+        return result;
+      } finally {
+        _summaries.remove(key);
+      }
+    });
+  }
+
+  Future<ImportedArticle> regenerateSummary(
+    ImportedArticle article,
+    SummaryDepth depth,
+  ) => summarize(article, depth, forceRegenerate: true);
+}
+).hasMatch(article.id)) {
+      throw const FormatException('Invalid article ID');
+    }
+    final file = File('${directory.path}/${article.id}.json');
+    if (await file.exists()) await file.delete();
+    articles.removeWhere((item) => item.id == article.id);
+    jobs.removeWhere((job) => job.article?.id == article.id);
+    notifyListeners();
+  }
+
   Future<void> get settled => _pending;
   ImportedArticle? savedSummary(ImportedArticle article, SummaryDepth depth) {
     final matches = articles
