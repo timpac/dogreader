@@ -4,10 +4,10 @@ import 'dart:io';
 
 import 'article_import.dart';
 
-// Enable only in a separately approved rollout after backend acceptance.
+// Enabled by default in Build 166.
 const articleSummariesEnabled = bool.fromEnvironment(
   'DOGREADER_ENABLE_ARTICLE_SUMMARIES',
-  defaultValue: false,
+  defaultValue: true,
 );
 const articleSummariesDisabledMessage =
     'AI summaries are disabled pending backend integration and rollout approval. The original remains available.';
@@ -139,7 +139,7 @@ class ArticleSummaryClient {
       title: article.title,
       sourceUrl: article.sourceUrl,
       author: article.author,
-      published: article.published,
+      published: DateTime.now().toUtc().toIso8601String(),
       depth: depth,
       originalId: article.id,
       originalContentHash: article.contentHash,

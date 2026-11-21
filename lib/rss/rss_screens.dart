@@ -6,7 +6,6 @@ import 'package:flutter/services.dart';
 
 import '../article_import.dart';
 import '../article_library.dart';
-import '../article_summary.dart';
 import 'rss_authors.dart';
 import 'rss_controller.dart';
 import 'rss_models.dart';
@@ -836,20 +835,67 @@ class _RssArticleReadingScreenState extends State<RssArticleReadingScreen> {
   bool _serifFont = true;
   bool _restoredScroll = false;
   SummaryDepth _selectedSummaryDepth = SummaryDepth.standard;
+  bool _isGeneratingSummary = false;
+  String? _summaryError;
 
   @override
   void initState() {
     super.initState();
     _currentArticleId = widget.initialArticleId;
     _scrollController.addListener(_onScroll);
+    widget.articleLibrary.addListener(_onLibraryChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) => _onEnterArticle());
+  }
+
+  void _onLibraryChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
+    widget.articleLibrary.removeListener(_onLibraryChanged);
     super.dispose();
+  }
+
+  Future<void> _generateSummary(RssArticle article, {bool force = false}) async {
+    setState(() {
+      _isGeneratingSummary = true;
+      _summaryError = null;
+    });
+    try {
+      final imported = article.toImportedArticle();
+      await widget.articleLibrary.summarize(
+        imported,
+        _selectedSummaryDepth,
+        forceRegenerate: force,
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _summaryError =
+              e is ArticleImportException ? e.message : e.toString();
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isGeneratingSummary = false;
+        });
+      }
+    }
+  }
+
+  String _depthDescription(SummaryDepth depth) {
+    switch (depth) {
+      case SummaryDepth.brief:
+        return 'Brief summary (approx. 3–5 sentences) capturing the main thesis and most important conclusions.';
+      case SummaryDepth.standard:
+        return 'Standard summary (approx. 200–350 words) covering main arguments, evidence, and conclusions with nuance.';
+      case SummaryDepth.detailed:
+        return 'Detailed summary (approx. 500–800 words) with thorough coverage of arguments, evidence, and counterarguments.';
+    }
   }
 
   Future<void> _onEnterArticle() async {
@@ -1439,18 +1485,27 @@ class _RssArticleReadingScreenState extends State<RssArticleReadingScreen> {
       );
 
   Widget _buildSummaryCard(BuildContext context, RssArticle article) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
     final imported = article.toImportedArticle();
     final cachedSummary = widget.articleLibrary.savedSummary(
       imported,
       _selectedSummaryDepth,
     );
-    final isPaywalledOrEmpty =
-        article.contentStatus == ArticleContentStatus.subscriberOnly ||
-            article.contentStatus == ArticleContentStatus.unavailable;
+    final isExtracting = widget.controller.isExtractingArticle(article.id);
+    final isPaywalled =
+        article.contentStatus == ArticleContentStatus.subscriberOnly;
+    final isUnavailable =
+        article.contentStatus == ArticleContentStatus.unavailable;
+    final isExtractionFailed =
+        article.contentStatus == ArticleContentStatus.extractionFailed;
+    final isPreviewOnly =
+        article.contentStatus == ArticleContentStatus.previewOnly &&
+            article.blocks.isEmpty;
 
     return Card(
       elevation: 0,
-      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      color: colorScheme.surfaceContainerLow,
       child: Padding(
         padding: const EdgeInsets.all(14),
         child: Column(
@@ -1467,35 +1522,147 @@ class _RssArticleReadingScreenState extends State<RssArticleReadingScreen> {
                   ),
                 ),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.primaryContainer,
+                    color: colorScheme.primaryContainer,
                     borderRadius: BorderRadius.circular(4),
                   ),
-                  child: const Text(
+                  child: Text(
                     'AI Summary',
-                    style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700),
+                    style: TextStyle(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w700,
+                      color: colorScheme.onPrimaryContainer,
+                    ),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
             SegmentedButton<SummaryDepth>(
               segments: [
                 for (final d in SummaryDepth.values)
                   ButtonSegment(value: d, label: Text(d.label)),
               ],
               selected: {_selectedSummaryDepth},
-              onSelectionChanged: (s) =>
-                  setState(() => _selectedSummaryDepth = s.first),
+              onSelectionChanged: (s) => setState(() {
+                _selectedSummaryDepth = s.first;
+                _summaryError = null;
+              }),
             ),
-            const SizedBox(height: 10),
-            if (isPaywalledOrEmpty)
-              const Text(
-                'Summaries are disabled for subscriber-only or unavailable articles because DogReader never summarizes unextracted paywalled content.',
-                style: TextStyle(fontSize: 12.5),
-              )
-            else if (cachedSummary != null) ...[
+            const SizedBox(height: 12),
+            if (isPaywalled) ...[
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.lock_outline_rounded,
+                      size: 18, color: colorScheme.error),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Summaries are disabled for subscriber-only articles because DogReader never summarizes unextracted paywalled content.',
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ] else if (isUnavailable) ...[
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.link_off_rounded,
+                      size: 18, color: colorScheme.error),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Summaries are disabled because this article is unavailable.',
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ] else if (isExtractionFailed) ...[
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.warning_amber_rounded,
+                      size: 18, color: colorScheme.error),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Full-text extraction from the webpage failed. DogReader only summarizes legitimately available, complete article text.',
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                onPressed: isExtracting
+                    ? null
+                    : () => widget.controller
+                        .ensureFullText(article.id, forceRetry: true),
+                icon: isExtracting
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.refresh_rounded, size: 16),
+                label: Text(
+                  isExtracting
+                      ? 'Extracting full text…'
+                      : 'Retry Full-Text Extraction',
+                ),
+              ),
+            ] else if (isPreviewOnly) ...[
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.short_text_rounded,
+                      size: 18, color: colorScheme.primary),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Only a preview or excerpt is available. DogReader never summarizes truncated previews as though they were complete articles.',
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                onPressed: isExtracting
+                    ? null
+                    : () => widget.controller
+                        .ensureFullText(article.id, forceRetry: true),
+                icon: isExtracting
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.download_rounded, size: 16),
+                label: Text(
+                  isExtracting
+                      ? 'Extracting full text…'
+                      : 'Extract Full Text',
+                ),
+              ),
+            ] else if (cachedSummary != null) ...[
               Text(
                 'Cached ${cachedSummary.depth?.label ?? ''} AI Summary (distinct from original article):',
                 style: const TextStyle(
@@ -1503,11 +1670,19 @@ class _RssArticleReadingScreenState extends State<RssArticleReadingScreen> {
                   fontWeight: FontWeight.w600,
                 ),
               ),
-              const SizedBox(height: 6),
-              Text(cachedSummary.text),
               const SizedBox(height: 8),
+              SelectableText(
+                cachedSummary.text,
+                style: TextStyle(
+                  fontSize: 14,
+                  height: 1.45,
+                  color: colorScheme.onSurface,
+                ),
+              ),
+              const SizedBox(height: 12),
               Wrap(
                 spacing: 8,
+                runSpacing: 8,
                 children: [
                   FilledButton.tonalIcon(
                     onPressed: () =>
@@ -1515,24 +1690,86 @@ class _RssArticleReadingScreenState extends State<RssArticleReadingScreen> {
                     icon: const Icon(Icons.visibility_outlined, size: 16),
                     label: const Text('Read Summary'),
                   ),
-                  OutlinedButton.icon(
+                  FilledButton.icon(
                     onPressed: () =>
                         widget.onOpenArticle(cachedSummary, true),
                     icon: const Icon(Icons.headphones_rounded, size: 16),
-                    label: const Text('Narrate Summary'),
+                    label: const Text('Listen to Summary'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _isGeneratingSummary
+                        ? null
+                        : () => _generateSummary(article, force: true),
+                    icon: const Icon(Icons.refresh_rounded, size: 16),
+                    label: const Text('Regenerate Summary'),
                   ),
                 ],
               ),
-            ] else
+              if (_isGeneratingSummary) ...[
+                const SizedBox(height: 12),
+                const LinearProgressIndicator(),
+                const SizedBox(height: 6),
+                Text(
+                  'Regenerating ${_selectedSummaryDepth.label.toLowerCase()} summary…',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: colorScheme.primary,
+                  ),
+                ),
+              ],
+            ] else if (_isGeneratingSummary) ...[
+              const LinearProgressIndicator(),
+              const SizedBox(height: 8),
               Text(
-                articleSummariesEnabled
-                    ? 'Tap to estimate and generate an on-demand ${_selectedSummaryDepth.label.toLowerCase()} summary via the DogReader summary service.'
-                    : 'On-demand AI summaries require the backend summary service (--dart-define=DOGREADER_ENABLE_ARTICLE_SUMMARIES=true). Full article reading and narration work immediately without it.',
+                'Generating ${_selectedSummaryDepth.label.toLowerCase()} summary with Gemini Flash…',
                 style: TextStyle(
                   fontSize: 12.5,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w500,
+                  color: colorScheme.primary,
                 ),
               ),
+            ] else if (_summaryError != null) ...[
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.error_outline_rounded,
+                      size: 18, color: colorScheme.error),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _summaryError!,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        color: colorScheme.error,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              FilledButton.tonalIcon(
+                onPressed: () => _generateSummary(article),
+                icon: const Icon(Icons.refresh_rounded, size: 16),
+                label: const Text('Retry'),
+              ),
+            ] else ...[
+              Text(
+                _depthDescription(_selectedSummaryDepth),
+                style: TextStyle(
+                  fontSize: 12.5,
+                  height: 1.35,
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 12),
+              FilledButton.icon(
+                onPressed: () => _generateSummary(article),
+                icon: const Icon(Icons.auto_awesome, size: 16),
+                label: Text(
+                  'Generate ${_selectedSummaryDepth.label} Summary',
+                ),
+              ),
+            ],
           ],
         ),
       ),

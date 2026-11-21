@@ -100,16 +100,20 @@ class ArticleLibrary extends ChangeNotifier {
   }
 
   Future<void> get settled => _pending;
-  ImportedArticle? savedSummary(ImportedArticle article, SummaryDepth depth) =>
-      articles
-          .where(
-            (a) =>
-                a.originalId == article.id &&
-                a.depth == depth &&
-                (a.originalContentHash == null ||
-                    a.originalContentHash == article.contentHash),
-          )
-          .firstOrNull;
+  ImportedArticle? savedSummary(ImportedArticle article, SummaryDepth depth) {
+    final matches = articles
+        .where(
+          (a) =>
+              a.originalId == article.id &&
+              a.depth == depth &&
+              (a.originalContentHash == null ||
+                  a.originalContentHash == article.contentHash),
+        )
+        .toList();
+    if (matches.isEmpty) return null;
+    return matches.last;
+  }
+
   Future<Map<String, dynamic>> estimate(
     ImportedArticle article,
     SummaryDepth depth,
@@ -125,16 +129,20 @@ class ArticleLibrary extends ChangeNotifier {
 
   Future<ImportedArticle> summarize(
     ImportedArticle article,
-    SummaryDepth depth,
-  ) {
-    final saved = savedSummary(article, depth);
-    if (saved != null) return Future.value(saved);
+    SummaryDepth depth, {
+    bool forceRegenerate = false,
+  }) {
+    if (!forceRegenerate) {
+      final saved = savedSummary(article, depth);
+      if (saved != null) return Future.value(saved);
+    }
     if (!summariesEnabled) {
       return Future.error(
         const ArticleImportException(articleSummariesDisabledMessage),
       );
     }
-    final key = '${article.id}:${article.contentHash}:${depth.name}';
+    final key =
+        '${article.id}:${article.contentHash}:${depth.name}:${forceRegenerate ? DateTime.now().microsecondsSinceEpoch : ""}';
     return _summaries.putIfAbsent(key, () async {
       try {
         final result = await ArticleSummaryClient(
@@ -142,6 +150,13 @@ class ArticleLibrary extends ChangeNotifier {
           enabled: summariesEnabled,
         ).summarize(article, depth);
         await (await store).save(result);
+        articles.removeWhere(
+          (a) =>
+              a.originalId == article.id &&
+              a.depth == depth &&
+              (a.originalContentHash == null ||
+                  a.originalContentHash == article.contentHash),
+        );
         articles.add(result);
         notifyListeners();
         return result;
@@ -150,4 +165,9 @@ class ArticleLibrary extends ChangeNotifier {
       }
     });
   }
+
+  Future<ImportedArticle> regenerateSummary(
+    ImportedArticle article,
+    SummaryDepth depth,
+  ) => summarize(article, depth, forceRegenerate: true);
 }
