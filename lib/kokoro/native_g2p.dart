@@ -65,6 +65,17 @@ class NativeG2p {
     return utf8.decode(bytes);
   }
 
+  static String? decodePhonemes(
+    MisakiFallbackVocab vocab,
+    int Function(List<int> decoderIds) predict,
+  ) {
+    final ids = <int>[MisakiFallbackVocab.bos];
+    while (!vocab.done(ids)) {
+      ids.add(predict(ids));
+    }
+    return vocab.phonemes(ids).$1;
+  }
+
   MisakiPs phonemize(String word) {
     if (_engine == nullptr) throw StateError('English fallback is closed');
     if (word.runes.any((r) => !allowed.contains(r))) {
@@ -87,22 +98,12 @@ class NativeG2p {
     final error = _buffer(4096);
     try {
       src.cast<Int64>().asTypedList(source.length).setAll(0, source);
-      final ids = <int>[MisakiFallbackVocab.bos];
-      while (ids.last != MisakiFallbackVocab.eos) {
-        if (ids.length >= vocab.maxPositions - 1) {
-          ids.add(MisakiFallbackVocab.eos);
-          break;
-        }
+      var phones = decodePhonemes(vocab, (ids) {
         dec.cast<Int64>().asTypedList(ids.length).setAll(0, ids);
         final id = _argmax(_engine, src.cast(), source.length, dec.cast(), ids.length, error.cast(), 4096);
         if (id < 0) throw StateError('English fallback: ${_read(error.cast(), 4096)}');
-        if (id == 0 || id == 3 || (id == MisakiFallbackVocab.bos && ids.length != 1)) {
-          ids.add(MisakiFallbackVocab.eos);
-          break;
-        }
-        ids.add(id);
-      }
-      var phones = vocab.phonemes(ids).$1;
+        return id;
+      });
       if (phones == null || phones.isEmpty) {
         phones = _spellOut(clean);
       }
