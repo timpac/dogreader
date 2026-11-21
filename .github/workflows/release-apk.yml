@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   apk:
-    if: (github.ref == 'refs/heads/dogreader-oct22-update' || github.ref == 'refs/heads/fix/156-progress-persistence' || github.ref == 'refs/heads/fix/160-epub-narration' || github.ref == 'refs/heads/build/161-chapter-narration' || github.ref == 'refs/heads/build/162-narration-queue-reliability' || github.ref == 'refs/heads/build/163-chapter-panel-refinement' || github.ref == 'refs/heads/build/163-tts-cost-tracker' || github.ref == 'refs/heads/build/164-light-mode-cost-tracker' || github.ref == 'refs/heads/build/165-rss-offline-kokoro' || github.ref == 'refs/heads/build/166-ai-article-summaries') && github.actor == github.repository_owner
+    if: (github.ref == 'refs/heads/dogreader-oct22-update' || github.ref == 'refs/heads/fix/156-progress-persistence' || github.ref == 'refs/heads/fix/160-epub-narration' || github.ref == 'refs/heads/build/161-chapter-narration' || github.ref == 'refs/heads/build/162-narration-queue-reliability' || github.ref == 'refs/heads/build/163-chapter-panel-refinement' || github.ref == 'refs/heads/build/163-tts-cost-tracker' || github.ref == 'refs/heads/build/164-light-mode-cost-tracker' || github.ref == 'refs/heads/build/165-rss-offline-kokoro' || github.ref == 'refs/heads/build/166-ai-article-summaries' || github.ref == 'refs/heads/build/167-kokoro-decoder-fix') && github.actor == github.repository_owner
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -50,7 +50,8 @@ jobs:
               'refs/heads/build/163-tts-cost-tracker',
               'refs/heads/build/164-light-mode-cost-tracker',
               'refs/heads/build/165-rss-offline-kokoro',
-              'refs/heads/build/166-ai-article-summaries'
+              'refs/heads/build/166-ai-article-summaries',
+              'refs/heads/build/167-kokoro-decoder-fix'
             ]);
             if (metadata.default_branch !== 'dogreader-oct22-update' || !allowedRefs.has(context.ref)) throw new Error('Authorized branch mismatch');
             if (Number(process.env.GITHUB_RUN_ATTEMPT) !== 1) throw new Error('Inspect retained assets before a new explicitly authorized dispatch; do not rerun');
@@ -64,6 +65,7 @@ jobs:
             if (context.ref === 'refs/heads/build/164-light-mode-cost-tracker' && number !== '164') throw new Error('This branch is authorized for build 164 only');
             if (context.ref === 'refs/heads/build/165-rss-offline-kokoro' && number !== '165') throw new Error('This branch is authorized for build 165 only');
             if (context.ref === 'refs/heads/build/166-ai-article-summaries' && number !== '166') throw new Error('This branch is authorized for build 166 only');
+            if (context.ref === 'refs/heads/build/167-kokoro-decoder-fix' && number !== '167') throw new Error('This branch is authorized for build 167 only');
             if (!/^[1-9][0-9]*$/.test(number) || Number(number) <= 135 || Number(number) > 2100000000) throw new Error('Invalid new Android versionCode');
             const releases = await github.paginate(github.rest.repos.listReleases, {owner, repo, per_page: 100});
             const tags = await github.paginate(github.rest.repos.listTags, {owner, repo, per_page: 100});
@@ -90,7 +92,10 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
           git merge-base --is-ancestor cdf4227dc6a966b20e24f61179ac953b22689024 HEAD
-          if [ "$GITHUB_REF" = refs/heads/build/166-ai-article-summaries ]; then
+          if [ "$GITHUB_REF" = refs/heads/build/167-kokoro-decoder-fix ]; then
+            git merge-base --is-ancestor b20a1a3fa19630ef02f5c6bb430557f5a5667eda HEAD
+            git merge-base --is-ancestor HEAD origin/build/167-kokoro-decoder-fix
+          elif [ "$GITHUB_REF" = refs/heads/build/166-ai-article-summaries ]; then
             git merge-base --is-ancestor 7a81a770cad85cfd4f7b001cc3f55d135a7f416d HEAD
             git merge-base --is-ancestor HEAD origin/build/166-ai-article-summaries
           elif [ "$GITHUB_REF" = refs/heads/build/165-rss-offline-kokoro ]; then
@@ -189,6 +194,7 @@ jobs:
             if (context.ref === 'refs/heads/build/164-light-mode-cost-tracker' && number !== '164') throw new Error('This branch is authorized for build 164 only');
             if (context.ref === 'refs/heads/build/165-rss-offline-kokoro' && number !== '165') throw new Error('This branch is authorized for build 165 only');
             if (context.ref === 'refs/heads/build/166-ai-article-summaries' && number !== '166') throw new Error('This branch is authorized for build 166 only');
+            if (context.ref === 'refs/heads/build/167-kokoro-decoder-fix' && number !== '167') throw new Error('This branch is authorized for build 167 only');
             const source = process.env.RELEASE_COMMIT;
             const tag = `v${number}`;
             const name = `Dogreader-${number}.apk`;
@@ -203,7 +209,9 @@ jobs:
             const apk = fs.readFileSync(`dist/${name}`);
             const sha256 = digest(apk);
             const run = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
-            const changelog = number === '166'
+            const changelog = number === '167'
+              ? 'Kokoro native BART G2P decoder alignment: aligns the Kokoro (Offline) native G2P decoder with vendored Misaki reference behavior by generating autoregressive decoder tokens until complete and filtering special tokens via vocabulary phonemes, preventing premature decoding stops on tokens 0, 3, or unexpected BOS; builds upon Build 166 AI Article Summaries and Summary Narration.\n\n'
+              : number === '166'
               ? 'AI Article Summaries & Summary Narration: adds fully functional on-demand AI article summaries in Brief (~3-5 sentences), Standard (~200-350 words), and Detailed (~500-800 words) depths using Gemini Flash via the Dogreader Cloud backend; includes in-card generation progress, clear error/retry handling, paywall and preview extraction safeguards, local summary caching, and full summary narration through Google Chirp 3 HD, Kokoro (Cloud), and Kokoro (Offline) with separate audio versioning and playback progress that never collides with original article reading or listening.\n\n'
               : number === '165'
               ? 'RSS Feeds & Writers + Offline Kokoro integration: integrates the RSS Feeds & Writers collapsible shelf at the top of the main library (with traditional orange RSS icon, unread count badge, feed and followed writer counts, OPML import/export, author following, natural-language priority rules, full-article extraction/RSS fallback, and narration entry points) and integrates the on-device Kokoro FP32 + Misaki English narration engine directly into the standard Narration Engine dropdown as Kokoro (Offline) with local voices (Heart, Michael, Emma), complete chapter WAV generation in an isolated foreground service, model readiness/download controls, zero cloud configuration or billing requirements, and full preservation of Build 164 library and narration data.\n\n'
