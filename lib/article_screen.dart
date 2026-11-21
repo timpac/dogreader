@@ -249,75 +249,49 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
           if (article.originalUrl != null &&
               article.originalUrl != article.sourceUrl)
             SelectableText('Imported URL: ${article.originalUrl}'),
-          if (article.blocks.any((b) => b.spans.any((s) => s.url != null)))
-            ExpansionTile(
-              title: const Text('Article links'),
-              children: [
-                for (final block in article.blocks)
-                  for (final span in block.spans.where((s) => s.url != null))
-                    ListTile(
-                      title: Text(block.text.substring(span.start, span.end)),
-                      subtitle: SelectableText(span.url!),
-                    ),
-              ],
-            ),
-          const SizedBox(height: 12),
-          if (article.depth != null) ...[
-            Text(
-              'AI summary · ${article.depth!.label}. Check important details against the original.',
-            ),
-            if (article.usage?['costUsd'] is num)
-              Text(
-                'AI usage: US\$${(article.usage!['costUsd'] as num).toStringAsFixed(5)}',
-              ),
-          ],
-          FilledButton(
-            onPressed: () => widget.openArticle(article, false),
-            child: Text(
-              article.depth == null ? 'Read original' : 'Read summary',
-            ),
-          ),
-          OutlinedButton.icon(
-            onPressed: () => widget.openArticle(article, true),
-            icon: const Icon(Icons.record_voice_over),
-            label: const Text('Generate / listen to narration'),
-          ),
-          if (article.depth != null && original != null)
-            TextButton(
-              onPressed: () => widget.openArticle(original, false),
-              child: const Text('Read original article'),
-            ),
+          const SizedBox(height: 16),
+
+          // AI Summary Controls (directly below title/metadata, before article reading/actions)
           if (article.depth == null) ...[
-            const Divider(height: 32),
             Text('AI summary', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 4),
             const Text(
               'Choose how much detail to keep. AI summaries may contain errors; the original remains available.',
             ),
             const SizedBox(height: 12),
-            Text('${depth.label}: ${depth.description}'),
-            Slider(
-              value: depth.index.toDouble(),
-              min: 0,
-              max: 2,
-              divisions: 2,
-              label: depth.label,
+            DropdownButtonFormField<SummaryDepth>(
+              key: ValueKey('article-summary-depth-$depth'),
+              initialValue: depth,
+              decoration: const InputDecoration(
+                labelText: 'Summary depth',
+                isDense: true,
+                border: OutlineInputBorder(),
+                contentPadding:
+                    EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              ),
+              items: [
+                for (final d in SummaryDepth.values)
+                  DropdownMenuItem(
+                    value: d,
+                    child: Text(d.label),
+                  ),
+              ],
               onChanged: busy
                   ? null
                   : (value) => setState(() {
-                      depth = SummaryDepth.values[value.round()];
-                      estimate = null;
-                      notice = null;
-                    }),
+                        if (value != null) {
+                          depth = value;
+                          estimate = null;
+                          notice = null;
+                        }
+                      }),
             ),
-            const Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [Text('Brief'), Text('Standard'), Text('Detailed')],
-            ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
             if (saved != null) ...[
               const Text(
                 'Saved summary available offline. No new AI request needed.',
               ),
+              const SizedBox(height: 8),
               FilledButton(
                 onPressed: () => widget.openArticle(saved, false),
                 child: const Text('Read saved summary'),
@@ -350,7 +324,47 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                 padding: const EdgeInsets.only(top: 12),
                 child: Text(notice!),
               ),
+            const Divider(height: 32),
           ],
+
+          if (article.depth != null) ...[
+            Text(
+              'AI summary · ${article.depth!.label}. Check important details against the original.',
+            ),
+            if (article.usage?['costUsd'] is num)
+              Text(
+                'AI usage: US\$${(article.usage!['costUsd'] as num).toStringAsFixed(5)}',
+              ),
+            const SizedBox(height: 12),
+          ],
+          FilledButton(
+            onPressed: () => widget.openArticle(article, false),
+            child: Text(
+              article.depth == null ? 'Read original' : 'Read summary',
+            ),
+          ),
+          OutlinedButton.icon(
+            onPressed: () => widget.openArticle(article, true),
+            icon: const Icon(Icons.record_voice_over),
+            label: const Text('Generate / listen to narration'),
+          ),
+          if (article.depth != null && original != null)
+            TextButton(
+              onPressed: () => widget.openArticle(original, false),
+              child: const Text('Read original article'),
+            ),
+          if (article.blocks.any((b) => b.spans.any((s) => s.url != null)))
+            ExpansionTile(
+              title: const Text('Article links'),
+              children: [
+                for (final block in article.blocks)
+                  for (final span in block.spans.where((s) => s.url != null))
+                    ListTile(
+                      title: Text(block.text.substring(span.start, span.end)),
+                      subtitle: SelectableText(span.url!),
+                    ),
+              ],
+            ),
         ],
       ),
     );
