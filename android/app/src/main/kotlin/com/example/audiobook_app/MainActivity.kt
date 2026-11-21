@@ -2,6 +2,7 @@ package com.example.audiobook_app
 
 import com.ryanheise.audioservice.AudioServiceActivity
 import android.content.Intent
+import android.net.Uri
 import android.support.v4.media.session.MediaControllerCompat
 import androidx.core.content.FileProvider
 import io.flutter.embedding.engine.FlutterEngine
@@ -56,7 +57,7 @@ class MainActivity : AudioServiceActivity() {
                     else -> result.notImplemented()
                 }
             }
-        acceptShare(intent)
+        acceptArticleIntent(intent)
         shareChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dogreader/article_share")
         shareChannel?.setMethodCallHandler { call, result ->
             if (call.method == "takePendingTexts") {
@@ -104,13 +105,38 @@ class MainActivity : AudioServiceActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        acceptShare(intent)
+        acceptArticleIntent(intent)
     }
 
-    private fun acceptShare(shared: Intent?) {
-        if (shared?.action != Intent.ACTION_SEND || shared.type != "text/plain") return
-        val text = shared.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString() ?: return
-        shared.removeExtra(Intent.EXTRA_TEXT)
+    private fun webUrl(uri: Uri?): String? =
+        uri?.takeIf {
+            !it.host.isNullOrEmpty() &&
+                (it.scheme.equals("http", ignoreCase = true) ||
+                    it.scheme.equals("https", ignoreCase = true))
+        }?.toString()
+
+    private fun acceptArticleIntent(shared: Intent?) {
+        if (shared == null) return
+        val text = when (shared.action) {
+            Intent.ACTION_VIEW -> webUrl(shared.data) ?: return
+            Intent.ACTION_SEND -> {
+                if (shared.type != "text/plain") return
+                buildList {
+                    shared.getCharSequenceExtra(Intent.EXTRA_TEXT)?.let { add(it.toString()) }
+                    shared.clipData?.let { clip ->
+                        for (index in 0 until minOf(clip.itemCount, 4)) {
+                            val item = clip.getItemAt(index)
+                            item.text?.let { add(it.toString()) }
+                            webUrl(item.uri)?.let { add(it) }
+                        }
+                    }
+                    webUrl(shared.data)?.let { add(it) }
+                }.distinct().joinToString("\n")
+            }
+            else -> return
+        }
+        // The current intent can be seen again if Flutter reattaches to this activity.
+        shared.action = null
         if (shareListenerReady) shareChannel?.invokeMethod("sharedText", text)
         else pendingShares.add(text)
     }

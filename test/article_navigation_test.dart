@@ -12,113 +12,183 @@ import 'package:flutter_test/flutter_test.dart';
 import 'article_import_test.dart' show fixture;
 
 class SingleArticleFetcher extends ArticleFetcher {
-  int calls = 0;
+  final calls = <String>[];
   @override
   Future<ImportedArticle> fetch(String url) async {
-    calls++;
+    calls.add(url);
+    if (url.endsWith('/restricted')) {
+      throw const ArticleAccessException('This article requires sign-in.');
+    }
     return fixture();
   }
 }
 
-void main() {
-  testWidgets(
-    'shared prefill and pasted URL use the same deduplicating import pipeline',
-    (tester) async {
-      final root = (await tester.runAsync(
-        () => Directory.systemTemp.createTemp('article-entry-'),
-      ))!;
-      final fetcher = SingleArticleFetcher();
-      final library = ArticleLibrary(Future.value(root), fetcher: fetcher);
-      Future<void> settleImport() async {
-        for (
-          var i = 0;
-          i < 50 &&
-              library.jobs.any(
-                (j) => j.status == 'Waiting' || j.status == 'Importing',
-              );
-          i++
-        ) {
-          await tester.pump();
-          await tester.runAsync(
-            () => Future<void>.delayed(const Duration(milliseconds: 10)),
-          );
-        }
-        await tester.pumpAndSettle();
-        expect(library.jobs.single.status, 'Saved');
-      }
-
-      try {
-        await tester.pumpWidget(
-          MaterialApp(
-            home: ArticleImportScreen(
-              initialUrl: 'https://example.org/trial?utm_source=chrome',
-              library: library,
-              openArticle: (_, _) {},
-            ),
-          ),
+Future<void> settleImports(WidgetTester tester, ArticleLibrary library) async {
+  await tester.pump();
+  for (
+    var i = 0;
+    i < 50 &&
+        library.jobs.any(
+          (j) => j.status == 'Waiting' || j.status == 'Importing',
         );
-        await tester.tap(find.text('Import article'));
-        await settleImport();
-        await tester.enterText(
-          find.byType(TextField),
-          'https://example.org/trial#paragraph',
-        );
-        await tester.tap(find.text('Import article'));
-        await settleImport();
-        expect(fetcher.calls, 1);
-        expect(library.jobs.length, 1);
-        expect(library.articles.single.text, fixture().text);
-        expect(
-          (await tester.runAsync(() async => (await library.store).load()))!
-              .length,
-          1,
-        );
-        await tester.pumpWidget(const SizedBox());
-      } finally {
-        library.dispose();
-        await tester.runAsync(() => root.delete(recursive: true));
-      }
-    },
+    i++
+  ) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 10)),
+    );
+    await tester.pump();
+  }
+  expect(
+    library.jobs.where((j) => j.status == 'Waiting' || j.status == 'Importing'),
+    isEmpty,
   );
-  testWidgets(
-    'library routes cold and idle warm shares to a prefilled import screen',
-    (tester) async {
-      final messenger =
-          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-      messenger.setMockMethodCallHandler(
-        ArticleShare.channel,
-        (_) async => ['https://example.org/cold'],
+  await tester.pumpAndSettle();
+}
+
+void main() {
+  testWidgets('manual paste saves an offline original and reuses it', (
+    tester,
+  ) async {
+    final root = (await tester.runAsync(
+      () => Directory.systemTemp.createTemp('article-entry-'),
+    ))!;
+    final fetcher = SingleArticleFetcher();
+    final library = ArticleLibrary(Future.value(root), fetcher: fetcher);
+    final messenger = tester.binding.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.getData') {
+        return {
+          'text':
+              'A careful trial\nhttps://example.org/trial?utm_source=chrome',
+        };
+      }
+      return null;
+    });
+    final opened = <(ImportedArticle, bool)>[];
+
+    try {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ArticleImportScreen(
+            library: library,
+            openArticle: (article, narration) =>
+                opened.add((article, narration)),
+          ),
+        ),
       );
-      await tester.pumpWidget(const MaterialApp(home: LibraryScreen()));
-      await tester.pumpAndSettle();
-      expect(find.byType(ArticleImportScreen), findsOneWidget);
+      await tester.tap(find.byTooltip('Paste article URL'));
+      await tester.pump();
       expect(
-        tester.widget<TextField>(find.byType(TextField)).controller!.text,
-        'https://example.org/cold',
+          find.text('https://example.org/trial'),
+        findsOneWidget,
       );
-      await tester.pageBack();
-      await tester.pumpAndSettle();
-      expect(tester.binding.hasScheduledFrame, isFalse);
+      expect(fetcher.calls, isEmpty);
+      await tester.tap(find.text('Import article'));
+      await settleImports(tester, library);
+
+      await tester.enterText(
+        find.byType(TextField),
+        'https://example.org/trial#paragraph',
+      );
+      await tester.tap(find.text('Import article'));
+      await settleImports(tester, library);
+      expect(fetcher.calls, ['https://example.org/trial']);
+      expect(library.jobs.single.status, 'Saved');
+      final saved = library.articles.single;
+      expect(saved.toJson(), fixture().toJson());
+      final restored = (await tester.runAsync(
+        () async => (await library.store).load(),
+      ))!;
+      expect(restored.single.toJson(), saved.toJson());
+
+      final read = find.widgetWithText(TextButton, 'Read');
+      await tester.ensureVisible(read);
+      await tester.tap(read);
+      expect(opened, [(saved, false)]);
+    } finally {
+      await tester.pumpWidget(const SizedBox());
+      messenger.setMockMethodCallHandler(SystemChannels.platform, null);
+      library.dispose();
+      await tester.runAsync(() => root.delete(recursive: true));
+    }
+  });
+
+  testWidgets('cold, warm and reattached shares import automatically', (
+    tester,
+  ) async {
+    final root = (await tester.runAsync(
+      () => Directory.systemTemp.createTemp('article-share-'),
+    ))!;
+    final fetcher = SingleArticleFetcher();
+    final library = ArticleLibrary(Future.value(root), fetcher: fetcher);
+    final messenger = tester.binding.defaultBinaryMessenger;
+    final pending = ['A careful trial\nhttps://example.org/trial'];
+    messenger.setMockMethodCallHandler(ArticleShare.channel, (_) async {
+      final batch = pending.toList();
+      pending.clear();
+      return batch;
+    });
+    Future<void> share(String text) async {
       await messenger.handlePlatformMessage(
         ArticleShare.channel.name,
         const StandardMethodCodec().encodeMethodCall(
-          const MethodCall(
-            'sharedText',
-            'From Chrome https://example.org/warm',
-          ),
+          MethodCall('sharedText', text),
         ),
         (_) {},
       );
-      // A method-channel callback must wake an idle UI, not wait for a tap/reflow.
-      expect(tester.binding.hasScheduledFrame, isTrue);
-      await tester.pumpAndSettle();
-      expect(find.byType(ArticleImportScreen), findsOneWidget);
-      expect(
-        tester.widget<TextField>(find.byType(TextField)).controller!.text,
-        'https://example.org/warm',
+    }
+
+    try {
+      await tester.pumpWidget(
+        MaterialApp(home: LibraryScreen(articleLibrary: library)),
       );
+      await settleImports(tester, library);
+      expect(find.byType(ArticleImportScreen), findsOneWidget);
+      expect(library.jobs.single.status, 'Saved');
+
+      await share('From Chrome (https://example.org/trial?utm_source=chrome).');
+      await settleImports(tester, library);
+      expect(library.jobs.length, 1);
+      expect(fetcher.calls, ['https://example.org/trial']);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(find.byType(ArticleImportScreen), findsNothing);
+      expect(
+        find.widgetWithText(OutlinedButton, 'Import a web article'),
+        findsOneWidget,
+      );
+
+      await share('Text without a web address');
+      await tester.pumpAndSettle();
+      expect(find.byType(ArticleImportScreen), findsNothing);
+      expect(find.textContaining('Share a public article URL'), findsOneWidget);
+
+      await share('https://example.org/restricted');
+      await settleImports(tester, library);
+      expect(find.byType(ArticleImportScreen), findsOneWidget);
+      expect(find.text('This article requires sign-in.'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Retry'), findsOneWidget);
+      expect(library.articles.length, 1);
+      expect(fetcher.calls, [
+        'https://example.org/trial',
+        'https://example.org/restricted',
+      ]);
+
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      pending.add('https://example.org/trial');
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await settleImports(tester, library);
+      expect(pending, isEmpty);
+      expect(find.byType(ArticleImportScreen), findsOneWidget);
+      expect(library.articles.length, 1);
+      expect(fetcher.calls.length, 2);
+    } finally {
       await tester.pumpWidget(const SizedBox());
       messenger.setMockMethodCallHandler(ArticleShare.channel, null);
-    },
-  );
+      library.dispose();
+      await tester.runAsync(() => root.delete(recursive: true));
+    }
+  });
 }
