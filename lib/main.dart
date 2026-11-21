@@ -985,9 +985,11 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
                         try {
                           await articles.removeArticle(article);
                         } catch (_) {
-                          if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Could not remove this article.')),
-                          );
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Could not remove this article.')),
+                            );
+                          }
                         }
                       },
                     ),
