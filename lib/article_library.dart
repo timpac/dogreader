@@ -47,8 +47,26 @@ class ArticleLibrary extends ChangeNotifier {
     notifyListeners();
   })();
 
+  ImportedArticle? _savedArticle(Uri url) => articles.where((article) {
+    if (article.depth != null) return false;
+    return [article.sourceUrl, article.originalUrl].whereType<String>().any((
+      savedUrl,
+    ) {
+      final saved = Uri.tryParse(savedUrl);
+      if (saved == null) return false;
+      try {
+        return sameArticleUrl(saved, url);
+      } on ArticleImportException {
+        return false;
+      } on FormatException {
+        return false;
+      }
+    });
+  }).firstOrNull;
+
   ArticleImportJob enqueue(String value) {
-    final url = normalizedArticleUrl(articleUrl(value));
+    final uri = articleUrl(value);
+    final url = normalizedArticleUrl(uri);
     final existing = jobs
         .where((j) => j.url == url && j.error == null)
         .firstOrNull;
@@ -61,25 +79,10 @@ class ArticleLibrary extends ChangeNotifier {
         await load();
         job.status = 'Importing';
         notifyListeners();
-        var article = articles
-            .where(
-              (a) =>
-                  a.depth == null &&
-                  sameArticleUrl(Uri.parse(a.sourceUrl), Uri.parse(url)),
-            )
-            .firstOrNull;
+        var article = _savedArticle(uri);
         if (article == null) {
           final fetched = await fetcher.fetch(url);
-          article = articles
-              .where(
-                (a) =>
-                    a.depth == null &&
-                    sameArticleUrl(
-                      Uri.parse(a.sourceUrl),
-                      Uri.parse(fetched.sourceUrl),
-                    ),
-              )
-              .firstOrNull;
+          article = _savedArticle(Uri.parse(fetched.sourceUrl));
           if (article == null) {
             await (await store).save(fetched);
             articles.add(fetched);

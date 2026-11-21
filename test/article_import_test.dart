@@ -254,6 +254,23 @@ void main() {
     ArticleShare.stop();
     messenger.setMockMethodCallHandler(ArticleShare.channel, null);
   });
+  test('extracts public links from bare, captioned and wrapped share text', () {
+    expect(
+      sharedArticleUrl(' Story title\nHTTPS://example.org/story?id=7#section '),
+      'https://example.org/story?id=7',
+    );
+    expect(
+      sharedArticleUrl('Read this (https://example.org/wiki/Title_(book)).'),
+      'https://example.org/wiki/Title_(book)',
+    );
+    expect(
+      sharedArticleUrl('Internal http://127.0.0.1/a\nhttps://t.co/story'),
+      'https://t.co/story',
+    );
+    expect(sharedArticleUrl('file:///path'), isNull);
+    expect(sharedArticleUrl('https://user:password@example.org'), isNull);
+    expect(sharedArticleUrl('https://example.org/a?q=%E0'), isNull);
+  });
   test(
     'atomic article and all summary depths restore with distinct narration IDs',
     () async {
@@ -330,4 +347,31 @@ void main() {
       }
     },
   );
+  test('original share URL reuses a canonical import after restart', () async {
+    final root = await Directory.systemTemp.createTemp('article-alias-');
+    final fetcher = ControlledFetcher();
+    const alias = 'https://t.co/example';
+    final original = extractArticle(
+      page(),
+      Uri.parse('https://example.org/trial'),
+      originalSource: Uri.parse(alias),
+    );
+    fetcher.first.complete(original);
+    final library = ArticleLibrary(Future.value(root), fetcher: fetcher);
+    final restarted = ArticleLibrary(Future.value(root), fetcher: fetcher);
+    try {
+      library.enqueue(alias);
+      await library.settled;
+      final duplicate = restarted.enqueue('$alias?utm_source=share#section');
+      final canonical = restarted.enqueue('https://example.org/trial');
+      await restarted.settled;
+      expect(fetcher.calls, [alias]);
+      expect(duplicate.article, same(canonical.article));
+      expect(restarted.articles.single.toJson(), original.toJson());
+    } finally {
+      library.dispose();
+      restarted.dispose();
+      await root.delete(recursive: true);
+    }
+  });
 }
