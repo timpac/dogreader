@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   apk:
-    if: (github.ref == 'refs/heads/dogreader-oct22-update' || github.ref == 'refs/heads/fix/156-progress-persistence' || github.ref == 'refs/heads/fix/160-epub-narration' || github.ref == 'refs/heads/build/161-chapter-narration' || github.ref == 'refs/heads/build/162-narration-queue-reliability' || github.ref == 'refs/heads/build/163-chapter-panel-refinement' || github.ref == 'refs/heads/build/163-tts-cost-tracker' || github.ref == 'refs/heads/build/164-light-mode-cost-tracker' || github.ref == 'refs/heads/build/165-rss-offline-kokoro' || github.ref == 'refs/heads/build/166-ai-article-summaries' || github.ref == 'refs/heads/build/167-kokoro-decoder-fix') && github.actor == github.repository_owner
+    if: (github.ref == 'refs/heads/dogreader-oct22-update' || github.ref == 'refs/heads/fix/156-progress-persistence' || github.ref == 'refs/heads/fix/160-epub-narration' || github.ref == 'refs/heads/build/161-chapter-narration' || github.ref == 'refs/heads/build/162-narration-queue-reliability' || github.ref == 'refs/heads/build/163-chapter-panel-refinement' || github.ref == 'refs/heads/build/163-tts-cost-tracker' || github.ref == 'refs/heads/build/164-light-mode-cost-tracker' || github.ref == 'refs/heads/build/165-rss-offline-kokoro' || github.ref == 'refs/heads/build/166-ai-article-summaries' || github.ref == 'refs/heads/build/167-kokoro-decoder-fix' || github.ref == 'refs/heads/build/168-article-import') && github.actor == github.repository_owner
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -51,7 +51,8 @@ jobs:
               'refs/heads/build/164-light-mode-cost-tracker',
               'refs/heads/build/165-rss-offline-kokoro',
               'refs/heads/build/166-ai-article-summaries',
-              'refs/heads/build/167-kokoro-decoder-fix'
+              'refs/heads/build/167-kokoro-decoder-fix',
+              'refs/heads/build/168-article-import'
             ]);
             if (metadata.default_branch !== 'dogreader-oct22-update' || !allowedRefs.has(context.ref)) throw new Error('Authorized branch mismatch');
             if (Number(process.env.GITHUB_RUN_ATTEMPT) !== 1) throw new Error('Inspect retained assets before a new explicitly authorized dispatch; do not rerun');
@@ -66,6 +67,7 @@ jobs:
             if (context.ref === 'refs/heads/build/165-rss-offline-kokoro' && number !== '165') throw new Error('This branch is authorized for build 165 only');
             if (context.ref === 'refs/heads/build/166-ai-article-summaries' && number !== '166') throw new Error('This branch is authorized for build 166 only');
             if (context.ref === 'refs/heads/build/167-kokoro-decoder-fix' && number !== '167') throw new Error('This branch is authorized for build 167 only');
+            if (context.ref === 'refs/heads/build/168-article-import' && number !== '168') throw new Error('This branch is authorized for build 168 only');
             if (!/^[1-9][0-9]*$/.test(number) || Number(number) <= 135 || Number(number) > 2100000000) throw new Error('Invalid new Android versionCode');
             const releases = await github.paginate(github.rest.repos.listReleases, {owner, repo, per_page: 100});
             const tags = await github.paginate(github.rest.repos.listTags, {owner, repo, per_page: 100});
