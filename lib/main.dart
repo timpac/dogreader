@@ -874,6 +874,19 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
                         ),
                       ),
                     ],
+                    const SizedBox(height: 12),
+                    LinearProgressIndicator(
+                      value: estimate.azureAllowanceUsedFraction,
+                      minHeight: 6,
+                      borderRadius: BorderRadius.circular(3),
+                      color: estimate.azureAllowanceExhausted
+                          ? colors.error
+                          : colors.secondary,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Azure F0 free tier: ${formatCharacterCount(estimate.usedAzureCharacters)} / ${formatCharacterCount(estimate.azureFreeCharacterLimit)} chars (${formatCharacterCount(estimate.azureCharactersRemaining)} left • \$0.00)',
+                    ),
                     if (estimate.usedKokoroCharacters > 0) ...[
                       const SizedBox(height: 4),
                       Text(
