@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 const narrationEngines = {
   'google': 'Google Chirp',
+  'azure': 'Azure Neural',
   'kokoro': 'Kokoro',
   'kokoro_offline': 'Kokoro (Offline)',
 };
@@ -12,6 +13,14 @@ const narrationVoices = <String, Map<String, String>>{
     'en-US-Chirp3-HD-Kore': 'Kore',
     'en-US-Chirp3-HD-Puck': 'Puck',
     'en-GB-Wavenet-B': 'Oliver (Cheap)',
+  },
+  'azure': {
+    'en-US-AndrewMultilingualNeural': 'Andrew (US)',
+    'en-US-AvaMultilingualNeural': 'Ava (US)',
+    'en-US-BrianMultilingualNeural': 'Brian (US)',
+    'en-US-EmmaMultilingualNeural': 'Emma (US)',
+    'en-GB-RyanNeural': 'Ryan (UK)',
+    'en-GB-SoniaNeural': 'Sonia (UK)',
   },
   'kokoro': {
     'bm_george': 'George',

@@ -255,6 +255,106 @@ void main() {
       expect(tracker.estimate().coveredCharactersRemaining, 833333);
     },
   );
+
+  test(
+    'Azure F0 500,000 monthly free characters are tracked independently from Google and persist across restarts',
+    () async {
+      const azurePref = NarrationPreference(
+        'azure',
+        'en-US-AndrewMultilingualNeural',
+      );
+      final initial = tracker.estimate(preference: azurePref);
+      expect(initial.azureFreeCharacterLimit, 500000);
+      expect(initial.usedAzureCharacters, 0);
+      expect(initial.azureCharactersRemaining, 500000);
+      expect(initial.shouldSwitchFromAzure, isFalse);
+
+      expect(
+        await tracker.recordSubmission(
+          jobId: 'azure-job-1',
+          engine: 'azure',
+          voice: 'en-US-AndrewMultilingualNeural',
+          characters: 420000,
+        ),
+        isTrue,
+      );
+      // Duplicate jobId is ignored; Google usage remains untouched.
+      expect(
+        await tracker.recordSubmission(
+          jobId: 'azure-job-1',
+          engine: 'azure',
+          voice: 'en-US-AndrewMultilingualNeural',
+          characters: 420000,
+        ),
+        isFalse,
+      );
+      expect(tracker.estimate().usedGoogleCharacters, 0);
+
+      final nearCap = tracker.estimate(
+        preference: azurePref,
+        selectionCharacters: 100000,
+      );
+      expect(nearCap.usedAzureCharacters, 420000);
+      expect(nearCap.azureCharactersRemaining, 80000);
+      expect(nearCap.selectionExceedsAzureAllowance, isTrue);
+      expect(nearCap.azureUncoveredCharacters, 20000);
+      expect(nearCap.shouldSwitchFromAzure, isTrue);
+      expect(nearCap.monthlyAllowanceSummary(), contains('Azure F0'));
+      expect(nearCap.selectionImpactSummary(), contains('exceeds Azure F0'));
+
+      final reopened = NarrationCostTracker(
+        usageFile: () async => File('${root.path}/narration_cost.json'),
+        clock: () => now,
+      );
+      await reopened.load();
+      expect(reopened.estimate(preference: azurePref).usedAzureCharacters, 420000);
+
+      // Next month resets Azure F0 allowance cleanly.
+      now = DateTime.utc(2026, 12, 1);
+      expect(reopened.estimate(preference: azurePref).usedAzureCharacters, 0);
+      expect(
+        reopened.estimate(preference: azurePref).azureCharactersRemaining,
+        500000,
+      );
+    },
+  );
+
+  testWidgets(
+    'NarrationCostBanner displays Azure F0 allowance and offers switching when exhausted',
+    (tester) async {
+      await tester.runAsync(
+        () => tracker.setMonthUsage(azureCharacters: 480000),
+      );
+      var preference = const NarrationPreference(
+        'azure',
+        'en-US-AndrewMultilingualNeural',
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StatefulBuilder(
+            builder: (context, setState) => Scaffold(
+              body: NarrationCostBanner(
+                tracker: tracker,
+                preference: preference,
+                selectionCharacters: 40000,
+                onSwitchToKokoro: (next) => setState(() => preference = next),
+                onAdjustBudget: () =>
+                    showNarrationBudgetDialog(context, tracker: tracker),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.textContaining('Azure F0 500k free tier used up'), findsOneWidget);
+      expect(find.byKey(const ValueKey('switch-to-google-button')), findsOneWidget);
+      expect(find.byKey(const ValueKey('switch-to-kokoro-button')), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('switch-to-google-button')));
+      await tester.pumpAndSettle();
+      expect(preference.engine, 'google');
+    },
+  );
 }
 
 class _RealHttp extends HttpOverrides {}
