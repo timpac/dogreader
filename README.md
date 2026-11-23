@@ -50,10 +50,17 @@ This feature has no APK or backend deployment yet.
 
 ## Article import and integration status
 
-Paste an article URL from the library or share a URL from Android. Saved articles
-and cached summaries use the existing reader and narration queue, with separate
-reading positions, audio and dictionary scopes. AI summary generation stays
-disabled pending separately approved backend integration and rollout.
+Choose **Import a web article** near the top of the library to paste a link.
+From another Android app, choose **Share → Dogreader** to start importing
+immediately. The import screen shows progress and lets you read a saved
+article or retry a failed import. Saved articles are available offline.
+Summary and narration generation are separate actions.
+
+The sending app and Android control which share targets appear. If an app
+offers only a custom share menu, use its system-share or copy-link option.
+On Android 12 and later, tapping ordinary web links generally opens the
+default browser. Import uses public access and cannot use your browser's
+sign-in session or bypass a paywall.
 
 Whole-book planning helpers are included as inactive library code only. There is
 no new whole-book UI, submission or recovery workflow. PR #22's reverse

@@ -1131,8 +1131,11 @@ class _RssArticleReadingScreenState extends State<RssArticleReadingScreen> {
               if (article.contentStatus.showsDiagnosticBanner)
                 _buildDiagnosticBanner(context, article, isExtracting),
 
+              // On-Demand AI Summary Section (directly below title/metadata, before article body)
+              _buildSummaryCard(context, article),
+              const SizedBox(height: 20),
+
               // Article Body Blocks
-              const SizedBox(height: 8),
               if (article.blocks.isEmpty && article.summaryPreview.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 16),
@@ -1143,13 +1146,6 @@ class _RssArticleReadingScreenState extends State<RssArticleReadingScreen> {
                 ),
               for (final block in article.blocks)
                 _buildArticleBlock(context, block),
-
-              const SizedBox(height: 24),
-              const Divider(),
-              const SizedBox(height: 12),
-
-              // On-Demand AI Summary Section
-              _buildSummaryCard(context, article),
 
               const SizedBox(height: 16),
               // Original Source Footer
@@ -1540,16 +1536,31 @@ class _RssArticleReadingScreenState extends State<RssArticleReadingScreen> {
               ],
             ),
             const SizedBox(height: 10),
-            SegmentedButton<SummaryDepth>(
-              segments: [
+            DropdownButtonFormField<SummaryDepth>(
+              key: ValueKey('rss-summary-depth-$_selectedSummaryDepth'),
+              initialValue: _selectedSummaryDepth,
+              decoration: const InputDecoration(
+                labelText: 'Summary depth',
+                isDense: true,
+                border: OutlineInputBorder(),
+                contentPadding:
+                    EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              ),
+              items: [
                 for (final d in SummaryDepth.values)
-                  ButtonSegment(value: d, label: Text(d.label)),
+                  DropdownMenuItem(
+                    value: d,
+                    child: Text(d.label),
+                  ),
               ],
-              selected: {_selectedSummaryDepth},
-              onSelectionChanged: (s) => setState(() {
-                _selectedSummaryDepth = s.first;
-                _summaryError = null;
-              }),
+              onChanged: _isGeneratingSummary
+                  ? null
+                  : (s) => setState(() {
+                        if (s != null) {
+                          _selectedSummaryDepth = s;
+                          _summaryError = null;
+                        }
+                      }),
             ),
             const SizedBox(height: 12),
             if (isPaywalled) ...[

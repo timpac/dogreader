@@ -404,17 +404,17 @@ void main() {
 
       // 1. Initial State: Shows On-Demand AI Article Summary section
       expect(find.text('On-Demand AI Article Summary'), findsOneWidget);
-      expect(find.text('Brief'), findsOneWidget);
+      expect(find.byType(DropdownButtonFormField<SummaryDepth>), findsOneWidget);
       expect(find.text('Standard'), findsOneWidget);
-      expect(find.text('Detailed'), findsOneWidget);
 
       // Standard is default; shows Generate Standard Summary button
       expect(find.text('Generate Standard Summary'), findsOneWidget);
 
-      // Tap to switch to Brief depth
-      await tester.tap(find.text('Brief'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 50));
+      // Select Brief depth from dropdown
+      await tester.tap(find.byType(DropdownButtonFormField<SummaryDepth>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Brief').last);
+      await tester.pumpAndSettle();
       expect(find.text('Generate Brief Summary'), findsOneWidget);
 
       // Tap Generate Brief Summary
@@ -440,16 +440,18 @@ void main() {
       expect(openedArticle!.depth, SummaryDepth.brief);
       expect(openedForNarration, isTrue);
 
-      // Switch to Detailed depth (not generated yet)
-      await tester.tap(find.text('Detailed'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 50));
+      // Switch to Detailed depth from dropdown (not generated yet)
+      await tester.tap(find.byType(DropdownButtonFormField<SummaryDepth>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Detailed').last);
+      await tester.pumpAndSettle();
       expect(find.text('Generate Detailed Summary'), findsOneWidget);
 
-      // Switch back to Brief depth (cached summary restored instantly)
-      await tester.tap(find.text('Brief'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 50));
+      // Switch back to Brief depth from dropdown (cached summary restored instantly)
+      await tester.tap(find.byType(DropdownButtonFormField<SummaryDepth>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Brief').last);
+      await tester.pumpAndSettle();
       expect(find.textContaining('Cached Brief AI Summary'), findsOneWidget);
       expect(find.text('Listen to Summary'), findsOneWidget);
 

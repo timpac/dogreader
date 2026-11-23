@@ -231,7 +231,7 @@ void main() {
     }
   });
   testWidgets(
-    'summary depth slider reviews usage before generation and opens saved text',
+    'summary depth dropdown reviews usage before generation and opens saved text',
     (tester) async {
       final original = fixture();
       final library = ScreenLibrary(Future.value(root));
@@ -245,19 +245,12 @@ void main() {
           ),
         ),
       );
-      await tester.scrollUntilVisible(
-        find.byType(Slider),
-        200,
-        scrollable: find.byType(Scrollable).first,
-      );
-      final slider = tester.widget<Slider>(find.byType(Slider));
-      slider.onChanged!(0);
-      await tester.pump();
-      await tester.scrollUntilVisible(
-        find.text('Review AI usage'),
-        200,
-        scrollable: find.byType(Scrollable).first,
-      );
+      expect(find.byType(DropdownButtonFormField<SummaryDepth>), findsOneWidget);
+      await tester.tap(find.byType(DropdownButtonFormField<SummaryDepth>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Brief').last);
+      await tester.pumpAndSettle();
+      expect(find.text('Review AI usage'), findsOneWidget);
       await tester.tap(find.text('Review AI usage'));
       await tester.pumpAndSettle();
       expect(library.reviewed, [SummaryDepth.brief]);
