@@ -90,9 +90,22 @@ class _ArticleImportScreenState extends State<ArticleImportScreen> {
             height: 20,
             child: CircularProgressIndicator(strokeWidth: 2),
           ),
-          'Could not import' => TextButton(
-            onPressed: () => widget.library.enqueue(job.url),
-            child: const Text('Retry'),
+          'Could not import' => Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextButton(
+                onPressed: () {
+                  widget.library.enqueue(job.url);
+                  widget.library.dismissFailed(job);
+                },
+                child: const Text('Retry'),
+              ),
+              IconButton(
+                tooltip: 'Dismiss failed import',
+                onPressed: () => widget.library.dismissFailed(job),
+                icon: const Icon(Icons.close),
+              ),
+            ],
           ),
           _ when article != null => TextButton(
             onPressed: () => widget.openArticle(article, false),

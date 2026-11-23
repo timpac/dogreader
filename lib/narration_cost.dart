@@ -9,6 +9,7 @@ import 'narration_options.dart';
 import 'narration_storage.dart';
 
 const int defaultMonthlyFreeGoogleCharacters = 1000000;
+const int defaultMonthlyFreeAzureCharacters = 500000;
 const double defaultMonthlyGoogleCreditUsd = 10.0;
 const double googleChirpUsdPerMillionCharacters = 30.0;
 const double googleWavenetUsdPerMillionCharacters = 16.0;
@@ -56,18 +57,21 @@ String formatUsdAmount(double amount) {
 class NarrationMonthUsage {
   final String monthKey;
   final int googleCharacters;
+  final int azureCharacters;
   final int kokoroCharacters;
   final Set<String> recordedJobIds;
 
   NarrationMonthUsage({
     required this.monthKey,
     this.googleCharacters = 0,
+    this.azureCharacters = 0,
     this.kokoroCharacters = 0,
     Set<String>? recordedJobIds,
   }) : recordedJobIds = Set<String>.from(recordedJobIds ?? const <String>{});
 
   factory NarrationMonthUsage.fromJson(String key, Map<String, dynamic> data) {
     final google = (data['googleCharacters'] as num?)?.toInt() ?? 0;
+    final azure = (data['azureCharacters'] as num?)?.toInt() ?? 0;
     final kokoro = (data['kokoroCharacters'] as num?)?.toInt() ?? 0;
     final ids = (data['jobIds'] as List? ?? const [])
         .map((e) => e.toString())
@@ -76,6 +80,7 @@ class NarrationMonthUsage {
     return NarrationMonthUsage(
       monthKey: key,
       googleCharacters: math.max(0, google),
+      azureCharacters: math.max(0, azure),
       kokoroCharacters: math.max(0, kokoro),
       recordedJobIds: ids,
     );
@@ -83,6 +88,7 @@ class NarrationMonthUsage {
 
   Map<String, dynamic> toJson() => {
     'googleCharacters': googleCharacters,
+    'azureCharacters': azureCharacters,
     'kokoroCharacters': kokoroCharacters,
     'jobIds': recordedJobIds.toList()..sort(),
   };
@@ -93,6 +99,8 @@ class NarrationCostEstimate {
   final int freeCharacterLimit;
   final double monthlyCreditLimitUsd;
   final int usedGoogleCharacters;
+  final int azureFreeCharacterLimit;
+  final int usedAzureCharacters;
   final int usedKokoroCharacters;
   final String selectedEngine;
   final String selectedVoice;
@@ -103,6 +111,8 @@ class NarrationCostEstimate {
     required this.freeCharacterLimit,
     required this.monthlyCreditLimitUsd,
     required this.usedGoogleCharacters,
+    this.azureFreeCharacterLimit = defaultMonthlyFreeAzureCharacters,
+    this.usedAzureCharacters = 0,
     required this.usedKokoroCharacters,
     required this.selectedEngine,
     required this.selectedVoice,
@@ -186,6 +196,46 @@ class NarrationCostEstimate {
           1.0,
         );
 
+  int get azureCharactersRemaining =>
+      math.max(0, azureFreeCharacterLimit - usedAzureCharacters);
+
+  double get azureAllowanceUsedFraction => azureFreeCharacterLimit <= 0
+      ? 1.0
+      : (usedAzureCharacters / azureFreeCharacterLimit).clamp(0.0, 1.0);
+
+  bool get azureAllowanceExhausted =>
+      usedAzureCharacters >= azureFreeCharacterLimit;
+
+  int get projectedAzureCharacters => selectedEngine == 'azure'
+      ? usedAzureCharacters + math.max(0, selectionCharacters)
+      : usedAzureCharacters;
+
+  int get projectedAzureCharactersRemaining =>
+      math.max(0, azureFreeCharacterLimit - projectedAzureCharacters);
+
+  double get projectedAzureAllowanceUsedFraction => azureFreeCharacterLimit <= 0
+      ? 1.0
+      : (projectedAzureCharacters / azureFreeCharacterLimit).clamp(0.0, 1.0);
+
+  bool get selectionExceedsAzureAllowance =>
+      selectedEngine == 'azure' &&
+      selectionCharacters > 0 &&
+      projectedAzureCharacters > azureFreeCharacterLimit;
+
+  int get azureUncoveredCharacters => selectedEngine != 'azure'
+      ? 0
+      : math.max(0, projectedAzureCharacters - azureFreeCharacterLimit);
+
+  bool get shouldSwitchFromAzure =>
+      azureAllowanceExhausted || selectionExceedsAzureAllowance;
+
+  bool get azureApproachingLimit =>
+      !shouldSwitchFromAzure &&
+      azureFreeCharacterLimit > 0 &&
+      (projectedAzureCharactersRemaining <= 50000 ||
+          projectedAzureCharacters >=
+              (azureFreeCharacterLimit * 0.9).floor());
+
   int get selectionCoveredByFreeCharacters => selectedEngine != 'google'
       ? 0
       : math.min(math.max(0, selectionCharacters), freeCharactersRemaining);
@@ -238,6 +288,12 @@ class NarrationCostEstimate {
               (totalCoveredGoogleCharacters * 0.9).floor());
 
   String monthlyAllowanceSummary() {
+    if (selectedEngine == 'azure') {
+      return 'Azure F0 free allowance ($monthKey): '
+          '${formatCharacterCount(usedAzureCharacters)} / '
+          '${formatCharacterCount(azureFreeCharacterLimit)} chars used '
+          '(${formatCharacterCount(azureCharactersRemaining)} free left)';
+    }
     return 'Google allowance ($monthKey): '
         '${formatCharacterCount(usedGoogleCharacters)} / '
         '${formatCharacterCount(totalCoveredGoogleCharacters)} covered chars used '
@@ -246,6 +302,24 @@ class NarrationCostEstimate {
   }
 
   String selectionImpactSummary() {
+    if (selectedEngine == 'azure') {
+      if (selectionCharacters <= 0) {
+        if (azureAllowanceExhausted) {
+          return 'Azure F0 500k monthly free tier used up this month. '
+              'Switch to Google or Kokoro.';
+        }
+        return '${formatCharacterCount(azureCharactersRemaining)} free Azure F0 chars remaining this month (\$0.00).';
+      }
+      final charsLabel = '${formatCharacterCount(selectionCharacters)} chars';
+      if (selectionExceedsAzureAllowance || azureAllowanceExhausted) {
+        return 'Selected ($charsLabel): exceeds Azure F0 free tier by '
+            '${formatCharacterCount(azureUncoveredCharacters)} chars '
+            '(F0 blocks above ${formatCharacterCount(azureFreeCharacterLimit)}/mo). '
+            'Switch to Google or Kokoro.';
+      }
+      return 'Selected ($charsLabel): \$0.00 on Azure F0 free tier '
+          '(${formatCharacterCount(projectedAzureCharactersRemaining)} free Azure chars left after)';
+    }
     if (selectionCharacters <= 0) {
       if (allowanceExhausted) {
         return '1M free tier + ${formatUsdAmount(monthlyCreditLimitUsd)} credit used up this month. '
@@ -287,6 +361,16 @@ class NarrationCostEstimate {
   String confirmationSummary() {
     if (selectionCharacters <= 0) return '';
     final chars = formatCharacterCount(selectionCharacters);
+    if (selectedEngine == 'azure') {
+      if (selectionExceedsAzureAllowance || azureAllowanceExhausted) {
+        return 'Estimated TTS cost: exceeds Azure F0 free tier by '
+            '${formatCharacterCount(azureUncoveredCharacters)} chars ($chars chars). '
+            'Azure F0 stops at ${formatCharacterCount(azureFreeCharacterLimit)} chars/month; '
+            'switch to Google or Kokoro if blocked.';
+      }
+      return 'Estimated TTS cost: \$0.00 ($chars chars • covered by Azure F0 500k free tier; '
+          '${formatCharacterCount(projectedAzureCharactersRemaining)} free Azure chars left after)';
+    }
     if (selectedEngine == 'kokoro') {
       return 'Estimated TTS cost: \$0.00 ($chars chars with Kokoro • '
           '${formatCharacterCount(coveredCharactersRemaining)} covered Google chars left this month)';
@@ -328,6 +412,7 @@ class NarrationCostTracker extends ChangeNotifier {
   DateTime Function() clock;
 
   int freeCharacterLimit = defaultMonthlyFreeGoogleCharacters;
+  int azureFreeCharacterLimit = defaultMonthlyFreeAzureCharacters;
   double monthlyCreditLimitUsd = defaultMonthlyGoogleCreditUsd;
   final Map<String, NarrationMonthUsage> _months = {};
   String? _loadedPath;
@@ -374,6 +459,7 @@ class NarrationCostTracker extends ChangeNotifier {
       if (_loadedPath == file.path) return;
       _months.clear();
       freeCharacterLimit = defaultMonthlyFreeGoogleCharacters;
+      azureFreeCharacterLimit = defaultMonthlyFreeAzureCharacters;
       monthlyCreditLimitUsd = defaultMonthlyGoogleCreditUsd;
       if (await file.exists()) {
         final raw = jsonDecode(await file.readAsString());
@@ -381,6 +467,10 @@ class NarrationCostTracker extends ChangeNotifier {
           final free = (raw['freeCharacterLimit'] as num?)?.toInt();
           if (free != null && free >= 0) {
             freeCharacterLimit = free;
+          }
+          final azureFree = (raw['azureFreeCharacterLimit'] as num?)?.toInt();
+          if (azureFree != null && azureFree >= 0) {
+            azureFreeCharacterLimit = azureFree;
           }
           final credit = (raw['monthlyCreditLimitUsd'] as num?)?.toDouble();
           if (credit != null && credit.isFinite && credit >= 0) {
@@ -427,6 +517,8 @@ class NarrationCostTracker extends ChangeNotifier {
       freeCharacterLimit: freeCharacterLimit,
       monthlyCreditLimitUsd: monthlyCreditLimitUsd,
       usedGoogleCharacters: usage.googleCharacters,
+      azureFreeCharacterLimit: azureFreeCharacterLimit,
+      usedAzureCharacters: usage.azureCharacters,
       usedKokoroCharacters: usage.kokoroCharacters,
       selectedEngine: preference.engine,
       selectedVoice: preference.voice,
@@ -451,11 +543,14 @@ class NarrationCostTracker extends ChangeNotifier {
       return false;
     }
     final nextIds = Set<String>.from(current.recordedJobIds)..add(jobId);
-    final isKokoro = engine == 'kokoro';
+    final isAzure = engine == 'azure';
+    final isKokoro = engine == 'kokoro' || engine == 'kokoro_offline';
     _months[key] = NarrationMonthUsage(
       monthKey: key,
       googleCharacters:
-          current.googleCharacters + (isKokoro ? 0 : characters),
+          current.googleCharacters + (!isAzure && !isKokoro ? characters : 0),
+      azureCharacters:
+          current.azureCharacters + (isAzure ? characters : 0),
       kokoroCharacters:
           current.kokoroCharacters + (isKokoro ? characters : 0),
       recordedJobIds: nextIds,
@@ -467,6 +562,7 @@ class NarrationCostTracker extends ChangeNotifier {
 
   Future<void> setMonthUsage({
     int? googleCharacters,
+    int? azureCharacters,
     int? kokoroCharacters,
     String? monthKey,
     bool clearRecordedJobs = false,
@@ -479,6 +575,10 @@ class NarrationCostTracker extends ChangeNotifier {
       googleCharacters: math.max(
         0,
         googleCharacters ?? current.googleCharacters,
+      ),
+      azureCharacters: math.max(
+        0,
+        azureCharacters ?? current.azureCharacters,
       ),
       kokoroCharacters: math.max(
         0,
@@ -494,11 +594,15 @@ class NarrationCostTracker extends ChangeNotifier {
 
   Future<void> updateBudget({
     int? freeCharacterLimit,
+    int? azureFreeCharacterLimit,
     double? monthlyCreditLimitUsd,
   }) async {
     await load();
     if (freeCharacterLimit != null && freeCharacterLimit >= 0) {
       this.freeCharacterLimit = freeCharacterLimit;
+    }
+    if (azureFreeCharacterLimit != null && azureFreeCharacterLimit >= 0) {
+      this.azureFreeCharacterLimit = azureFreeCharacterLimit;
     }
     if (monthlyCreditLimitUsd != null &&
         monthlyCreditLimitUsd.isFinite &&
@@ -515,6 +619,7 @@ class NarrationCostTracker extends ChangeNotifier {
       _loadedPath = file.path;
       await updateNarrationJson(file, (data) {
         data['freeCharacterLimit'] = freeCharacterLimit;
+        data['azureFreeCharacterLimit'] = azureFreeCharacterLimit;
         data['monthlyCreditLimitUsd'] = monthlyCreditLimitUsd;
         final storedMonths = Map<String, dynamic>.from(
           (data['months'] as Map?) ?? {},
@@ -543,6 +648,8 @@ class _NarrationBudgetDialogState extends State<NarrationBudgetDialog> {
   late final TextEditingController _googleController;
   late final TextEditingController _freeController;
   late final TextEditingController _creditController;
+  late final TextEditingController _azureController;
+  late final TextEditingController _azureFreeController;
   late final String _monthKey;
 
   @override
@@ -559,6 +666,12 @@ class _NarrationBudgetDialogState extends State<NarrationBudgetDialog> {
     _creditController = TextEditingController(
       text: widget.costTracker.monthlyCreditLimitUsd.toStringAsFixed(2),
     );
+    _azureController = TextEditingController(
+      text: current.azureCharacters.toString(),
+    );
+    _azureFreeController = TextEditingController(
+      text: widget.costTracker.azureFreeCharacterLimit.toString(),
+    );
   }
 
   @override
@@ -566,6 +679,8 @@ class _NarrationBudgetDialogState extends State<NarrationBudgetDialog> {
     _googleController.dispose();
     _freeController.dispose();
     _creditController.dispose();
+    _azureController.dispose();
+    _azureFreeController.dispose();
     super.dispose();
   }
 
@@ -580,14 +695,22 @@ class _NarrationBudgetDialogState extends State<NarrationBudgetDialog> {
     final credit = double.tryParse(
       _creditController.text.replaceAll('\$', '').trim(),
     );
-    if (used != null) {
+    final azureUsed = int.tryParse(
+      _azureController.text.replaceAll(',', '').trim(),
+    );
+    final azureFree = int.tryParse(
+      _azureFreeController.text.replaceAll(',', '').trim(),
+    );
+    if (used != null || azureUsed != null) {
       await widget.costTracker.setMonthUsage(
         googleCharacters: used,
-        clearRecordedJobs: used == 0,
+        azureCharacters: azureUsed,
+        clearRecordedJobs: used == 0 && (azureUsed == null || azureUsed == 0),
       );
     }
     await widget.costTracker.updateBudget(
       freeCharacterLimit: free,
+      azureFreeCharacterLimit: azureFree,
       monthlyCreditLimitUsd: credit,
     );
     if (mounted) {
@@ -607,7 +730,8 @@ class _NarrationBudgetDialogState extends State<NarrationBudgetDialog> {
             const Text(
               'Google Chirp 3 HD costs \$30 / 1M characters after the 1M monthly free tier. '
               'A \$10.00 monthly Google Pro credit covers an extra 333,333 characters '
-              '(1,333,333 covered characters/month total).',
+              '(1,333,333 covered characters/month total). '
+              'Azure AI Speech Free (F0) includes 500,000 neural characters/month with no overage billing.',
             ),
             const SizedBox(height: 12),
             TextField(
@@ -643,6 +767,27 @@ class _NarrationBudgetDialogState extends State<NarrationBudgetDialog> {
                 border: OutlineInputBorder(),
               ),
             ),
+            const SizedBox(height: 16),
+            TextField(
+              key: const ValueKey('budget-azure-used-field'),
+              controller: _azureController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Azure characters used this month',
+                helperText: 'Azure F0 free tier resets monthly (500,000 chars)',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const ValueKey('budget-azure-free-limit-field'),
+              controller: _azureFreeController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Monthly free Azure F0 characters',
+                border: OutlineInputBorder(),
+              ),
+            ),
           ],
         ),
       ),
@@ -650,6 +795,7 @@ class _NarrationBudgetDialogState extends State<NarrationBudgetDialog> {
         TextButton(
           onPressed: () {
             _googleController.text = '0';
+            _azureController.text = '0';
           },
           child: const Text('Zero usage'),
         ),
@@ -705,8 +851,16 @@ class NarrationCostBanner extends StatelessWidget {
           selectionCharacters: selectionCharacters,
         );
         final colors = Theme.of(context).colorScheme;
-        final warnSwitch = estimate.shouldSwitchToKokoro;
-        final warnLow = estimate.approachingLimit;
+        final isAzure = preference.engine == 'azure';
+        final warnSwitch = isAzure
+            ? estimate.shouldSwitchFromAzure
+            : estimate.shouldSwitchToKokoro;
+        final warnLow = isAzure
+            ? estimate.azureApproachingLimit
+            : estimate.approachingLimit;
+        final progressValue = isAzure
+            ? estimate.projectedAzureAllowanceUsedFraction
+            : estimate.projectedAllowanceUsedFraction;
         final containerColor = warnSwitch
             ? colors.errorContainer
             : warnLow
@@ -717,7 +871,13 @@ class NarrationCostBanner extends StatelessWidget {
             : warnLow
             ? colors.onTertiaryContainer
             : colors.onSurface;
-        final heading = warnSwitch
+        final heading = isAzure
+            ? (warnSwitch
+                  ? 'Azure F0 500k free tier used up — switch engine'
+                  : warnLow
+                  ? 'Approaching Azure F0 monthly limit'
+                  : 'Azure F0 free allowance (${estimate.monthKey})')
+            : warnSwitch
             ? (preference.engine == 'kokoro'
                   ? 'Google allowance used up — using Kokoro (\$0.00)'
                   : preference.engine == 'kokoro_offline'
@@ -775,7 +935,7 @@ class NarrationCostBanner extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   LinearProgressIndicator(
-                    value: estimate.projectedAllowanceUsedFraction,
+                    value: progressValue,
                     minHeight: 5,
                     borderRadius: BorderRadius.circular(3),
                     color: warnSwitch ? colors.error : colors.primary,
@@ -799,19 +959,68 @@ class NarrationCostBanner extends StatelessWidget {
                       (warnSwitch || warnLow) &&
                       onSwitchToKokoro != null) ...[
                     const SizedBox(height: 6),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: FilledButton.tonalIcon(
-                        key: const ValueKey('switch-to-kokoro-button'),
-                        onPressed: () {
-                          final voices = narrationVoices['kokoro']!;
-                          onSwitchToKokoro!(
-                            NarrationPreference('kokoro', voices.keys.first),
-                          );
-                        },
-                        icon: const Icon(Icons.swap_horiz, size: 18),
-                        label: const Text('Switch to Kokoro (\$0.00)'),
-                      ),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: [
+                        if (estimate.azureCharactersRemaining > 0)
+                          FilledButton.tonalIcon(
+                            key: const ValueKey('switch-to-azure-button'),
+                            onPressed: () {
+                              final voices = narrationVoices['azure']!;
+                              onSwitchToKokoro!(
+                                NarrationPreference('azure', voices.keys.first),
+                              );
+                            },
+                            icon: const Icon(Icons.swap_horiz, size: 18),
+                            label: const Text('Switch to Azure F0 (free)'),
+                          ),
+                        FilledButton.tonalIcon(
+                          key: const ValueKey('switch-to-kokoro-button'),
+                          onPressed: () {
+                            final voices = narrationVoices['kokoro']!;
+                            onSwitchToKokoro!(
+                              NarrationPreference('kokoro', voices.keys.first),
+                            );
+                          },
+                          icon: const Icon(Icons.swap_horiz, size: 18),
+                          label: const Text('Switch to Kokoro (\$0.00)'),
+                        ),
+                      ],
+                    ),
+                  ],
+                  if (isAzure &&
+                      (warnSwitch || warnLow) &&
+                      onSwitchToKokoro != null) ...[
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: [
+                        if (!estimate.allowanceExhausted)
+                          FilledButton.tonalIcon(
+                            key: const ValueKey('switch-to-google-button'),
+                            onPressed: () {
+                              final voices = narrationVoices['google']!;
+                              onSwitchToKokoro!(
+                                NarrationPreference('google', voices.keys.first),
+                              );
+                            },
+                            icon: const Icon(Icons.swap_horiz, size: 18),
+                            label: const Text('Switch to Google Chirp'),
+                          ),
+                        FilledButton.tonalIcon(
+                          key: const ValueKey('switch-to-kokoro-button'),
+                          onPressed: () {
+                            final voices = narrationVoices['kokoro']!;
+                            onSwitchToKokoro!(
+                              NarrationPreference('kokoro', voices.keys.first),
+                            );
+                          },
+                          icon: const Icon(Icons.swap_horiz, size: 18),
+                          label: const Text('Switch to Kokoro (\$0.00)'),
+                        ),
+                      ],
                     ),
                   ],
                 ],

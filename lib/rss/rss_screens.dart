@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -827,7 +828,9 @@ class RssArticleReadingScreen extends StatefulWidget {
       _RssArticleReadingScreenState();
 }
 
-class _RssArticleReadingScreenState extends State<RssArticleReadingScreen> {
+class _RssArticleReadingScreenState extends State<RssArticleReadingScreen> with WidgetsBindingObserver {
+  Timer? _positionTimer;
+  double? _pendingFraction;
   late String _currentArticleId;
   final ScrollController _scrollController = ScrollController();
   double _fontSize = 19.0;
@@ -841,6 +844,7 @@ class _RssArticleReadingScreenState extends State<RssArticleReadingScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _currentArticleId = widget.initialArticleId;
     _scrollController.addListener(_onScroll);
     widget.articleLibrary.addListener(_onLibraryChanged);
@@ -853,6 +857,8 @@ class _RssArticleReadingScreenState extends State<RssArticleReadingScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _flushPosition();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     widget.articleLibrary.removeListener(_onLibraryChanged);
@@ -924,12 +930,25 @@ class _RssArticleReadingScreenState extends State<RssArticleReadingScreen> {
 
   void _onScroll() {
     if (!_scrollController.hasClients) return;
+    final extent = _scrollController.position.maxScrollExtent;
+    if (extent <= 0) return;
+    _pendingFraction = (_scrollController.offset / extent).clamp(0.0, 1.0).toDouble();
+    _positionTimer?.cancel();
+    _positionTimer = Timer(const Duration(milliseconds: 300), _flushPosition);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) _flushPosition();
+  }
+
+  void _flushPosition() {
+    _positionTimer?.cancel();
+    final fraction = _pendingFraction;
+    _pendingFraction = null;
+    if (fraction == null) return;
     final article = widget.controller.articleById(_currentArticleId);
     if (article == null) return;
-    final maxExtent = _scrollController.position.maxScrollExtent;
-    final fraction = maxExtent > 0
-        ? (_scrollController.offset / maxExtent).clamp(0.0, 1.0)
-        : 0.0;
     final totalChars = article.chapter.text.length;
     final charOffset = (totalChars * fraction).round();
     widget.controller.saveReadingPosition(
@@ -948,12 +967,15 @@ class _RssArticleReadingScreenState extends State<RssArticleReadingScreen> {
       );
       return;
     }
+    _flushPosition();
     setState(() {
       _currentArticleId = widget.orderedArticleIds[currentIndex + 1];
       _restoredScroll = false;
     });
     if (_scrollController.hasClients) {
       _scrollController.jumpTo(0);
+      _positionTimer?.cancel();
+      _pendingFraction = null;
     }
     WidgetsBinding.instance.addPostFrameCallback((_) => _onEnterArticle());
   }

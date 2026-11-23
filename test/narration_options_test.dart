@@ -86,9 +86,49 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Google Chirp').last);
     await tester.pumpAndSettle();
-    expect(preference.engine, 'google');
+    // Switch to Azure Neural and verify curated F0-eligible voices.
+    await tester.tap(find.text('Google Chirp'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Azure Neural').last);
+    await tester.pumpAndSettle();
+    expect(preference.engine, 'azure');
     expect(preference.isOffline, isFalse);
-    expect(preference.voice, 'en-US-Chirp3-HD-Achernar');
+    expect(preference.voice, 'en-US-AndrewMultilingualNeural');
     expect(find.text('Preview voice'), findsOneWidget);
+
+    await tester.tap(find.text('Andrew (US)'));
+    await tester.pumpAndSettle();
+    for (final voice in [
+      'Andrew (US)',
+      'Ava (US)',
+      'Brian (US)',
+      'Emma (US)',
+      'Ryan (UK)',
+      'Sonia (UK)',
+    ]) {
+      expect(find.text(voice), findsWidgets);
+    }
+    await tester.tap(find.text('Ryan (UK)').last);
+    await tester.pumpAndSettle();
+    expect(preference.voice, 'en-GB-RyanNeural');
+    expect(
+      recordingLabel(preference.toJson()),
+      'Azure Neural • Ryan (UK)',
+    );
+  });
+
+  test('Azure preference round-trips and falls back to default Azure voice on mismatch', () {
+    final restored = NarrationPreference.fromJson({
+      'engine': 'azure',
+      'voice': 'en-GB-SoniaNeural',
+    });
+    expect(restored.toJson(), {'engine': 'azure', 'voice': 'en-GB-SoniaNeural'});
+    expect(
+      NarrationPreference.fromJson({
+        'engine': 'azure',
+        'voice': 'en-US-Chirp3-HD-Puck',
+      }).voice,
+      'en-US-AndrewMultilingualNeural',
+    );
   });
 }

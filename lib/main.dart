@@ -305,6 +305,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
       context,
       MaterialPageRoute(
         builder: (_) => ReadingScreen(
+          continuous: articleText,
           book: book,
           chapterIndex: chapter,
           initialOffset: offset,
@@ -873,6 +874,19 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
                         ),
                       ),
                     ],
+                    const SizedBox(height: 12),
+                    LinearProgressIndicator(
+                      value: estimate.azureAllowanceUsedFraction,
+                      minHeight: 6,
+                      borderRadius: BorderRadius.circular(3),
+                      color: estimate.azureAllowanceExhausted
+                          ? colors.error
+                          : colors.secondary,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Azure F0 free tier: ${formatCharacterCount(estimate.usedAzureCharacters)} / ${formatCharacterCount(estimate.azureFreeCharacterLimit)} chars (${formatCharacterCount(estimate.azureCharactersRemaining)} left • \$0.00)',
+                    ),
                     if (estimate.usedKokoroCharacters > 0) ...[
                       const SizedBox(height: 4),
                       Text(
@@ -899,6 +913,7 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
   }
 
   Widget _libraryPage() {
+    final articleIds = articles.articles.map((article) => article.id).toSet();
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 22),
       children: [
@@ -962,8 +977,41 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
             ),
           ),
         ),
+        if (articles.articles.isNotEmpty)
+          Card(
+            child: ExpansionTile(
+              key: const PageStorageKey('saved-article-shelf'),
+              leading: const Icon(Icons.article_outlined),
+              title: const Text('Articles'),
+              subtitle: Text('${articles.articles.length} saved'),
+              children: [
+                for (final article in articles.articles.reversed)
+                  ListTile(
+                    title: Text(article.title),
+                    onTap: () => articleDetails(article),
+                    trailing: PopupMenuButton<String>(
+                      tooltip: 'Article options',
+                      itemBuilder: (_) => const [
+                        PopupMenuItem(value: 'remove', child: Text('Remove article')),
+                      ],
+                      onSelected: (_) async {
+                        try {
+                          await articles.removeArticle(article);
+                        } catch (_) {
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Could not remove this article.')),
+                            );
+                          }
+                        }
+                      },
+                    ),
+                  ),
+              ],
+            ),
+          ),
         if (books.isEmpty) _emptyLibrary(),
-        for (final book in books)
+        for (final book in books.where((book) => !articleIds.contains(book.id)))
           Card(
             margin: const EdgeInsets.only(bottom: 14),
             child: ListTile(
@@ -3205,6 +3253,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
 }
 
 class ReadingScreen extends StatefulWidget {
+  final bool continuous;
   final BookProgress? progressStore;
   final SavePosition? onCheckpoint;
   final ImportedBook book;
@@ -3212,6 +3261,7 @@ class ReadingScreen extends StatefulWidget {
   final int initialOffset;
   final SavePosition onSave;
   const ReadingScreen({
+    this.continuous = false,
     super.key,
     required this.book,
     required this.chapterIndex,
@@ -3226,6 +3276,7 @@ class ReadingScreen extends StatefulWidget {
 }
 
 class _ReadingScreenState extends State<ReadingScreen> with WidgetsBindingObserver {
+  final _articleScroll = ScrollController();
   Object? _readingSession;
   double fontSize = 19;
   late int chapterIndex;
@@ -3247,6 +3298,13 @@ class _ReadingScreenState extends State<ReadingScreen> with WidgetsBindingObserv
     WidgetsBinding.instance.addObserver(this);
     chapterIndex = widget.chapterIndex;
     currentOffset = widget.initialOffset;
+    if (widget.continuous) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_articleScroll.hasClients) return;
+        final length = widget.book.chapters[chapterIndex].text.length;
+        if (length > 0) _articleScroll.jumpTo(_articleScroll.position.maxScrollExtent * (currentOffset / length).clamp(0.0, 1.0));
+      });
+    }
     _saveReading(chapterIndex, currentOffset, activate: true);
   }
 
@@ -3533,13 +3591,14 @@ class _ReadingScreenState extends State<ReadingScreen> with WidgetsBindingObserv
     WidgetsBinding.instance.removeObserver(this);
     // Do not use ModalRoute.of(context) during disposal.
     _saveReading(chapterIndex, currentOffset, activate: false);
+    _articleScroll.dispose();
     controller?.dispose();
     super.dispose();
   }
 
   void listenFromCurrentPage() {
-    if (_paginating || pages.isEmpty) return;
-    if (currentPage >= 0 && currentPage < pages.length) {
+    if (!widget.continuous && (_paginating || pages.isEmpty)) return;
+    if (!widget.continuous && currentPage >= 0 && currentPage < pages.length) {
       currentOffset = starts[currentPage];
     }
     saveCurrent();
@@ -3599,8 +3658,8 @@ class _ReadingScreenState extends State<ReadingScreen> with WidgetsBindingObserv
             100.0,
             constraints.maxHeight - verticalPadding * 2 - footerHeight,
           );
-          calculatePages(width, height);
-          if (_paginating || pages.isEmpty || controller == null) {
+          if (!widget.continuous) calculatePages(width, height);
+          if (!widget.continuous && (_paginating || pages.isEmpty || controller == null)) {
             return const Center(
               child: CircularProgressIndicator(),
             );
@@ -3608,7 +3667,23 @@ class _ReadingScreenState extends State<ReadingScreen> with WidgetsBindingObserv
           return Column(
             children: [
               Expanded(
-                child: PageView.builder(
+                child: widget.continuous
+                    ? NotificationListener<ScrollNotification>(
+                        onNotification: (event) {
+                          final max = event.metrics.maxScrollExtent;
+                          if (max > 0 && event is ScrollUpdateNotification) {
+                            currentOffset = (chapter.text.length * (event.metrics.pixels / max).clamp(0.0, 1.0)).round();
+                          }
+                          if (event is ScrollEndNotification) saveCurrent();
+                          return false;
+                        },
+                        child: SingleChildScrollView(
+                          controller: _articleScroll,
+                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                          child: RichText(text: styledPage(0, chapter.text.length)),
+                        ),
+                      )
+                    : PageView.builder(
                   key: ValueKey('reading-chapter-$chapterIndex'),
                   controller: controller,
                   itemCount: pages.length,
@@ -3657,10 +3732,10 @@ class _ReadingScreenState extends State<ReadingScreen> with WidgetsBindingObserv
                       children: [
                         Expanded(
                           child: InkWell(
-                            onTap: showPageJump,
+                            onTap: widget.continuous ? null : showPageJump,
                             child: Center(
                               child: Text(
-                                '${currentPage + 1} / ${pages.length}  •  Tap to jump',
+                                widget.continuous ? 'Article' : '${currentPage + 1} / ${pages.length}  •  Tap to jump',
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(

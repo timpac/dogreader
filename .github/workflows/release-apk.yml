@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   apk:
-    if: (github.ref == 'refs/heads/dogreader-oct22-update' || github.ref == 'refs/heads/fix/156-progress-persistence' || github.ref == 'refs/heads/fix/160-epub-narration' || github.ref == 'refs/heads/build/161-chapter-narration' || github.ref == 'refs/heads/build/162-narration-queue-reliability' || github.ref == 'refs/heads/build/163-chapter-panel-refinement' || github.ref == 'refs/heads/build/163-tts-cost-tracker' || github.ref == 'refs/heads/build/164-light-mode-cost-tracker' || github.ref == 'refs/heads/build/165-rss-offline-kokoro' || github.ref == 'refs/heads/build/166-ai-article-summaries' || github.ref == 'refs/heads/build/167-kokoro-decoder-fix' || github.ref == 'refs/heads/build/168-article-import') && github.actor == github.repository_owner
+    if: (github.ref == 'refs/heads/dogreader-oct22-update' || github.ref == 'refs/heads/fix/156-progress-persistence' || github.ref == 'refs/heads/fix/160-epub-narration' || github.ref == 'refs/heads/build/161-chapter-narration' || github.ref == 'refs/heads/build/162-narration-queue-reliability' || github.ref == 'refs/heads/build/163-chapter-panel-refinement' || github.ref == 'refs/heads/build/163-tts-cost-tracker' || github.ref == 'refs/heads/build/164-light-mode-cost-tracker' || github.ref == 'refs/heads/build/165-rss-offline-kokoro' || github.ref == 'refs/heads/build/166-ai-article-summaries' || github.ref == 'refs/heads/build/167-kokoro-decoder-fix' || github.ref == 'refs/heads/build/168-article-import' || github.ref == 'refs/heads/build/169-article-library') && github.actor == github.repository_owner
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -52,6 +52,7 @@ jobs:
               'refs/heads/build/165-rss-offline-kokoro',
               'refs/heads/build/166-ai-article-summaries',
               'refs/heads/build/167-kokoro-decoder-fix',
+              'refs/heads/build/169-article-library',
               'refs/heads/build/168-article-import'
             ]);
             if (metadata.default_branch !== 'dogreader-oct22-update' || !allowedRefs.has(context.ref)) throw new Error('Authorized branch mismatch');
@@ -68,6 +69,7 @@ jobs:
             if (context.ref === 'refs/heads/build/166-ai-article-summaries' && number !== '166') throw new Error('This branch is authorized for build 166 only');
             if (context.ref === 'refs/heads/build/167-kokoro-decoder-fix' && number !== '167') throw new Error('This branch is authorized for build 167 only');
             if (context.ref === 'refs/heads/build/168-article-import' && number !== '168') throw new Error('This branch is authorized for build 168 only');
+            if (context.ref === 'refs/heads/build/169-article-library' && number !== '169') throw new Error('This branch is authorized for build 169 only');
             if (!/^[1-9][0-9]*$/.test(number) || Number(number) <= 135 || Number(number) > 2100000000) throw new Error('Invalid new Android versionCode');
             const releases = await github.paginate(github.rest.repos.listReleases, {owner, repo, per_page: 100});
             const tags = await github.paginate(github.rest.repos.listTags, {owner, repo, per_page: 100});
@@ -94,7 +96,10 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
           git merge-base --is-ancestor cdf4227dc6a966b20e24f61179ac953b22689024 HEAD
-          if [ "$GITHUB_REF" = refs/heads/build/168-article-import ]; then
+          if [ "$GITHUB_REF" = refs/heads/build/169-article-library ]; then
+            git merge-base --is-ancestor b001626761ca5249a12afb68d45dd6d6c880646d HEAD
+            git merge-base --is-ancestor HEAD origin/build/169-article-library
+          elif [ "$GITHUB_REF" = refs/heads/build/168-article-import ]; then
             git merge-base --is-ancestor c787b68880dd39b952900e87d19c58b4b8acad99 HEAD
             git merge-base --is-ancestor HEAD origin/build/168-article-import
           elif [ "$GITHUB_REF" = refs/heads/build/167-kokoro-decoder-fix ]; then
@@ -201,6 +206,7 @@ jobs:
             if (context.ref === 'refs/heads/build/166-ai-article-summaries' && number !== '166') throw new Error('This branch is authorized for build 166 only');
             if (context.ref === 'refs/heads/build/167-kokoro-decoder-fix' && number !== '167') throw new Error('This branch is authorized for build 167 only');
             if (context.ref === 'refs/heads/build/168-article-import' && number !== '168') throw new Error('This branch is authorized for build 168 only');
+            if (context.ref === 'refs/heads/build/169-article-library' && number !== '169') throw new Error('This branch is authorized for build 169 only');
             const source = process.env.RELEASE_COMMIT;
             const tag = `v${number}`;
             const name = `Dogreader-${number}.apk`;
@@ -215,7 +221,9 @@ jobs:
             const apk = fs.readFileSync(`dist/${name}`);
             const sha256 = digest(apk);
             const run = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
-            const changelog = number === '168'
+            const changelog = number === '169'
+              ? 'Saved articles have their own shelf and removal menu. Failed imports can be dismissed. Imported articles scroll vertically and RSS reading progress is saved after scrolling settles.\n\n'
+              : number === '168'
               ? 'Automatic article importing & AI summary integration: adds frictionless article importing via URL pasting and Android system sharing directly into the local article library with deduplication and offline caching; relocates AI summary controls to the top of article reading views with a labeled depth dropdown (Brief, Standard, Detailed) and explicit generation review; preserves independent reading, summary, and audio progress with full EPUB, RSS, and Kokoro narration compatibility; builds upon Build 167 Kokoro native decoder fix.\n\n'
               : number === '167'
               ? 'Kokoro native BART G2P decoder alignment: aligns the Kokoro (Offline) native G2P decoder with vendored Misaki reference behavior by generating autoregressive decoder tokens until complete and filtering special tokens via vocabulary phonemes, preventing premature decoding stops on tokens 0, 3, or unexpected BOS; builds upon Build 166 AI Article Summaries and Summary Narration.\n\n'

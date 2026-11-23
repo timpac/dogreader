@@ -102,6 +102,22 @@ class ArticleLibrary extends ChangeNotifier {
     return job;
   }
 
+  void dismissFailed(ArticleImportJob job) {
+    if (job.error != null && jobs.remove(job)) notifyListeners();
+  }
+
+  Future<void> removeArticle(ImportedArticle article) async {
+    final directory = (await store).directory;
+    if (!RegExp(r'^[a-zA-Z0-9_-]+$').hasMatch(article.id)) {
+      throw const FormatException('Invalid article ID');
+    }
+    final file = File('${directory.path}/${article.id}.json');
+    if (await file.exists()) await file.delete();
+    articles.removeWhere((item) => item.id == article.id);
+    jobs.removeWhere((job) => job.article?.id == article.id);
+    notifyListeners();
+  }
+
   Future<void> get settled => _pending;
   ImportedArticle? savedSummary(ImportedArticle article, SummaryDepth depth) {
     final matches = articles
