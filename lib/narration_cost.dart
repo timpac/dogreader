@@ -978,10 +978,7 @@ class NarrationCostBanner extends StatelessWidget {
                         FilledButton.tonalIcon(
                           key: const ValueKey('switch-to-kokoro-button'),
                           onPressed: () {
-                            final voices = narrationVoices['kokoro']!;
-                            onSwitchToKokoro!(
-                              NarrationPreference('kokoro', voices.keys.first),
-                            );
+                            onSwitchToKokoro!(defaultPlayStorePreference);
                           },
                           icon: const Icon(Icons.swap_horiz, size: 18),
                           label: const Text('Switch to Kokoro (\$0.00)'),
@@ -1012,10 +1009,7 @@ class NarrationCostBanner extends StatelessWidget {
                         FilledButton.tonalIcon(
                           key: const ValueKey('switch-to-kokoro-button'),
                           onPressed: () {
-                            final voices = narrationVoices['kokoro']!;
-                            onSwitchToKokoro!(
-                              NarrationPreference('kokoro', voices.keys.first),
-                            );
+                            onSwitchToKokoro!(defaultPlayStorePreference);
                           },
                           icon: const Icon(Icons.swap_horiz, size: 18),
                           label: const Text('Switch to Kokoro (\$0.00)'),

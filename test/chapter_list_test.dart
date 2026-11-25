@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 
 import 'package:audiobook_app/app_theme.dart';
 import 'package:audiobook_app/main.dart';
+import 'package:audiobook_app/byok_tts.dart';
 import 'package:audiobook_app/dogreader_audio_handler.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -45,21 +46,40 @@ void main() {
           request.response.headers.contentType = ContentType.json;
           var id = request.uri.pathSegments.last;
           if (request.method == 'POST') {
-            final body =
-                jsonDecode(await utf8.decoder.bind(request).join())
-                    as Map<String, dynamic>;
+            final ssml = await utf8.decoder.bind(request).join();
             if (delaySubmissions) {
               firstPostStarted.add(null);
               await Future<void>.delayed(const Duration(milliseconds: 120));
             }
-            posted.add(body);
-            id = 'submitted-${posted.length}';
+            posted.add({'ssml': ssml, 'engine': 'azure', 'voice': 'en-GB-RyanNeural'});
+            request.response.headers.contentType = ContentType('audio', 'mpeg');
+            request.response.add(List.filled(1200, 9));
+          } else {
+            request.response.write(jsonEncode({'id': id, 'status': 'queued'}));
           }
-          request.response.write(jsonEncode({'id': id, 'status': 'queued'}));
           await request.response.close();
         });
         return server;
       }))!;
+      final previousClient = byokTtsClient;
+      final previousRunner = byokNarrationRunner;
+      await tester.runAsync(() async {
+        await byokCredentials.setAzureCredentials(
+          key: 'test-azure-key',
+          region: 'eastus',
+        );
+      });
+      byokTtsClient = ByokTtsClient(
+        credentials: byokCredentials,
+        sleep: (_) async {},
+        azureEndpointBuilder: (_) =>
+            Uri.parse('http://127.0.0.1:${server.port}/azure'),
+      );
+      byokNarrationRunner = ByokNarrationRunner(
+        client: byokTtsClient,
+        documentsDirectory: () async => root,
+        beforeReplace: (book, index) => audioHandler.unloadChapter(book, index),
+      );
       if (!_handlerInitialized) {
         final handler = (await tester.runAsync(
           () async => DogreaderAudioHandler(
@@ -71,6 +91,8 @@ void main() {
         _handlerInitialized = true;
       }
       addTearDown(() async {
+        byokTtsClient = previousClient;
+        byokNarrationRunner = previousRunner;
         PathProviderPlatform.instance = originalPaths;
         await server.close(force: true);
         await root.delete(recursive: true);
@@ -79,10 +101,8 @@ void main() {
       await tester.runAsync(() async {
         await File('${root.path}/dogreader_queue.json').writeAsString(
           jsonEncode({
-            'host': 'http://127.0.0.1:${server.port}',
-            'token': 'test-token',
-            'engine': 'kokoro',
-            'narrator': 'bm_lewis',
+            'engine': 'azure',
+            'narrator': 'en-GB-RyanNeural',
             'books': {
               'fixture': {
                 '0': {
@@ -311,8 +331,8 @@ void main() {
       await tester.tap(find.text('Generate entire book'));
       await frame();
       await waitFor(find.text('Review generation'));
-      expect(find.text('Lewis'), findsOneWidget);
-      expect(find.text('Kokoro'), findsOneWidget);
+      expect(find.text('Ryan (UK)'), findsOneWidget);
+      expect(find.text('Azure Neural'), findsOneWidget);
       await capture('generation-settings');
       await tester.runAsync(
         () => HttpOverrides.runWithHttpOverrides(
@@ -334,29 +354,28 @@ void main() {
           for (var i = 0; i < 100 && posted.length < 4; i++) {
             await Future<void>.delayed(const Duration(milliseconds: 15));
           }
-          // Let the existing queue persist and reconcile its submitted job IDs.
           for (
             var i = 0;
-            i < 100 &&
-                !narrationDelivery.books['fixture']!.values.every(
-                  (job) => job['status'] != 'waiting',
-                );
+            i < 100 && byokNarrationRunner.bookBusy('fixture');
             i++
           ) {
             await Future<void>.delayed(const Duration(milliseconds: 15));
           }
         }, _LoopbackHttp()),
       );
-      await waitFor(find.text('4 submitted.'));
-      expect(posted.map((job) => job['title']), [
-        'The Wild Wood',
-        'Mr. Badger',
-        'Dulce Domum',
-        'Mr. Toad',
-      ]);
+      await waitFor(find.text('Started Azure Neural generation (4 chapters).'));
+      expect(
+        posted.map((job) => job['ssml'] as String),
+        [
+          contains('Three chapter.'),
+          contains('Four chapter.'),
+          contains('Five chapter.'),
+          contains('Six chapter.'),
+        ],
+      );
       expect(
         posted.every(
-          (job) => job['engine'] == 'kokoro' && job['voice'] == 'bm_lewis',
+          (job) => job['engine'] == 'azure' && job['voice'] == 'en-GB-RyanNeural',
         ),
         isTrue,
       );
@@ -383,6 +402,10 @@ void main() {
           },
         };
         await narrationDelivery.save();
+        for (var idx = 2; idx < 6; idx++) {
+          final generated = File('${root.path}/narration/fixture_$idx.mp3');
+          if (await generated.exists()) await generated.delete();
+        }
         posted.clear();
       });
 
@@ -455,12 +478,15 @@ void main() {
         }, _LoopbackHttp()),
       );
       await frame();
-      expect(posted.map((job) => job['title']), [
-        'The Wild Wood',
-        'Mr. Badger',
-        'Dulce Domum',
-        'Mr. Toad',
-      ]);
+      expect(
+        posted.map((job) => job['ssml'] as String),
+        [
+          contains('Three chapter.'),
+          contains('Four chapter.'),
+          contains('Five chapter.'),
+          contains('Six chapter.'),
+        ],
+      );
 
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());

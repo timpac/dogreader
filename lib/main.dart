@@ -51,8 +51,8 @@ void generationMain() => unawaited(runGenerationService());
 
 late final DogreaderAudioHandler audioHandler;
 final byokCredentials = ByokCredentialStore();
-final byokTtsClient = ByokTtsClient(credentials: byokCredentials);
-final byokNarrationRunner = ByokNarrationRunner(
+ByokTtsClient byokTtsClient = ByokTtsClient(credentials: byokCredentials);
+ByokNarrationRunner byokNarrationRunner = ByokNarrationRunner(
   client: byokTtsClient,
   documentsDirectory: getApplicationDocumentsDirectory,
   beforeReplace: (book, index) => audioHandler.unloadChapter(book, index),
@@ -793,22 +793,6 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
         Text('Settings', style: Theme.of(context).textTheme.headlineMedium),
         ListTile(
           contentPadding: EdgeInsets.zero,
-          leading: const Icon(Icons.key_outlined),
-          title: const Text('API keys & voices'),
-          subtitle: const Text('On-device Kokoro, Google Chirp HD, Azure Speech, Speechify'),
-          onTap: () => Navigator.push(
-            context,
-            MaterialPageRoute<void>(
-              builder: (_) => ApiSettingsScreen(
-                credentials: byokCredentials,
-                ttsClient: byokTtsClient,
-                offlineNarration: offlineNarration,
-              ),
-            ),
-          ),
-        ),
-        ListTile(
-          contentPadding: EdgeInsets.zero,
           leading: const Icon(Icons.record_voice_over_outlined),
           title: const Text('Narration Dictionary'),
           subtitle: const Text('Pronunciations and Do Not Narrate rules'),
@@ -848,6 +832,26 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
                   },
                 ),
               ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        Card(
+          margin: EdgeInsets.zero,
+          child: ListTile(
+            leading: const Icon(Icons.key_outlined),
+            title: const Text('API keys & voices'),
+            subtitle: const Text('On-device Kokoro, Google Chirp HD, Azure Speech, Speechify'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => ApiSettingsScreen(
+                  credentials: byokCredentials,
+                  ttsClient: byokTtsClient,
+                  offlineNarration: offlineNarration,
+                ),
+              ),
             ),
           ),
         ),

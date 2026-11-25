@@ -142,8 +142,9 @@ class NarrationControls extends StatelessWidget {
         DropdownButtonFormField<String>(
           key: ValueKey('engine-${preference.engine}'),
           initialValue: preference.engine,
+          isExpanded: true,
           decoration: const InputDecoration(labelText: 'Narration engine', border: OutlineInputBorder()),
-          items: narrationEngines.entries.map((e) => DropdownMenuItem(value: e.key, child: Text(e.value))).toList(),
+          items: narrationEngines.entries.map((e) => DropdownMenuItem(value: e.key, child: Text(e.value, overflow: TextOverflow.ellipsis))).toList(),
           onChanged: previewing ? null : (engine) {
             if (engine != null) { onChanged(NarrationPreference(engine, narrationVoices[engine]!.keys.first)); }
           },
@@ -152,8 +153,9 @@ class NarrationControls extends StatelessWidget {
         DropdownButtonFormField<String>(
           key: ValueKey('voice-${preference.engine}-${preference.voice}'),
           initialValue: preference.voice,
+          isExpanded: true,
           decoration: const InputDecoration(labelText: 'Narrator', border: OutlineInputBorder(), prefixIcon: Icon(Icons.record_voice_over)),
-          items: narrationVoices[preference.engine]!.entries.map((e) => DropdownMenuItem(value: e.key, child: Text(e.value))).toList(),
+          items: narrationVoices[preference.engine]!.entries.map((e) => DropdownMenuItem(value: e.key, child: Text(e.value, overflow: TextOverflow.ellipsis))).toList(),
           onChanged: previewing ? null : (voice) {
             if (voice != null) { onChanged(NarrationPreference(preference.engine, voice)); }
           },

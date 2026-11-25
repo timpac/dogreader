@@ -256,7 +256,7 @@ void main() {
 
         // Verify Kokoro (Offline) and Michael (US Male) are selected in the standard dropdowns,
         // the on-device status card is displayed, and no cloud connection prompt is shown.
-        expect(find.text('Kokoro (Offline)'), findsOneWidget);
+        expect(find.text('Kokoro (On-Device)'), findsOneWidget);
         expect(find.text('Michael (US Male)'), findsOneWidget);
         expect(
           find.byKey(const Key('offline_kokoro_status_card')),
@@ -272,7 +272,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text('Confirm narration generation'), findsOneWidget);
         expect(
-          find.textContaining('Kokoro (Offline) • Michael (US Male)'),
+          find.textContaining('Kokoro (On-Device) • Michael (US Male)'),
           findsOneWidget,
         );
         expect(find.textContaining('\$0.00'), findsWidgets);

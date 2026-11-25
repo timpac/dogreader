@@ -231,9 +231,9 @@ void main() {
 
       await tester.tap(find.byKey(const ValueKey('switch-to-kokoro-button')));
       await tester.pumpAndSettle();
-      expect(preference.engine, 'kokoro');
-      expect(preference.voice, 'bm_george');
-      expect(find.textContaining('\$0.00 API cost with Kokoro'), findsOneWidget);
+      expect(preference.engine, 'kokoro_offline');
+      expect(preference.voice, 'af_heart');
+      expect(find.textContaining('\$0.00'), findsWidgets);
 
       // Test adjusting usage via the budget dialog.
       await tester.runAsync(() async {

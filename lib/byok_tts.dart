@@ -89,10 +89,18 @@ class ByokCredentialStore extends ChangeNotifier {
   Future<void> load() async {
     if (_loaded) return;
     final values = await _readAll();
-    googleApiKey = (values[keyGoogleApiKey] ?? '').trim();
-    azureSpeechKey = (values[keyAzureSpeechKey] ?? '').trim();
-    azureSpeechRegion = (values[keyAzureSpeechRegion] ?? '').trim().toLowerCase();
-    speechifyApiKey = (values[keySpeechifyApiKey] ?? '').trim();
+    if (googleApiKey.isEmpty) {
+      googleApiKey = (values[keyGoogleApiKey] ?? '').trim();
+    }
+    if (azureSpeechKey.isEmpty) {
+      azureSpeechKey = (values[keyAzureSpeechKey] ?? '').trim();
+    }
+    if (azureSpeechRegion.isEmpty) {
+      azureSpeechRegion = (values[keyAzureSpeechRegion] ?? '').trim().toLowerCase();
+    }
+    if (speechifyApiKey.isEmpty) {
+      speechifyApiKey = (values[keySpeechifyApiKey] ?? '').trim();
+    }
     _loaded = true;
     notifyListeners();
   }
