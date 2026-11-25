@@ -34,7 +34,8 @@ import 'narration_options.dart';
 import 'narration_cost.dart';
 import 'narration_dictionary.dart';
 import 'narration_dictionary_screen.dart';
-import 'narration_preview.dart';
+import 'byok_tts.dart';
+import 'api_settings_screen.dart';
 import 'article_import.dart';
 import 'article_library.dart';
 import 'article_screen.dart';
@@ -49,6 +50,14 @@ import 'rss/rss_shelf.dart';
 void generationMain() => unawaited(runGenerationService());
 
 late final DogreaderAudioHandler audioHandler;
+final byokCredentials = ByokCredentialStore();
+final byokTtsClient = ByokTtsClient(credentials: byokCredentials);
+final byokNarrationRunner = ByokNarrationRunner(
+  client: byokTtsClient,
+  documentsDirectory: getApplicationDocumentsDirectory,
+  beforeReplace: (book, index) => audioHandler.unloadChapter(book, index),
+  costTracker: narrationCostTracker,
+);
 final narrationDelivery = NarrationDelivery(
   documentsDirectory: getApplicationDocumentsDirectory,
   beforeReplace: (book, index) => audioHandler.unloadChapter(book, index),
@@ -96,7 +105,7 @@ Future<void> main() async {
   audioHandler = await AudioService.init(
     builder: () => DogreaderAudioHandler(diagnostics: diagnostics, progress: bookProgress),
     config: const AudioServiceConfig(
-      androidNotificationChannelId: 'com.example.audiobook_app.audio',
+      androidNotificationChannelId: 'com.timpac.dogreader.audio',
       androidNotificationChannelName: 'Dogreader narration',
       // Keep the media service available for lock-screen/Bluetooth resume.
       androidStopForegroundOnPause: false,
@@ -110,6 +119,7 @@ Future<void> main() async {
 
   final appearance = ThemePreferences();
   await appearance.load();
+  await byokCredentials.load();
   await narrationDictionary.load();
   await narrationCostTracker.load();
   runApp(NarrationPlaybackScope(
@@ -123,7 +133,7 @@ Future<void> openNarrationDictionary(BuildContext context, {
   NarrationPreference? preference, String? host, String? token,
 }) async {
   Map<String, dynamic> saved = {};
-  if (preference == null || host == null || token == null) {
+  if (preference == null) {
     try {
       final root = await getApplicationDocumentsDirectory();
       saved = jsonDecode(await File('${root.path}/dogreader_queue.json').readAsString()) as Map<String, dynamic>;
@@ -136,9 +146,14 @@ Future<void> openNarrationDictionary(BuildContext context, {
     previewLabel: recordingLabel(selected.toJson()),
     onStopPreview: () => audioHandler.stopPreview(),
     onPreview: (sample, isCurrent) async {
-      final file = await generateNarrationPreview(host: host ?? saved['host'] as String? ?? '',
-        token: token ?? saved['token'] as String? ?? '', preference: selected,
-        sample: sample, isCurrent: isCurrent);
+      if (selected.isOffline) {
+        throw StateError('Switch to a configured API voice (Google Chirp, Azure, or Speechify) to preview pronunciation snippets.');
+      }
+      final file = await byokTtsClient.synthesizePreview(
+        preference: selected,
+        sample: sample,
+        isCurrent: isCurrent,
+      );
       if (file != null && isCurrent()) await audioHandler.playPreview(file.path, 'Pronunciation preview');
     },
   )));
@@ -776,6 +791,22 @@ class _LibraryScreenState extends State<LibraryScreen> with WidgetsBindingObserv
       padding: const EdgeInsets.all(22),
       children: [
         Text('Settings', style: Theme.of(context).textTheme.headlineMedium),
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.key_outlined),
+          title: const Text('API keys & voices'),
+          subtitle: const Text('On-device Kokoro, Google Chirp HD, Azure Speech, Speechify'),
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) => ApiSettingsScreen(
+                credentials: byokCredentials,
+                ttsClient: byokTtsClient,
+                offlineNarration: offlineNarration,
+              ),
+            ),
+          ),
+        ),
         ListTile(
           contentPadding: EdgeInsets.zero,
           leading: const Icon(Icons.record_voice_over_outlined),
@@ -1977,8 +2008,8 @@ class NarrationQueueScreen extends StatefulWidget {
 }
 
 class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
-  String narrationEngine = 'google';
-  String narrator = 'en-US-Chirp3-HD-Achernar';
+  String narrationEngine = defaultPlayStorePreference.engine;
+  String narrator = defaultPlayStorePreference.voice;
   bool previewing = false;
   int previewSequence = 0;
   final Set<int> selected = {};
@@ -2007,6 +2038,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     await narrationDelivery.load();
     await narrationDictionary.load();
     await narrationCostTracker.load();
+    await byokCredentials.load();
     try {
       final file = await queueFile;
       if (await file.exists()) {
@@ -2135,94 +2167,20 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     if (mounted) setState(() {});
   }
 
-  Uri endpoint(String path) =>
-      Uri.parse('${host.replaceAll(RegExp(r'/$'), '')}$path');
-
-  Future<Map<String, dynamic>> requestJson(
-    String method,
-    String path, [
-    Map<String, dynamic>? payload,
-  ]) async {
-    return narrationRequest(host, token, method, path, payload);
-  }
-
-  Future<void> configure() async {
-    final hostController = TextEditingController(text: host);
-    final tokenController = TextEditingController(text: token);
-    final accepted = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Connect Dogreader Cloud'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                'Enter your Cloud Run HTTPS URL and the private access token printed by the deployment script. Keep the token secret.',
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: hostController,
-                decoration: const InputDecoration(
-                  labelText: 'Cloud Run URL',
-                  hintText: 'https://dogreader-api-....run.app',
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: tokenController,
-                decoration: const InputDecoration(
-                  labelText: 'Private access token',
-                ),
-                autocorrect: false,
-                obscureText: true,
-              ),
-            ],
-          ),
+  Future<void> openApiSettings() async {
+    await stopPreview();
+    if (!mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => ApiSettingsScreen(
+          credentials: byokCredentials,
+          ttsClient: byokTtsClient,
+          offlineNarration: offlineNarration,
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Save'),
-          ),
-        ],
       ),
     );
-    if (accepted == true) {
-      final candidate = hostController.text.trim();
-      if (!candidate.startsWith('https://') ||
-          Uri.tryParse(candidate)?.host.isEmpty != false) {
-        if (mounted) {
-          setState(() => notice = 'Enter a valid HTTPS Cloud Run URL.');
-        }
-        hostController.dispose();
-        tokenController.dispose();
-        return;
-      }
-      host = candidate;
-      token = tokenController.text.trim();
-      await save();
-      if (mounted) {
-        setState(() => notice = 'Settings saved. Tap Check connection.');
-      }
-    }
-    hostController.dispose();
-    tokenController.dispose();
-  }
-
-  Future<void> checkConnection() async {
-    try {
-      final data = await requestJson('GET', '/dogreader/ping');
-      if (mounted) {
-        setState(() => notice = 'Connected! Voice: ${data['voice']}');
-      }
-    } catch (e) {
-      if (mounted) setState(() => notice = 'Cannot reach cloud server: $e');
-    }
+    if (mounted) setState(() {});
   }
 
   void selectEntireBook() {
@@ -2286,18 +2244,20 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   }
 
   Future<void> previewVoice() async {
-    if (host.isEmpty || token.isEmpty) {
-      setState(() => notice = 'Connect Dogreader Cloud before previewing.');
+    final preference = NarrationPreference(narrationEngine, narrator);
+    if (!preference.isOffline && !byokCredentials.isConfigured(narrationEngine)) {
+      setState(() => notice = byokCredentials.missingConfigMessage(narrationEngine));
       return;
     }
     final sequence = ++previewSequence;
-    final preference = NarrationPreference(narrationEngine, narrator);
     setState(() { previewing = true; notice = 'Preparing voice preview…'; });
     try {
-      final preview = await generateNarrationPreview(host: host, token: token,
-        preference: preference, sample: 'Welcome to Dogreader. “Shall we begin?” he asked. '
+      final preview = await byokTtsClient.synthesizePreview(
+        preference: preference,
+        sample: 'Welcome to Dogreader. “Shall we begin?” he asked. '
             'Settle in, choose a chapter, and enjoy a few quiet moments with your next story.',
-        isCurrent: () => mounted && sequence == previewSequence);
+        isCurrent: () => mounted && sequence == previewSequence,
+      );
       if (preview == null || !mounted || sequence != previewSequence) return;
       setState(() => notice = 'Preview: ${recordingLabel(preference.toJson())}');
       await audioHandler.playPreview(preview.path, 'Preview: ${recordingLabel(preference.toJson())}');
@@ -2323,6 +2283,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   Future<void> regenerate(int index) async {
     if (busy ||
         _checkingBooks.contains(widget.book.id) ||
+        byokNarrationRunner.inFlight(widget.book.id, index) ||
         narrationDelivery.deliveryInFlight(widget.book.id, index)) {
       return;
     }
@@ -2338,7 +2299,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         title: const Text('Regenerate narration?'),
         content: Text(
           'Generate ${widget.book.chapters[index].title} with ${recordingLabel(preference.toJson())}? '
-          'The current download is replaced only after the new audio downloads successfully.'
+          'The current recording is replaced only after the new audio finishes generating.'
           '${costSummary.isEmpty ? '' : '\n\n$costSummary'}',
         ),
         actions: [
@@ -2357,6 +2318,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         !mounted ||
         busy ||
         _checkingBooks.contains(widget.book.id) ||
+        byokNarrationRunner.inFlight(widget.book.id, index) ||
         narrationDelivery.deliveryInFlight(widget.book.id, index) ||
         const [
           'waiting',
@@ -2365,8 +2327,8 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         ].contains(jobs[index]?['status'])) {
       return;
     }
-    if (!preference.isOffline && (host.isEmpty || token.isEmpty)) {
-      setState(() => notice = 'Connect Dogreader Cloud first.');
+    if (!preference.isOffline && !byokCredentials.isConfigured(preference.engine)) {
+      setState(() => notice = byokCredentials.missingConfigMessage(preference.engine));
       return;
     }
     narrationDelivery.registerBookChapters(
@@ -2391,13 +2353,13 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
         chapter: widget.book.chapters[index],
       );
     } on StateError {
-      // Defer silence StateError to submission so notice/error state is reported uniformly.
+      // Defer silence StateError to runner so notice/error state is reported uniformly.
     }
     setState(() {
       jobs[index] = job;
     });
     await save();
-    await checkJobs();
+    await _runByokJobs();
   }
 
   Future<void> _startOfflineGeneration(
@@ -2559,9 +2521,10 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     if (!mounted) return;
     if (switchedToKokoro) {
       setState(() {
-        narrationEngine = 'kokoro';
-        narrator = narrationVoices['kokoro']!.keys.first;
+        narrationEngine = defaultPlayStorePreference.engine;
+        narrator = defaultPlayStorePreference.voice;
       });
+      unawaited(offlineNarration.initialize().catchError((Object _) {}));
       await savePreference();
       return;
     }
@@ -2573,8 +2536,8 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     NarrationPreference preference,
   ) async {
     if (busy) return;
-    if (!preference.isOffline && (host.isEmpty || token.isEmpty)) {
-      setState(() => notice = 'Set your Cloud Run URL and access token first.');
+    if (!preference.isOffline && !byokCredentials.isConfigured(preference.engine)) {
+      setState(() => notice = byokCredentials.missingConfigMessage(preference.engine));
       return;
     }
     // Recheck after confirmation in case delivery or another view updated jobs.
@@ -2617,13 +2580,11 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
           chapter: widget.book.chapters[index],
         );
       } on StateError {
-        // Defer silence StateError to submission so notice/error state is reported uniformly.
+        // Defer silence StateError to runner so notice/error state is reported uniformly.
       }
       jobs[index] = job;
     }
     try {
-      narrationDelivery.host = host;
-      narrationDelivery.token = token;
       narrationDelivery.attachBook(widget.book.id, jobs);
       await narrationDelivery.save();
     } catch (_) {
@@ -2643,24 +2604,10 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
       return;
     }
     busy = false;
-    try {
-      await checkJobs();
-    } catch (_) {
-      // The waiting jobs were saved and remain available for retry.
-    }
-    final submitted = indices
-        .where((index) => jobs[index]?['id'] != null)
-        .length;
-    final waiting = indices
-        .where((index) => jobs[index]?['status'] == 'waiting')
-        .length;
-    final failed = indices.length - submitted - waiting;
-    final result = [
-      '$submitted submitted.',
-      if (waiting > 0) '$waiting saved for retry.',
-      if (failed > 0) '$failed could not be submitted.',
-    ].join(' ');
     submitting = false;
+    unawaited(_runByokJobs());
+    final result =
+        'Started ${narrationEngines[preference.engine] ?? preference.engine} generation (${indices.length} ${indices.length == 1 ? 'chapter' : 'chapters'}).';
     if (!mounted) return;
     if (widget.generationChapters != null) {
       Navigator.pop(context, result);
@@ -2886,10 +2833,11 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
             else ...[
               if (notice != null) Text(notice!),
               if (narrationEngine != 'kokoro_offline' &&
-                  (host.isEmpty || token.isEmpty))
-                TextButton(
-                  onPressed: configure,
-                  child: const Text('Connect narration service'),
+                  !byokCredentials.isConfigured(narrationEngine))
+                TextButton.icon(
+                  onPressed: openApiSettings,
+                  icon: const Icon(Icons.key_outlined, size: 18),
+                  label: const Text('Configure API key'),
                 ),
               if (!submitting) _voiceControls(),
               if (!submitting) _offlineStatusCard(),
@@ -2902,7 +2850,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
                       busy ||
                           selected.isEmpty ||
                           (narrationEngine != 'kokoro_offline' &&
-                              (host.isEmpty || token.isEmpty))
+                              !byokCredentials.isConfigured(narrationEngine))
                       ? null
                       : confirmGeneration,
                   child: const Text('Review generation'),
@@ -2969,47 +2917,28 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     return narrationDictionary.effective(widget.book.id).transform(chapter).text != old;
   }
 
+  Future<void> _runByokJobs() async {
+    if (jobs.isEmpty || byokNarrationRunner.bookBusy(widget.book.id)) return;
+    await byokNarrationRunner.runWaitingJobs(
+      bookId: widget.book.id,
+      jobs: jobs,
+      textForChapter: (index) {
+        final payload = chapterPayload(index);
+        return payload['text'] as String;
+      },
+      onSave: save,
+    );
+    if (mounted) setState(() {});
+  }
+
   Future<void> checkJobs() async {
-    if (busy ||
-        host.isEmpty ||
-        token.isEmpty ||
-        jobs.isEmpty ||
-        !_checkingBooks.add(widget.book.id)) {
+    if (busy || jobs.isEmpty || !_checkingBooks.add(widget.book.id)) {
       return;
     }
-    busy = true;
     try {
-      narrationDelivery.host = host;
-      narrationDelivery.token = token;
-      narrationDelivery.registerBookChapters(
-        widget.book.id,
-        widget.book.chapters,
-      );
-      narrationDelivery.attachBook(widget.book.id, jobs);
-      final waitingIndices = jobs.entries
-          .where(
-            (entry) =>
-                entry.value['status'] == 'waiting' &&
-                entry.value['engine'] != 'kokoro_offline',
-          )
-          .map((entry) => entry.key)
-          .toList();
-      await narrationDelivery.submitWaitingJobs(
-        bookId: widget.book.id,
-        automatic: false,
-      );
-      if (waitingIndices.any(
-        (index) =>
-            jobs[index]?['id'] == null &&
-            (jobs[index]?['status'] == 'waiting' ||
-                jobs[index]?['status'] == 'error'),
-      )) {
-        notice = 'Submission interrupted. Saved work will be retried.';
-      }
-      await narrationDelivery.reconcile();
+      await _runByokJobs();
     } finally {
       _checkingBooks.remove(widget.book.id);
-      busy = false;
       if (mounted) setState(() {});
     }
   }
@@ -3025,16 +2954,17 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
     );
     narrationDelivery.addListener(deliveryChanged);
     offlineNarration.addListener(deliveryChanged);
+    byokCredentials.addListener(deliveryChanged);
+    byokNarrationRunner.addListener(deliveryChanged);
     load();
-    if (widget.generationChapters == null) {
-      timer = Timer.periodic(const Duration(seconds: 12), (_) => checkJobs());
-    }
   }
 
   @override
   void dispose() {
     narrationDelivery.removeListener(deliveryChanged);
     offlineNarration.removeListener(deliveryChanged);
+    byokCredentials.removeListener(deliveryChanged);
+    byokNarrationRunner.removeListener(deliveryChanged);
     timer?.cancel();
     previewSequence++;
     try {
@@ -3046,6 +2976,7 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
   @override
   Widget build(BuildContext context) {
     if (widget.generationChapters != null) return _generationSheet();
+    final byokRunning = byokNarrationRunner.bookBusy(widget.book.id);
     return Scaffold(
       appBar: AppBar(
         title: Text(focusedChapter == null ? 'Book narration' : 'Chapter narration'),
@@ -3054,20 +2985,14 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
             tooltip: 'Book narration settings',
             onSelected: (action) {
               switch (action) {
-                case 'settings':
-                  configure();
-                case 'connection':
-                  checkConnection();
-                case 'refresh':
-                  checkJobs();
+                case 'api_settings':
+                  openApiSettings();
                 case 'budget':
                   showNarrationBudgetDialog(context);
               }
             },
             itemBuilder: (_) => const [
-              PopupMenuItem(value: 'settings', child: Text('Cloud settings')),
-              PopupMenuItem(value: 'connection', child: Text('Check connection')),
-              PopupMenuItem(value: 'refresh', child: Text('Refresh narration status')),
+              PopupMenuItem(value: 'api_settings', child: Text('API keys & voices')),
               PopupMenuItem(value: 'budget', child: Text('TTS usage & budget')),
             ],
           ),
@@ -3078,10 +3003,20 @@ class _NarrationQueueScreenState extends State<NarrationQueueScreen> {
           SliverList.list(children: [
             if (loaded &&
                 narrationEngine != 'kokoro_offline' &&
-                (host.isEmpty || token.isEmpty))
-              TextButton(
-                onPressed: configure,
-                child: const Text('Connect narration service'),
+                !byokCredentials.isConfigured(narrationEngine))
+              TextButton.icon(
+                onPressed: openApiSettings,
+                icon: const Icon(Icons.key_outlined, size: 18),
+                label: const Text('Configure API key'),
+              ),
+            if (byokRunning)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                child: OutlinedButton.icon(
+                  onPressed: () => byokNarrationRunner.cancelBook(widget.book.id),
+                  icon: const Icon(Icons.stop, size: 18),
+                  label: const Text('Cancel API generation'),
+                ),
               ),
             if (notice != null)
               Padding(

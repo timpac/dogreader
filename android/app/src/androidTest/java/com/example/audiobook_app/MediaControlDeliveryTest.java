@@ -50,7 +50,7 @@ import static org.junit.Assert.*;
  * completion after delivery without relying on emulator System UI selectors. */
 @RunWith(AndroidJUnit4.class)
 public class MediaControlDeliveryTest {
-    private static final String PACKAGE = "com.example.audiobook_app.test";
+    private static final String PACKAGE = "com.timpac.dogreader.test";
     private final Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
     private final Context context = instrumentation.getTargetContext();
     private final UiAutomation automation = instrumentation.getUiAutomation();

@@ -1,12 +1,17 @@
 import 'package:flutter/material.dart';
 
 const narrationEngines = {
+  'kokoro_offline': 'Kokoro (On-Device)',
   'google': 'Google Chirp',
   'azure': 'Azure Neural',
-  'kokoro': 'Kokoro',
-  'kokoro_offline': 'Kokoro (Offline)',
+  'speechify': 'Speechify',
 };
 const narrationVoices = <String, Map<String, String>>{
+  'kokoro_offline': {
+    'af_heart': 'Heart (US Female)',
+    'am_michael': 'Michael (US Male)',
+    'bf_emma': 'Emma (UK Female)',
+  },
   'google': {
     'en-US-Chirp3-HD-Achernar': 'Achernar',
     'en-US-Chirp3-HD-Charon': 'Charon',
@@ -22,17 +27,23 @@ const narrationVoices = <String, Map<String, String>>{
     'en-GB-RyanNeural': 'Ryan (UK)',
     'en-GB-SoniaNeural': 'Sonia (UK)',
   },
-  'kokoro': {
-    'bm_george': 'George',
-    'bm_fable': 'Fable',
-    'bm_daniel': 'Daniel',
-    'bm_lewis': 'Lewis',
+  'speechify': {
+    'george': 'George',
+    'henry': 'Henry',
+    'carly': 'Carly',
+    'cliff': 'Cliff',
   },
-  'kokoro_offline': {
-    'af_heart': 'Heart (US Female)',
-    'am_michael': 'Michael (US Male)',
-    'bf_emma': 'Emma (UK Female)',
-  },
+};
+
+const _legacyEngineLabels = {
+  'kokoro': 'Kokoro',
+};
+
+const _legacyKokoroVoices = {
+  'bm_george': 'George',
+  'bm_fable': 'Fable',
+  'bm_daniel': 'Daniel',
+  'bm_lewis': 'Lewis',
 };
 
 const offlineVoiceSids = <String, int>{
@@ -50,17 +61,30 @@ String offlineVoiceIdForSid(int? sid) {
   return 'af_heart';
 }
 
+const defaultPlayStorePreference = NarrationPreference(
+  'kokoro_offline',
+  'af_heart',
+);
+
 class NarrationPreference {
   final String engine;
   final String voice;
   const NarrationPreference(this.engine, this.voice);
 
   bool get isOffline => engine == 'kokoro_offline';
+  bool get isByokCloud =>
+      engine == 'google' || engine == 'azure' || engine == 'speechify';
 
   factory NarrationPreference.fromJson(Map<String, dynamic> data) {
-    final engine = narrationEngines.containsKey(data['engine'])
-        ? data['engine'] as String
-        : 'google';
+    final hasAny =
+        data.containsKey('engine') ||
+        data.containsKey('narrator') ||
+        data.containsKey('voice');
+    if (!hasAny) return defaultPlayStorePreference;
+    final rawEngine = data['engine'];
+    final engine = narrationEngines.containsKey(rawEngine)
+        ? rawEngine as String
+        : (rawEngine == 'kokoro' ? 'kokoro_offline' : 'google');
     final voices = narrationVoices[engine]!;
     final candidate = data['narrator'] ?? data['voice'];
     return NarrationPreference(
@@ -86,8 +110,14 @@ String recordingLabel(Map<String, dynamic>? job) {
   }
   final engine = job?['engine'] as String? ?? 'google';
   final voice = job?['voice'] as String?;
-  final name = voice == null ? 'voice not recorded' : narrationVoices[engine]?[voice] ?? voice;
-  return '${narrationEngines[engine] ?? engine} • $name';
+  final name = voice == null
+      ? 'voice not recorded'
+      : narrationVoices[engine]?[voice] ??
+            (engine == 'kokoro' ? _legacyKokoroVoices[voice] : null) ??
+            voice;
+  final engineLabel =
+      narrationEngines[engine] ?? _legacyEngineLabels[engine] ?? engine;
+  return '$engineLabel • $name';
 }
 
 /// Uses inherited colors so the controls follow the app's current theme.

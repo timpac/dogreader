@@ -16,13 +16,13 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.audiobook_app"
+        applicationId = "com.timpac.dogreader"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // CI debug builds install alongside the existing Dogreader app.
         // Production/local builds keep their original application ID.
         if (project.findProperty("dogreaderTestBuild") == "true") {
             applicationIdSuffix = ".test"
-            testApplicationId = "com.example.audiobook_app.test.runner"
+            testApplicationId = "com.timpac.dogreader.test.runner"
             manifestPlaceholders["dogreaderAppLabel"] = "Dogreader Test"
         } else {
             manifestPlaceholders["dogreaderAppLabel"] = "Dogreader"

@@ -10,6 +10,7 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : AudioServiceActivity() {
     private val offline by lazy { OfflineBridge(this) }
+    private val keyStore by lazy { SecureKeyStore(applicationContext) }
     private var diagnostics: NativeMediaDiagnostics? = null
     private var diagnosticChannel: MethodChannel? = null
     private var shareChannel: MethodChannel? = null
@@ -19,6 +20,7 @@ class MainActivity : AudioServiceActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         offline.attach(flutterEngine)
+        keyStore.attach(flutterEngine)
         val observer = NativeMediaDiagnostics.get(applicationContext)
         diagnostics = observer
         diagnosticChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dogreader/media_diagnostics")
@@ -142,6 +144,7 @@ class MainActivity : AudioServiceActivity() {
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        keyStore.detach()
         diagnosticChannel?.setMethodCallHandler(null)
         diagnosticChannel = null
         diagnostics = null
