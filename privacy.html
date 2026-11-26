@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Privacy Policy — Dogreader</title>
+  <link rel="icon" type="image/png" href="favicon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="nav">
+    <div class="wrap nav-inner">
+      <a class="brand" href="./">
+        <img src="icon.jpg" alt="Dogreader icon">
+        <span>Dogreader</span>
+      </a>
+      <nav class="nav-links">
+        <a href="./">Home</a>
+        <a href="https://github.com/timpac/dogreader/issues">Support</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap prose">
+    <h1>Privacy Policy</h1>
+    <p class="meta">Last updated: November 26, 2026</p>
+
+    <p>
+      Dogreader is a standalone, offline-first EPUB and article reader for Android. We designed Dogreader so that your library, reading habits, and API keys stay on your device.
+    </p>
+
+    <h2>1. Data We Collect</h2>
+    <p>
+      <strong>None.</strong> Dogreader does not require an account, does not run a Dogreader backend server, does not include advertising or third-party analytics SDKs, and does not collect, sell, or share your personal information.
+    </p>
+
+    <h2>2. Data Stored on Your Device</h2>
+    <ul>
+      <li><strong>Books, articles, and audio:</strong> EPUB files you import, RSS feeds and web articles you fetch, generated narration audio, reading positions, and preferences are stored locally in the app's private storage on your device.</li>
+      <li><strong>Optional API keys:</strong> If you choose to add your own API keys for cloud voices or article summaries, they are encrypted on-device using Android Keystore (AES-256-GCM) and never transmitted to Dogreader.</li>
+    </ul>
+
+    <h2>3. Optional Network &amp; Third-Party Services</h2>
+    <p>Dogreader only makes network requests when you explicitly trigger a feature that requires the internet:</p>
+    <ul>
+      <li><strong>Offline Kokoro voice model:</strong> Downloading the on-device voice model fetches the model files from GitHub Releases.</li>
+      <li><strong>RSS feeds and web articles:</strong> Fetching feeds or clipping web articles connects directly from your device to the websites you add.</li>
+      <li><strong>Bring-Your-Own-Key (BYOK) cloud services:</strong> If you configure your own API key for Google Cloud Text-to-Speech, Microsoft Azure AI Speech, Speechify, or Google Gemini, Dogreader sends the selected chapter or article text directly over HTTPS from your device to that provider using your key. Your use of those services is governed by the respective provider's privacy policy.</li>
+    </ul>
+
+    <h2>4. Permissions</h2>
+    <p>
+      Dogreader requests only the permissions needed for reading and audio playback, such as network access (for optional downloads, feeds, and BYOK calls) and foreground media playback / notification controls so audio continues playing when your screen is locked.
+    </p>
+
+    <h2>5. Deleting Your Data</h2>
+    <p>
+      You can clear saved API keys anytime inside <em>Settings → API keys &amp; voices</em>. Clearing Dogreader's app data in Android Settings or uninstalling the app permanently removes all books, articles, audio files, settings, and encrypted keys from your device.
+    </p>
+
+    <h2>6. Contact</h2>
+    <p>
+      If you have questions about this privacy policy or Dogreader, please open an issue at <a href="https://github.com/timpac/dogreader/issues">github.com/timpac/dogreader/issues</a>.
+    </p>
+  </main>
+
+  <footer>
+    <div class="wrap footer-inner">
+      <div>Dogreader · Standalone Android Edition</div>
+      <div class="footer-links">
+        <a href="./">Home</a>
+        <a href="https://github.com/timpac/dogreader">GitHub</a>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>
