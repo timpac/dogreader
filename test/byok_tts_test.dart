@@ -77,7 +77,7 @@ void main() {
         final body = await utf8.decoder.bind(req).join();
         requests.add({
           'path': req.uri.path,
-          'query': req.uri.queryParameters,
+          'googleKey': req.headers.value('X-Goog-Api-Key'),
           'auth': req.headers.value(HttpHeaders.authorizationHeader),
           'azureKey': req.headers.value('Ocp-Apim-Subscription-Key'),
           'outputFormat': req.headers.value('X-Microsoft-OutputFormat'),
@@ -87,6 +87,17 @@ void main() {
           req.response.statusCode = 200;
           req.response.headers.contentType = ContentType.json;
           req.response.write(jsonEncode({'audioContent': base64Encode(fakeMp3)}));
+        } else if (req.uri.path == '/google-err') {
+          req.response.statusCode = 400;
+          req.response.headers.contentType = ContentType.json;
+          req.response.write(
+            jsonEncode({
+              'error': {
+                'code': 400,
+                'message': 'API key not valid. Please pass a valid API key.',
+              },
+            }),
+          );
         } else if (req.uri.path == '/azure/eastus') {
           req.response.statusCode = 200;
           req.response.headers.contentType = ContentType('audio', 'mpeg');
@@ -137,10 +148,30 @@ void main() {
       );
       expect(speechifyBytes, fakeMp3);
 
-      expect(requests[0]['query'], {'key': 'g-secret'});
+      expect(requests[0]['googleKey'], 'g-secret');
       expect(requests[1]['azureKey'], 'az-secret');
       expect(requests[1]['outputFormat'], ByokTtsClient.azureOutputFormat);
       expect(requests[2]['auth'], 'Bearer sp-secret');
+
+      final errClient = ByokTtsClient(
+        credentials: store,
+        sleep: (_) async {},
+        googleEndpoint: Uri.parse('$base/google-err'),
+      );
+      await expectLater(
+        () => errClient.synthesizeChunk(
+          engine: 'google',
+          voice: 'en-US-Chirp3-HD-Puck',
+          text: 'Hello.',
+        ),
+        throwsA(
+          isA<ByokTtsException>().having(
+            (e) => e.message,
+            'message',
+            contains('API key not valid'),
+          ),
+        ),
+      );
 
       final testResult = await client.testConnection('azure');
       expect(testResult, contains('Connected!'));

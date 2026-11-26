@@ -333,46 +333,68 @@ class ByokTtsClient {
     throw const ByokTtsException('Synthesis failed after retries.');
   }
 
+  String? _extractJsonErrorMessage(String body) {
+    try {
+      final decoded = jsonDecode(body);
+      if (decoded is Map) {
+        final err = decoded['error'];
+        if (err is Map && err['message'] is String) {
+          final msg = (err['message'] as String).trim();
+          if (msg.isNotEmpty) {
+            return msg.length > 240 ? '${msg.substring(0, 240)}…' : msg;
+          }
+        }
+        if (err is String && err.trim().isNotEmpty) return err.trim();
+        if (decoded['message'] is String &&
+            (decoded['message'] as String).trim().isNotEmpty) {
+          return (decoded['message'] as String).trim();
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
   Future<Uint8List> _synthesizeGoogle(String text, String voice) async {
-    final uri = _googleEndpoint.replace(
-      queryParameters: {
-        ..._googleEndpoint.queryParameters,
-        'key': credentials.googleApiKey,
-      },
-    );
+    final cleanedText = text.replaceAll(_invalidXmlControl, ' ');
     final parts = voice.split('-');
     final languageCode = parts.length >= 2 ? '${parts[0]}-${parts[1]}' : 'en-US';
-    final payload = jsonEncode({
-      'input': {'text': text},
-      'voice': {'languageCode': languageCode, 'name': voice},
-      'audioConfig': {'audioEncoding': 'MP3'},
-    });
+    final bodyBytes = utf8.encode(
+      jsonEncode({
+        'input': {'text': cleanedText},
+        'voice': {'languageCode': languageCode, 'name': voice},
+        'audioConfig': {'audioEncoding': 'MP3'},
+      }),
+    );
     final client = _httpClientFactory()
       ..connectionTimeout = const Duration(seconds: 10);
     try {
       final req = await client
-          .postUrl(uri)
+          .postUrl(_googleEndpoint)
           .timeout(const Duration(seconds: 15));
+      req.headers.set('X-Goog-Api-Key', credentials.googleApiKey);
       req.headers.contentType = ContentType.json;
-      req.write(payload);
+      req.contentLength = bodyBytes.length;
+      req.add(bodyBytes);
       final response = await req.close().timeout(const Duration(seconds: 60));
       final body = await utf8.decoder.bind(response).join();
+      final detail = _extractJsonErrorMessage(body);
+      final suffix = detail == null ? '' : ': $detail';
       if (response.statusCode == 401 || response.statusCode == 403) {
         throw ByokTtsException(
-          'Google Cloud API key was rejected (HTTP ${response.statusCode}). Make sure Cloud Text-to-Speech API is enabled for this key.',
+          'Google Cloud TTS rejected the key (HTTP ${response.statusCode})$suffix',
           statusCode: response.statusCode,
         );
       }
       if (response.statusCode == 429 || response.statusCode >= 500) {
         throw ByokTtsException(
-          'Google Cloud TTS temporarily unavailable (HTTP ${response.statusCode}).',
+          'Google Cloud TTS temporarily unavailable (HTTP ${response.statusCode})$suffix',
           statusCode: response.statusCode,
           retryable: true,
         );
       }
       if (response.statusCode >= 400) {
         throw ByokTtsException(
-          'Google Cloud TTS error (HTTP ${response.statusCode}).',
+          'Google Cloud TTS error (HTTP ${response.statusCode})$suffix',
           statusCode: response.statusCode,
         );
       }
@@ -400,6 +422,7 @@ class ByokTtsClient {
       req.headers.set('Content-Type', 'application/ssml+xml');
       req.headers.set('X-Microsoft-OutputFormat', azureOutputFormat);
       req.headers.set('User-Agent', 'dogreader-android');
+      req.contentLength = ssml.length;
       req.add(ssml);
       final response = await req.close().timeout(const Duration(seconds: 60));
       final bytes = await _readResponseBytes(response);
@@ -423,8 +446,12 @@ class ByokTtsClient {
         );
       }
       if (response.statusCode >= 400) {
+        final rawText = utf8.decode(bytes, allowMalformed: true).trim();
+        final detail = rawText.isEmpty
+            ? ''
+            : ': ${rawText.length > 180 ? '${rawText.substring(0, 180)}…' : rawText}';
         throw ByokTtsException(
-          'Azure Speech rejected the request (HTTP ${response.statusCode}).',
+          'Azure Speech rejected the request (HTTP ${response.statusCode})$detail',
           statusCode: response.statusCode,
         );
       }
@@ -438,11 +465,13 @@ class ByokTtsClient {
   }
 
   Future<Uint8List> _synthesizeSpeechify(String text, String voice) async {
-    final payload = jsonEncode({
-      'input': text,
-      'voice_id': voice,
-      'audio_format': 'mp3',
-    });
+    final bodyBytes = utf8.encode(
+      jsonEncode({
+        'input': text,
+        'voice_id': voice,
+        'audio_format': 'mp3',
+      }),
+    );
     final client = _httpClientFactory()
       ..connectionTimeout = const Duration(seconds: 10);
     try {
@@ -454,25 +483,28 @@ class ByokTtsClient {
         'Bearer ${credentials.speechifyApiKey}',
       );
       req.headers.contentType = ContentType.json;
-      req.write(payload);
+      req.contentLength = bodyBytes.length;
+      req.add(bodyBytes);
       final response = await req.close().timeout(const Duration(seconds: 60));
       final body = await utf8.decoder.bind(response).join();
+      final detail = _extractJsonErrorMessage(body);
+      final suffix = detail == null ? '' : ': $detail';
       if (response.statusCode == 401 || response.statusCode == 403) {
         throw ByokTtsException(
-          'Speechify API key was rejected (HTTP ${response.statusCode}).',
+          'Speechify API key was rejected (HTTP ${response.statusCode})$suffix',
           statusCode: response.statusCode,
         );
       }
       if (response.statusCode == 429 || response.statusCode >= 500) {
         throw ByokTtsException(
-          'Speechify API temporarily unavailable (HTTP ${response.statusCode}).',
+          'Speechify API temporarily unavailable (HTTP ${response.statusCode})$suffix',
           statusCode: response.statusCode,
           retryable: true,
         );
       }
       if (response.statusCode >= 400) {
         throw ByokTtsException(
-          'Speechify API error (HTTP ${response.statusCode}).',
+          'Speechify API error (HTTP ${response.statusCode})$suffix',
           statusCode: response.statusCode,
         );
       }
@@ -496,7 +528,7 @@ class ByokTtsClient {
   }
 
   List<String> splitForEngine(String engine, String text) => switch (engine) {
-    'google' => splitByokText(text, maxUnits: 3500, utf8Bytes: true),
+    'google' => splitByokText(text, maxUnits: 2000, utf8Bytes: true),
     'azure' => splitByokText(text, maxUnits: 2800),
     'speechify' => splitByokText(text, maxUnits: 2000),
     _ => splitByokText(text, maxUnits: 2500),
