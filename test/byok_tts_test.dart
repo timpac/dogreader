@@ -260,6 +260,8 @@ void main() {
     );
     await tester.enterText(find.byKey(const Key('azure_speech_key_field')), 'az-123');
     await tester.enterText(find.byKey(const Key('azure_speech_region_field')), 'westus2');
+    await tester.ensureVisible(find.byKey(const Key('save_azure_key_button')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('save_azure_key_button')));
     await tester.pumpAndSettle();
     expect(store.azureSpeechKey, 'az-123');
@@ -271,9 +273,23 @@ void main() {
       scrollable: find.byType(Scrollable).first,
     );
     await tester.enterText(find.byKey(const Key('speechify_api_key_field')), 'sp-123');
+    await tester.ensureVisible(find.byKey(const Key('save_speechify_key_button')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('save_speechify_key_button')));
     await tester.pumpAndSettle();
     expect(store.speechifyApiKey, 'sp-123');
+
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('speechify_key_help_button')),
+      250,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.byKey(const Key('speechify_key_help_button')));
+    await tester.pumpAndSettle();
+    expect(find.text('How to get a Speechify API key'), findsWidgets);
+    expect(find.text('https://platform.speechify.ai/api-keys'), findsOneWidget);
+    await tester.tap(find.text('Done'));
+    await tester.pumpAndSettle();
 
     expect(NarrationPreference.fromJson(const {}).engine, 'kokoro_offline');
   });

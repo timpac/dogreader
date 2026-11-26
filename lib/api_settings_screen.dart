@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'byok_tts.dart';
 import 'offline_narration.dart';
@@ -126,6 +127,74 @@ class _ApiSettingsScreenState extends State<ApiSettingsScreen> {
     } finally {
       if (mounted) setState(() => _testing.remove(engine));
     }
+  }
+
+  void _showKeyGuideDialog({
+    required String title,
+    required String url,
+    required List<String> steps,
+    String? footnote,
+  }) {
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(title),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (var i = 0; i < steps.length; i++) ...[
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${i + 1}. ',
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      Expanded(child: Text(steps[i])),
+                    ],
+                  ),
+                ),
+              ],
+              if (footnote != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  footnote,
+                  style: Theme.of(dialogContext).textTheme.bodySmall,
+                ),
+              ],
+              const SizedBox(height: 10),
+              SelectableText(
+                url,
+                style: Theme.of(dialogContext).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(dialogContext).colorScheme.primary,
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton.icon(
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: url));
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Link copied to clipboard.')),
+              );
+            },
+            icon: const Icon(Icons.copy, size: 18),
+            label: const Text('Copy link'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Done'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -322,6 +391,22 @@ class _ApiSettingsScreenState extends State<ApiSettingsScreen> {
                 ),
             ],
           ),
+          const SizedBox(height: 4),
+          TextButton.icon(
+            key: const Key('google_key_help_button'),
+            onPressed: () => _showKeyGuideDialog(
+              title: 'How to get a Google Cloud API key',
+              url: 'https://console.cloud.google.com/apis/credentials',
+              steps: const [
+                'Sign in to Google Cloud Console and select or create a project (billing must be enabled, and the first 1,000,000 Chirp 3 HD characters per month are free).',
+                'Open APIs & Services → Library, search for "Cloud Text-to-Speech API", and click Enable.',
+                'Open APIs & Services → Credentials, click "+ Create credentials" → "API key", and copy the key (starts with AIza…).',
+                'Recommended for safety: click your new key → under API restrictions, choose "Restrict key" → select "Cloud Text-to-Speech API" → Save (leave Application restrictions set to None).',
+              ],
+            ),
+            icon: const Icon(Icons.help_outline, size: 18),
+            label: const Text('How to get a Google Cloud API key'),
+          ),
         ],
       ),
     ),
@@ -417,6 +502,23 @@ class _ApiSettingsScreenState extends State<ApiSettingsScreen> {
                 ),
             ],
           ),
+          const SizedBox(height: 4),
+          TextButton.icon(
+            key: const Key('azure_key_help_button'),
+            onPressed: () => _showKeyGuideDialog(
+              title: 'How to get an Azure Speech key',
+              url:
+                  'https://portal.azure.com/#create/Microsoft.CognitiveServicesSpeechServices',
+              steps: const [
+                'Sign in to the Azure Portal with a Microsoft account.',
+                'Create a new "Speech" resource and pick a Region (such as eastus or westus2).',
+                'Select the "Free F0" pricing tier for 500,000 free Neural characters per month.',
+                'Once deployed, open your Speech resource → "Keys and Endpoint" → copy KEY 1 and the Location/Region into the fields here.',
+              ],
+            ),
+            icon: const Icon(Icons.help_outline, size: 18),
+            label: const Text('How to get an Azure Speech key'),
+          ),
         ],
       ),
     ),
@@ -500,6 +602,23 @@ class _ApiSettingsScreenState extends State<ApiSettingsScreen> {
                   child: const Text('Clear'),
                 ),
             ],
+          ),
+          const SizedBox(height: 4),
+          TextButton.icon(
+            key: const Key('speechify_key_help_button'),
+            onPressed: () => _showKeyGuideDialog(
+              title: 'How to get a Speechify API key',
+              url: 'https://platform.speechify.ai/api-keys',
+              steps: const [
+                'Sign up or sign in at platform.speechify.ai (includes 500,000 free starter characters).',
+                'Open "API Keys" in the SpeechifyAI developer console.',
+                'Copy your default API key (or create a new one) and paste it here.',
+              ],
+              footnote:
+                  'Note: The SpeechifyAI developer API is separate from a regular Speechify consumer app subscription.',
+            ),
+            icon: const Icon(Icons.help_outline, size: 18),
+            label: const Text('How to get a Speechify API key'),
           ),
         ],
       ),
