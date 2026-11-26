@@ -447,7 +447,7 @@ class _ApiSettingsScreenState extends State<ApiSettingsScreen> {
           ),
           const SizedBox(height: 6),
           Text(
-            'Paste your Speechify API key from console.sws.speechify.com to narrate chapters and articles directly with Speechify voices.',
+            'Paste your Speechify API key from platform.speechify.ai/api-keys to narrate chapters and articles directly with Speechify voices.',
             style: Theme.of(context).textTheme.bodySmall,
           ),
           const SizedBox(height: 12),

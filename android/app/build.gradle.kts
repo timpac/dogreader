@@ -23,9 +23,9 @@ android {
         if (project.findProperty("dogreaderTestBuild") == "true") {
             applicationIdSuffix = ".test"
             testApplicationId = "com.timpac.dogreader.test.runner"
-            manifestPlaceholders["dogreaderAppLabel"] = "Dogreader Test"
+            manifestPlaceholders["dogreaderAppLabel"] = "D0gR34d3r Test"
         } else {
-            manifestPlaceholders["dogreaderAppLabel"] = "Dogreader"
+            manifestPlaceholders["dogreaderAppLabel"] = "D0gR34d3r"
         }
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
