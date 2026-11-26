@@ -47,11 +47,13 @@ class ByokCredentialStore extends ChangeNotifier {
   static const keyAzureSpeechKey = 'azure_speech_key';
   static const keyAzureSpeechRegion = 'azure_speech_region';
   static const keySpeechifyApiKey = 'speechify_api_key';
+  static const keyGeminiApiKey = 'gemini_api_key';
 
   String googleApiKey = '';
   String azureSpeechKey = '';
   String azureSpeechRegion = '';
   String speechifyApiKey = '';
+  String geminiApiKey = '';
   bool _loaded = false;
 
   bool get loaded => _loaded;
@@ -101,6 +103,9 @@ class ByokCredentialStore extends ChangeNotifier {
     if (speechifyApiKey.isEmpty) {
       speechifyApiKey = (values[keySpeechifyApiKey] ?? '').trim();
     }
+    if (geminiApiKey.isEmpty) {
+      geminiApiKey = (values[keyGeminiApiKey] ?? '').trim();
+    }
     _loaded = true;
     notifyListeners();
   }
@@ -114,11 +119,14 @@ class ByokCredentialStore extends ChangeNotifier {
 
   bool get hasSpeechifyKey => speechifyApiKey.isNotEmpty;
 
+  bool get hasGeminiKey => geminiApiKey.isNotEmpty;
+
   bool isConfigured(String engine) => switch (engine) {
     'kokoro_offline' => true,
     'google' => hasGoogleKey,
     'azure' => hasAzureCredentials,
     'speechify' => hasSpeechifyKey,
+    'gemini' => hasGeminiKey,
     _ => false,
   };
 
@@ -126,6 +134,7 @@ class ByokCredentialStore extends ChangeNotifier {
     'google' => 'Add your Google Cloud TTS API key in API settings first.',
     'azure' => 'Add your Azure Speech key and region in API settings first.',
     'speechify' => 'Add your Speechify API key in API settings first.',
+    'gemini' => 'Add your Gemini API key in API settings first.',
     _ => 'Configure an API key in API settings first.',
   };
 
@@ -140,6 +149,9 @@ class ByokCredentialStore extends ChangeNotifier {
     'speechify' => hasSpeechifyKey
         ? 'Speechify API key saved on this device.'
         : 'Add your Speechify API key.',
+    'gemini' => hasGeminiKey
+        ? 'Gemini API key saved on this device.'
+        : 'Add your Gemini API key for AI article summaries.',
     _ => 'Not configured.',
   };
 
@@ -187,6 +199,17 @@ class ByokCredentialStore extends ChangeNotifier {
       await _deleteKey(keySpeechifyApiKey);
     } else {
       await _writeKey(keySpeechifyApiKey, trimmed);
+    }
+    notifyListeners();
+  }
+
+  Future<void> setGeminiApiKey(String value) async {
+    final trimmed = value.trim();
+    geminiApiKey = trimmed;
+    if (trimmed.isEmpty) {
+      await _deleteKey(keyGeminiApiKey);
+    } else {
+      await _writeKey(keyGeminiApiKey, trimmed);
     }
     notifyListeners();
   }

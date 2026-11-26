@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:audiobook_app/api_settings_screen.dart';
+import 'package:audiobook_app/article_import.dart';
+import 'package:audiobook_app/article_summary.dart';
 import 'package:audiobook_app/byok_tts.dart';
 import 'package:audiobook_app/narration_options.dart';
 import 'package:flutter/material.dart';
@@ -292,5 +294,68 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(NarrationPreference.fromJson(const {}).engine, 'kokoro_offline');
+  });
+
+  test('ArticleSummaryClient summarizes directly with Gemini Flash-Lite BYOK key', () async {
+    await HttpOverrides.runWithHttpOverrides(() async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      String? receivedKey;
+      server.listen((req) async {
+        receivedKey = req.headers.value('X-Goog-Api-Key');
+        await utf8.decoder.bind(req).join();
+        req.response.statusCode = 200;
+        req.response.headers.contentType = ContentType.json;
+        req.response.write(
+          jsonEncode({
+            'candidates': [
+              {
+                'content': {
+                  'parts': [
+                    {
+                      'text':
+                          'This is a concise, clear prose summary generated directly by Gemini Flash-Lite for reading aloud on your phone without any backend server.',
+                    },
+                  ],
+                },
+              },
+            ],
+            'usageMetadata': {
+              'promptTokenCount': 250,
+              'candidatesTokenCount': 40,
+            },
+          }),
+        );
+        await req.response.close();
+      });
+
+      final tempDir = await Directory.systemTemp.createTemp('gemini_summary_');
+      addTearDown(() => tempDir.delete(recursive: true));
+
+      final store = _memoryStore({
+        ByokCredentialStore.keyGeminiApiKey: 'gem-secret-key',
+      });
+      final article = ImportedArticle(
+        title: 'Test Article',
+        sourceUrl: 'https://example.org/test',
+        blocks: [ArticleBlock(List.filled(40, 'Sample sentence. ').join())],
+      );
+      final client = ArticleSummaryClient(
+        tempDir,
+        enabled: true,
+        credentials: store,
+        geminiEndpoint: Uri.parse('http://127.0.0.1:${server.port}/gemini'),
+      );
+
+      final est = await client.estimate(article, SummaryDepth.brief);
+      expect(est['model'], geminiSummaryModel);
+      expect(est['estimatedInputTokens'], greaterThan(0));
+
+      final summary = await client.summarize(article, SummaryDepth.brief);
+      expect(receivedKey, 'gem-secret-key');
+      expect(summary.depth, SummaryDepth.brief);
+      expect(summary.text, contains('Gemini Flash-Lite'));
+      expect(summary.usage?['inputTokens'], 250);
+    }, _RealHttp());
   });
 }

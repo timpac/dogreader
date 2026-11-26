@@ -40,6 +40,7 @@ import 'article_import.dart';
 import 'article_library.dart';
 import 'article_screen.dart';
 import 'article_share.dart';
+import 'article_summary.dart';
 import 'offline_narration.dart';
 import 'kokoro/service_runner.dart';
 import 'rss/rss_controller.dart';
@@ -120,6 +121,7 @@ Future<void> main() async {
   final appearance = ThemePreferences();
   await appearance.load();
   await byokCredentials.load();
+  ArticleSummaryClient.defaultCredentials = byokCredentials;
   await narrationDictionary.load();
   await narrationCostTracker.load();
   runApp(NarrationPlaybackScope(

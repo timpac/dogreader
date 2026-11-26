@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'article_summary.dart';
 import 'byok_tts.dart';
 import 'offline_narration.dart';
 
@@ -28,10 +29,12 @@ class _ApiSettingsScreenState extends State<ApiSettingsScreen> {
   late final TextEditingController _azureKey = TextEditingController();
   late final TextEditingController _azureRegion = TextEditingController();
   late final TextEditingController _speechifyKey = TextEditingController();
+  late final TextEditingController _geminiKey = TextEditingController();
 
   bool _showGoogle = false;
   bool _showAzure = false;
   bool _showSpeechify = false;
+  bool _showGemini = false;
   bool _loading = true;
   final Map<String, String?> _messages = {};
   final Set<String> _testing = {};
@@ -48,6 +51,7 @@ class _ApiSettingsScreenState extends State<ApiSettingsScreen> {
     _azureKey.text = widget.credentials.azureSpeechKey;
     _azureRegion.text = widget.credentials.azureSpeechRegion;
     _speechifyKey.text = widget.credentials.speechifyApiKey;
+    _geminiKey.text = widget.credentials.geminiApiKey;
     if (widget.offlineNarration != null) {
       unawaited(widget.offlineNarration!.initialize().catchError((Object _) {}));
     }
@@ -60,6 +64,7 @@ class _ApiSettingsScreenState extends State<ApiSettingsScreen> {
     _azureKey.dispose();
     _azureRegion.dispose();
     _speechifyKey.dispose();
+    _geminiKey.dispose();
     super.dispose();
   }
 
@@ -100,11 +105,22 @@ class _ApiSettingsScreenState extends State<ApiSettingsScreen> {
     });
   }
 
+  Future<void> _saveGemini() async {
+    await widget.credentials.setGeminiApiKey(_geminiKey.text);
+    if (!mounted) return;
+    setState(() {
+      _messages['gemini'] = widget.credentials.hasGeminiKey
+          ? 'Gemini API key saved.'
+          : 'Gemini API key cleared.';
+    });
+  }
+
   Future<void> _testProvider(String engine) async {
     if (_testing.contains(engine)) return;
     if (engine == 'google') await _saveGoogle();
     if (engine == 'azure') await _saveAzure();
     if (engine == 'speechify') await _saveSpeechify();
+    if (engine == 'gemini') await _saveGemini();
     if (!widget.credentials.isConfigured(engine)) {
       if (mounted) {
         setState(
@@ -120,7 +136,11 @@ class _ApiSettingsScreenState extends State<ApiSettingsScreen> {
       _messages[engine] = 'Testing connection…';
     });
     try {
-      final result = await widget.ttsClient.testConnection(engine);
+      final result = engine == 'gemini'
+          ? await ArticleSummaryClient.testGeminiKey(
+              widget.credentials.geminiApiKey,
+            )
+          : await widget.ttsClient.testConnection(engine);
       if (mounted) setState(() => _messages[engine] = result);
     } catch (e) {
       if (mounted) setState(() => _messages[engine] = '$e');
@@ -234,6 +254,8 @@ class _ApiSettingsScreenState extends State<ApiSettingsScreen> {
                 _buildAzureCard(context),
                 const SizedBox(height: 16),
                 _buildSpeechifyCard(context),
+                const SizedBox(height: 16),
+                _buildGeminiCard(context),
               ],
             ),
     );
@@ -403,6 +425,8 @@ class _ApiSettingsScreenState extends State<ApiSettingsScreen> {
                 'Open APIs & Services → Credentials, click "+ Create credentials" → "API key", and copy the key (starts with AIza…).',
                 'Recommended for safety: click your new key → under API restrictions, choose "Restrict key" → select "Cloud Text-to-Speech API" → Save (leave Application restrictions set to None).',
               ],
+              footnote:
+                  'Note: Google Cloud requires a billing card on file and does not hard-stop at 1,000,000 characters (\$30/million after the free tier). Dogreader\'s monthly allowance tracker warns you before you go over.',
             ),
             icon: const Icon(Icons.help_outline, size: 18),
             label: const Text('How to get a Google Cloud API key'),
@@ -619,6 +643,106 @@ class _ApiSettingsScreenState extends State<ApiSettingsScreen> {
             ),
             icon: const Icon(Icons.help_outline, size: 18),
             label: const Text('How to get a Speechify API key'),
+          ),
+        ],
+      ),
+    ),
+  );
+
+  Widget _buildGeminiCard(BuildContext context) => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.auto_awesome_outlined),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Gemini Flash-Lite (Article Summaries)',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ),
+              if (widget.credentials.hasGeminiKey)
+                const Chip(
+                  label: Text('Configured'),
+                  visualDensity: VisualDensity.compact,
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Optional Gemini API key from Google AI Studio to generate Brief, Standard, or Detailed AI summaries of imported web articles (free tier available, no credit card required).',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            key: const Key('gemini_api_key_field'),
+            controller: _geminiKey,
+            obscureText: !_showGemini,
+            autocorrect: false,
+            decoration: InputDecoration(
+              labelText: 'Gemini API key',
+              border: const OutlineInputBorder(),
+              suffixIcon: IconButton(
+                onPressed: () => setState(() => _showGemini = !_showGemini),
+                icon: Icon(
+                  _showGemini ? Icons.visibility_off : Icons.visibility,
+                ),
+              ),
+            ),
+          ),
+          if (_messages['gemini'] != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              _messages['gemini']!,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            children: [
+              FilledButton(
+                key: const Key('save_gemini_key_button'),
+                onPressed: _saveGemini,
+                child: const Text('Save'),
+              ),
+              OutlinedButton(
+                key: const Key('test_gemini_key_button'),
+                onPressed: _testing.contains('gemini')
+                    ? null
+                    : () => _testProvider('gemini'),
+                child: const Text('Test key'),
+              ),
+              if (widget.credentials.hasGeminiKey)
+                TextButton(
+                  onPressed: () async {
+                    _geminiKey.clear();
+                    await _saveGemini();
+                  },
+                  child: const Text('Clear'),
+                ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          TextButton.icon(
+            key: const Key('gemini_key_help_button'),
+            onPressed: () => _showKeyGuideDialog(
+              title: 'How to get a Gemini API key',
+              url: 'https://aistudio.google.com/apikey',
+              steps: const [
+                'Sign in to Google AI Studio with your Google account.',
+                'Click "Create API key" (free tier available — no credit card required).',
+                'Copy the key (starts with AIza…) and paste it here.',
+              ],
+              footnote:
+                  'Uses $geminiSummaryModel directly from your phone to summarize web articles you choose.',
+            ),
+            icon: const Icon(Icons.help_outline, size: 18),
+            label: const Text('How to get a Gemini API key'),
           ),
         ],
       ),
