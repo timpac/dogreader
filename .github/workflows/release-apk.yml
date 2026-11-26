@@ -172,21 +172,27 @@ jobs:
       - name: Build the requested original-app update once
         env:
           ORG_GRADLE_PROJECT_dogreaderOriginalUpdate: 'true'
-        run: flutter build apk --debug --no-pub --build-number "$BUILD_NUMBER" --dart-define="DOGREADER_BUILD=$BUILD_NUMBER" > /tmp/build.log 2>&1 || { tail -100 /tmp/build.log; exit 1; }
+        run: |
+          if [ "$GITHUB_REF" = refs/heads/playstore ]; then
+            flutter build apk --release --target-platform android-arm64 --no-pub --build-number "$BUILD_NUMBER" --dart-define="DOGREADER_BUILD=$BUILD_NUMBER" > /tmp/build.log 2>&1 || { tail -100 /tmp/build.log; exit 1; }
+          else
+            flutter build apk --debug --no-pub --build-number "$BUILD_NUMBER" --dart-define="DOGREADER_BUILD=$BUILD_NUMBER" > /tmp/build.log 2>&1 || { tail -100 /tmp/build.log; exit 1; }
+          fi
       - name: Verify signature, package and version; prepare download
         run: |
           BUILD_TOOLS="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
-          APK=build/app/outputs/flutter-apk/app-debug.apk
-          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" > /tmp/apk-certificates.txt
-          grep -Fqi 'c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177' /tmp/apk-certificates.txt
-          "$BUILD_TOOLS/aapt" dump badging "$APK" > /tmp/apk-identity.txt
           if [ "$GITHUB_REF" = refs/heads/playstore ]; then
+            APK=build/app/outputs/flutter-apk/app-release.apk
             EXPECTED_PKG="com.timpac.dogreader"
             APK_NAME="Dogreader-PlayStore-${BUILD_NUMBER}.apk"
           else
+            APK=build/app/outputs/flutter-apk/app-debug.apk
             EXPECTED_PKG="com.example.audiobook_app"
             APK_NAME="Dogreader-${BUILD_NUMBER}.apk"
           fi
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" > /tmp/apk-certificates.txt
+          grep -Fqi 'c5cc08d9757c0e92893a716204a26feb6157f5350a00dbb0b7962049d6d9d177' /tmp/apk-certificates.txt
+          "$BUILD_TOOLS/aapt" dump badging "$APK" > /tmp/apk-identity.txt
           grep -Fq "package: name='${EXPECTED_PKG}' versionCode='${BUILD_NUMBER}'" /tmp/apk-identity.txt
           mkdir -p dist
           cp "$APK" "dist/${APK_NAME}"
